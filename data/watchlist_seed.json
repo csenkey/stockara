@@ -1,0 +1,5017 @@
+[
+  {
+    "ticker": "AAPL",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "MSFT",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "NVDA",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "AVGO",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ORCL",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CRM",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "AMD",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ADBE",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ACN",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CSCO",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "INTC",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "IBM",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "INTU",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "TXN",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "QCOM",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "AMAT",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "NOW",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ADI",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "LRCX",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "MU",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "KLAC",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CDNS",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "SNPS",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "MCHP",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "FTNT",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CRWD",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "PANW",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CTSH",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "IT",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "EPAM",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "HPQ",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "HPE",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "DELL",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "KEYS",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CDW",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "GEN",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "FFIV",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "AKAM",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ANET",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "GLW",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "APH",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "TEL",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "FSLR",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ON",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "MPWR",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "SWKS",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "NXPI",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ENPH",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "SEDG",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "FICO",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "BRK.B",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "JPM",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "V",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "MA",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "BAC",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "WFC",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "GS",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "MS",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "SPGI",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "BLK",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "AXP",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "C",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "SCHW",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CB",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "MMC",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "PGR",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "AON",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CME",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ICE",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "MCO",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "MET",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "AIG",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "AFL",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "PRU",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ALL",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "TRV",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "COF",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "BK",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "USB",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "PNC",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "FITB",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CFG",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "HBAN",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "RF",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "KEY",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "MTB",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "STT",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CINF",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "GL",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "RJF",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "BRO",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "WRB",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "AJG",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "FIS",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "FISV",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "FI",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "PYPL",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "SYF",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "DFS",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CBOE",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "UNH",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "JNJ",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "LLY",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ABBV",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "MRK",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "TMO",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ABT",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "PFE",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "AMGN",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "MDT",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ELV",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CI",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ISRG",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "GILD",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "VRTX",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "BSX",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "SYK",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "BDX",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ZTS",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "REGN",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "HCA",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "DXCM",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "IQV",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "EW",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "IDXX",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "MTD",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "A",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "BAX",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "BIIB",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "HOLX",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ALGN",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "RMD",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "COO",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "TECH",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CRL",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ILMN",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "MOH",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CNC",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "HUM",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CVS",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CAH",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "MCK",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "GEHC",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "DVA",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "HSIC",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "INCY",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "VTRS",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "XRAY",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "DGX",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "LH",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "AMZN",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "TSLA",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "HD",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "MCD",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "NKE",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "LOW",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "BKNG",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "TJX",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "SBUX",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CMG",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ORLY",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "AZO",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ROST",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "MAR",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "HLT",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "DHI",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "LEN",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "PHM",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "NVR",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "GM",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "F",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "APTV",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "GRMN",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "EBAY",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ETSY",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "POOL",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "BBY",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "DRI",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "YUM",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "DARDEN",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "DPZ",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CCL",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "RCL",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "WYNN",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "LVS",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "MGM",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CZR",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "EXPE",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ABNB",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "DECK",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "TPR",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "RL",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "PVH",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "HAS",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ULTA",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "LULU",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "GPC",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "BWA",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "LKQ",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "KMX",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "GOOGL",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "GOOG",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "META",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "NFLX",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "DIS",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CMCSA",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "T",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "VZ",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "TMUS",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CHTR",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "EA",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "TTWO",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "MTCH",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "WBD",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "PARA",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "OMC",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "IPG",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "LYV",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "FOXA",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "FOX",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "NWSA",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "NWS",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "RBLX",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "GE",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CAT",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "UNP",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "HON",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "RTX",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "BA",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "DE",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "LMT",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "UPS",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ADP",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "GD",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "NOC",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "MMM",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CSX",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "NSC",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "WM",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "RSG",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "EMR",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ETN",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ITW",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "PH",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ROK",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CMI",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "DOV",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "FTV",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "AME",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "SWK",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "IR",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "GWW",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "FAST",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CTAS",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "PAYX",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "VRSK",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CPRT",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ODFL",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "DAL",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "UAL",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "LUV",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "AAL",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "JBHT",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "XPO",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CHRW",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "EFX",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "BR",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "FDX",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "AXON",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "TDG",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "HWM",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "WAB",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "PWR",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "PG",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "KO",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "PEP",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "COST",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "WMT",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "PM",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "MO",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "MDLZ",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CL",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "KMB",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "GIS",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "K",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "HSY",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "SJM",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CAG",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "HRL",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "TSN",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ADM",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "BG",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "STZ",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "TAP",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "SAM",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "KDP",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "MNST",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "EL",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CHD",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CLX",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "SPC",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "WBA",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "KR",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "SYY",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "DG",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "DLTR",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "TGT",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "BF.B",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CPB",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "XOM",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CVX",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "COP",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "SLB",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "EOG",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "PXD",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "MPC",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "VLO",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "PSX",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "OXY",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "WMB",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "KMI",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "OKE",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "FANG",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "DVN",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "HAL",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "BKR",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "HES",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "APA",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "EQT",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CTRA",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "MRO",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "TRGP",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "NEE",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "DUK",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "SO",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "D",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "AEP",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "SRE",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "EXC",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "XEL",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ED",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "WEC",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ES",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "AWK",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "DTE",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ETR",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "EIX",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "FE",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "PPL",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CMS",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ATO",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "LNT",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "EVRG",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "AES",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CEG",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CNP",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "NI",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "PNW",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "PLD",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "AMT",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "EQIX",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CCI",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "PSA",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "DLR",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "O",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "SPG",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "WELL",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "VICI",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "AVB",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "EQR",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ARE",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "MAA",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "UDR",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ESS",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "EXR",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CPT",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "REG",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "FRT",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "KIM",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "BXP",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "VTR",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "HST",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "PEAK",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "IRM",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CBRE",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CSGP",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "LIN",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "APD",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "SHW",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ECL",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "FCX",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "NUE",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "NEM",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "DOW",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "DD",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "PPG",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "VMC",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "MLM",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "ALB",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "EMN",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CE",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CF",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "MOS",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "IFF",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "FMC",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "BALL",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "AVY",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "PKG",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "IP",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "WRK",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "SEE",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "AMCR",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "CTVA",
+    "company_size": "blue_chip",
+    "source": "sp500"
+  },
+  {
+    "ticker": "SMCI",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "PSTG",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "RBRK",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "OKTA",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "ZS",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "DDOG",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "MDB",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "NET",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SNOW",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "PATH",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "CFLT",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "GTLB",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "ESTC",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "PTC",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "MANH",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SAMSN",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "COUP",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "BILL",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "PAYC",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "WEX",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "PCTY",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "GWRE",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "ALTR",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "DT",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "BSY",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SSNC",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "TYL",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "VRNS",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "TENB",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "RPD",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "CYBR",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SAIL",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "JAMF",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "QLYS",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "TOST",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SQ",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "FOUR",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "EVTC",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "NVEI",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "RELY",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "NBIX",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "EXAS",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "RARE",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "PCVX",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "RPRX",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "NTRA",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "VEEV",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "DOCS",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "GMED",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "HALO",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "LNTH",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "AZTA",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "BIO",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "NVCR",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "ENSG",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "AMED",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "ACHC",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "THC",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SGRY",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SHC",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "OMCL",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "PCRX",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "TNDM",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "IRTC",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "NVST",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "PRCT",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "RVMD",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "IONS",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SRPT",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "BMRN",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "ALNY",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "EXEL",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "UTHR",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "MASI",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "NKTR",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "IOVA",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "FATE",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "RCKT",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "DNLI",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "TWST",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "LPLA",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "RGA",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "EVR",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SF",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SEIC",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "MKTX",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "VIRT",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "PIPR",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "WBS",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "FHN",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "EWBC",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "ZION",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "CMA",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "FNB",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SNV",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "WAL",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "OZK",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "BOKF",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "PNFP",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "UMBF",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SBCF",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "IBKR",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "HOOD",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SOFI",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "LC",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "UPST",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "AFRM",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "NAVI",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SLM",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "ALLY",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "CACC",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "AX",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "PRAA",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "COOP",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "RKT",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "UWMC",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "PFSI",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "ESNT",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "MTG",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "MGIC",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "TTC",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SCI",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "TREX",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SITE",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "AAON",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "WTS",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "RBC",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "RRX",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "MWA",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "DCI",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "GGG",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "MIDD",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "AIT",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "GNRC",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "TT",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "LII",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "WSO",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "KNX",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SAIA",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "ARCB",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "GXO",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "RXO",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "HUBG",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "LSTR",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "WERN",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "HTLD",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SNDR",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "MATX",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "KEX",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "TPC",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "EXPO",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "HAYW",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "AZEK",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "DOOR",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "UFPI",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "BLD",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "IBP",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "BLDR",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "MAS",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "OC",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "WING",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SHAK",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "CAVA",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "TXRH",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "EAT",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "DIN",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "CAKE",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "BJRI",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "PLAY",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SIX",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "FUN",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SEAS",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "PLNT",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "XPOF",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "MODG",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "GOLF",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SKX",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "CROX",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "OXM",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "GIII",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "BOOT",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "FIGS",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "AEO",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "ANF",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "URBN",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "EXPR",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "BURL",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "FIVE",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "OLLI",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "PRPL",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "LOVE",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "WSM",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "RH",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "W",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "CHWY",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "CVNA",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "CARS",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SFM",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "AR",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "RRC",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SWN",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "CNX",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "MTDR",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "PR",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "CHRD",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SM",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "PDCE",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "VNOM",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "GPP",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "AM",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "DTM",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "HESM",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "PAA",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "PAGP",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "EPD",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "ET",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "MPLX",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "PSXP",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "NRG",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "VST",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "PNM",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "AVA",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "NWE",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "OGE",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "IDA",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "BKH",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SR",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SWX",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "REXR",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "STAG",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "TRNO",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "FR",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "EGP",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "PNR",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "INVH",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "AMH",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SUI",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "ELS",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "LSI",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "CUBE",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "NSA",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "COLD",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "GLPI",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "RHP",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "PK",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SHO",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "DRH",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "APLE",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "INN",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "AHT",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "RLJ",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "XHR",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "IIPR",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "MPW",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "DOC",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "HR",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "OHI",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "AXTA",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "RPM",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "CBT",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "HXL",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "CC",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "TROX",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "KWR",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "BCPC",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "ESI",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "MTX",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SLVM",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "CRS",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "ATI",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "HAYN",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SON",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "CLW",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "GEF",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "BCC",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "MERC",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "OLN",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "IART",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "ZD",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "CARG",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "COMP",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "OPEN",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "TRMB",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "AGYS",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "MIME",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "NEWR",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "PLAN",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "APPN",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "BL",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "LSPD",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SHOP",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SQSP",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "PGNY",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "VERX",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "FELE",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "EAF",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "CW",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "PRIM",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "STRL",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "MTZ",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "DY",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "IESC",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "ROCK",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "VMI",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "NVT",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "ZWS",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "ROP",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "IEX",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "NDSN",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "XYL",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "REVG",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "WFRD",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "CLH",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "LQDA",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "MEDP",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "KRYS",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "INSM",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "CORT",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "ITCI",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "PTCT",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "FOLD",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "AGIO",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "ARVN",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "KURA",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "VKTX",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SMMT",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "ROIV",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "ACLX",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "DYN",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "TARS",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "OLPX",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "STEP",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "HLNE",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "AMG",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "TROW",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "IVZ",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "AB",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "BSIG",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "VCTR",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "CNS",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "WDH",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "CADE",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "FFIN",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SFBS",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "TCBI",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "HWC",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "ONB",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "SSB",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "VLY",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "GBCI",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "WTFC",
+    "company_size": "mid_cap",
+    "source": "midcap400"
+  },
+  {
+    "ticker": "PLTR",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "AI",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "BBAI",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "SOUN",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "IONQ",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "RGTI",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "QUBT",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "ARQQ",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "BIDU",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "C3AI",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "RXRX",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "EXAI",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "NNOX",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "LAZR",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "OUST",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "AEVA",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "CPTN",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "VUZI",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "COIN",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "MSTR",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "RIOT",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "MARA",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "CLSK",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "BITF",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "HUT",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "CIFR",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "ARBK",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "WULF",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "NU",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "DAVE",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "LMND",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "ROOT",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "HIMS",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "CLOV",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "TALK",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "AMPL",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "FLYW",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "RIVN",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "LCID",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "FSR",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "GOEV",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "FFIE",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "MULN",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "NIO",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "XPEV",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "LI",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "VFS",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "ENVX",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "QS",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "MVST",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "DCRC",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "BLNK",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "CHPT",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "EVGO",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "RUN",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "NOVA",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "ARRY",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "BE",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "PLUG",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "FCEL",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "BLDP",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "STEM",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "SPWR",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "MAXN",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "SHLS",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "MRNA",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "BNTX",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "CRSP",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "EDIT",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "NTLA",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "BEAM",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "VERV",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "PRME",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "ABCL",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "SANA",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "KYMR",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "IMVT",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "RLAY",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "ERAS",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "ANAB",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "TGTX",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "KRTX",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "CRNX",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "DAWN",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "APGE",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "CART",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "ADPT",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "GYRE",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "RGNX",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "BLTE",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "KDNY",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "XNCR",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "YMAB",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "RKLB",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "LUNR",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "RDW",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "ASTS",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "BKSY",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "MNTS",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "ASTR",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "VORB",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "SPIR",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "IRDM",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "KTOS",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "RCAT",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "AVAV",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "JOBY",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "ACHR",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "LILM",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "EVTL",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "BLDE",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "EHANG",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "UAM",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "HUBS",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "ZI",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "BRZE",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "CWAN",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "ALKT",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "INTA",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "SEMR",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "BIGC",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "VTEX",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "MNDY",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "FRSH",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "DOCN",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "SUMO",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "CLDR",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "AYX",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "FIVN",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "BAND",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "LPSN",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "RNG",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "ZM",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "TWLO",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "CRDO",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "ASAN",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "TEAM",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "U",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "DKNG",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "PENN",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "RSI",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "SE",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "MELI",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "GLBE",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "IBTA",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "WISH",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "POSH",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "REAL",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "RERE",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "CPNG",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "BABA",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "JD",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "PDD",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "GRAB",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "GOJEK",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "WDAY",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "DOCU",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "IRTX",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "BRKS",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "NVTS",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "WOLF",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "ACLS",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "FORM",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "CEVA",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "SLAB",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "SITM",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "AMBA",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "LSCC",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "MTSI",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "RMBS",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "POWI",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "DIOD",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "SMTC",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "VSH",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "IXYS",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "ALGM",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "ARM",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "BIRK",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "DUOL",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "KVYO",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "INST",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "VRT",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "CELH",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "ONON",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "IOT",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "FTAI",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "TW",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "PAYO",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "ALAB",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "SERV",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "GCT",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "APLT",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "OWL",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "FLNC",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "BTDR",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "IREN",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "CORZ",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "OKLO",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "SMR",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "LEU",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "NNE",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "CCJ",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "UEC",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "DNN",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "UUUU",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "TSM",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "ASML",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "SAP",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "TM",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "SONY",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "NVO",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "AZN",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "GSK",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "SNY",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "DEO",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "UL",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "BHP",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "RIO",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "VALE",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "INFY",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "WIT",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "HDB",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "IBN",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "TCEHY",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "SPOT",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "SU",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "ENB",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "CNQ",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "CP",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "BN",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "MFC",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "TD",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "RY",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "LOGI",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "STM",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "ERIC",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "NOK",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "MBLY",
+    "company_size": "startup",
+    "source": "growth"
+  },
+  {
+    "ticker": "MRVL",
+    "company_size": "startup",
+    "source": "growth"
+  }
+]
