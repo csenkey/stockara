@@ -3,6 +3,8 @@ import Layout from "./components/Layout";
 import Login from "./pages/Login";
 import Settings from "./pages/Settings";
 import Dashboard from "./pages/Dashboard";
+import DemoLeaderboard from "./pages/DemoLeaderboard";
+import DemoAccountDetail from "./pages/DemoAccountDetail";
 
 function App() {
   return (
@@ -14,6 +16,8 @@ function App() {
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
         </Route>
         <Route path="/login" element={<Login />} />
+        <Route path="/demo" element={<DemoLeaderboard />} />
+        <Route path="/demo/:name" element={<DemoAccountDetail />} />
       </Routes>
     </BrowserRouter>
   );

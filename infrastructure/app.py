@@ -5,6 +5,7 @@ import aws_cdk as cdk
 
 from stacks.api_stack import ApiStack
 from stacks.database_stack import DatabaseStack
+from stacks.demo_trading_stack import DemoTradingStack
 from stacks.frontend_stack import FrontendStack
 from stacks.monitoring_stack import MonitoringStack
 
@@ -19,5 +20,6 @@ database_stack = DatabaseStack(app, "StockMonitoringDatabase", env=env)
 api_stack = ApiStack(app, "StockMonitoringApi", env=env)
 frontend_stack = FrontendStack(app, "StockMonitoringFrontend", env=env)
 monitoring_stack = MonitoringStack(app, "StockMonitoringMonitoring", env=env)
+demo_trading_stack = DemoTradingStack(app, "StockMonitoringDemoTrading", env=env)
 
 app.synth()
