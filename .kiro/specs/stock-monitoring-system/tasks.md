@@ -256,7 +256,8 @@ Build a serverless stock monitoring system on AWS using Python (FastAPI) for the
 - [x] 19. Implement CI/CD Pipeline
   - [x] 19.1 Create GitHub Actions workflow
     - Create `.github/workflows/deploy.yml`
-    - Steps: lint (ruff/black) → pytest → build frontend (vite build) → cdk deploy
+    - Steps: lint → pytest → build frontend (vite build) → CDK synth → CDK deploy → deployed health smoke test
+    - Trigger deployment for `main`, `feature/**`, and `codex/**` branch pushes
     - Configure AWS credentials via OIDC or secrets
     - _Requirements: 10.1_
 

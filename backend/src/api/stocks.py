@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 import structlog
 
 from backend.src.db.connection import store
-from backend.src.models.schemas import CompanySize, Stock, VALID_SECTORS, validate_ticker
+from backend.src.models.schemas import CompanySize, VALID_SECTORS, validate_ticker
 
 logger = structlog.get_logger(__name__)
 

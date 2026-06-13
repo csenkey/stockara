@@ -14,6 +14,8 @@ from aws_cdk import (
 )
 from constructs import Construct
 
+from .naming import resource_name
+
 
 BACKEND_ASSET_PATH = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "backend")
@@ -32,6 +34,7 @@ class DemoTradingStack(Stack):
         scope: Construct,
         construct_id: str,
         data_table: dynamodb.ITable,
+        deployment_stage: str = "prod",
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -64,10 +67,16 @@ class DemoTradingStack(Stack):
 
         # ─── CloudWatch Log Group ────────────────────────────────────────
 
+        demo_trade_executor_log_group_name = resource_name(
+            deployment_stage,
+            "demo-trade-executor",
+            "demo-trade-executor",
+        )
+
         self.demo_trade_executor_log_group = logs.LogGroup(
             self,
             "DemoTradeExecutorLogGroup",
-            log_group_name="/aws/lambda/demo-trade-executor",
+            log_group_name=f"/aws/lambda/{demo_trade_executor_log_group_name}",
             retention=logs.RetentionDays.ONE_MONTH,
         )
 
@@ -76,7 +85,11 @@ class DemoTradingStack(Stack):
         self.demo_trade_executor_fn = _lambda.Function(
             self,
             "DemoTradeExecutorFunction",
-            function_name="stock-monitoring-demo-trade-executor",
+            function_name=resource_name(
+                deployment_stage,
+                "stock-monitoring-demo-trade-executor",
+                "demo-trade-executor",
+            ),
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="src.services.demo_trade_handler.handler",
             code=_lambda.Code.from_asset(BACKEND_ASSET_PATH),
@@ -87,6 +100,7 @@ class DemoTradingStack(Stack):
                 "POWERTOOLS_SERVICE_NAME": "demo-trade-executor",
                 "LOG_LEVEL": "INFO",
                 "STOCKARA_TABLE_NAME": data_table.table_name,
+                "DEPLOYMENT_STAGE": deployment_stage,
             },
             description="Executes daily simulated trades for 100 demo accounts based on AI recommendations",
         )
@@ -98,7 +112,11 @@ class DemoTradingStack(Stack):
         events.Rule(
             self,
             "DemoTradeExecutionSchedule",
-            rule_name="stock-monitoring-demo-trade-execution",
+            rule_name=resource_name(
+                deployment_stage,
+                "stock-monitoring-demo-trade-execution",
+                "demo-trade-execution",
+            ),
             description="Triggers demo trade execution daily at 22:30 UTC, 30 minutes after AI analysis completes",
             schedule=events.Schedule.cron(
                 minute="30", hour="22", day="*", month="*", year="*"

@@ -11,7 +11,6 @@ from backend.src.db.connection import store
 from backend.src.models.demo_schemas import (
     DailySnapshot,
     DemoAccount,
-    DemoHolding,
     DemoTransaction,
     LeaderboardEntry,
     PaginatedTransactionsResponse,

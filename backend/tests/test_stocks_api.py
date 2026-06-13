@@ -1,6 +1,6 @@
 """Unit tests for the stock watchlist CRUD API."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi import FastAPI

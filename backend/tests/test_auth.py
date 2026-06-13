@@ -1,7 +1,7 @@
 """Unit tests for the Cognito authentication API."""
 
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock
 from botocore.exceptions import ClientError
 from fastapi.testclient import TestClient
 from fastapi import FastAPI

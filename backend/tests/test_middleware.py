@@ -1,7 +1,7 @@
 """Unit tests for request duration logging middleware."""
 
 import time
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 from fastapi import FastAPI

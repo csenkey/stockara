@@ -3,7 +3,6 @@
 import os
 import re
 import time
-import json
 from typing import Optional
 
 import boto3

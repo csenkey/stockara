@@ -3,6 +3,7 @@
 import os
 
 from aws_cdk import (
+    CfnOutput,
     Duration,
     Stack,
     aws_apigateway as apigw,
@@ -14,6 +15,8 @@ from aws_cdk import (
     aws_dynamodb as dynamodb,
 )
 from constructs import Construct
+
+from .naming import resource_name
 
 
 BACKEND_ASSET_PATH = os.path.abspath(
@@ -35,6 +38,7 @@ class ApiStack(Stack):
         data_table: dynamodb.ITable,
         user_pool: cognito.IUserPool,
         user_pool_client: cognito.IUserPoolClient,
+        deployment_stage: str = "prod",
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -136,13 +140,18 @@ class ApiStack(Stack):
             "POWERTOOLS_SERVICE_NAME": "stock-monitoring",
             "LOG_LEVEL": "INFO",
             "STOCKARA_TABLE_NAME": data_table.table_name,
+            "DEPLOYMENT_STAGE": deployment_stage,
         }
 
         # Stock Collector Lambda - 512MB, 15 min timeout
         self.stock_collector_fn = _lambda.Function(
             self,
             "StockCollectorFunction",
-            function_name="stock-monitoring-stock-collector",
+            function_name=resource_name(
+                deployment_stage,
+                "stock-monitoring-stock-collector",
+                "stock-collector",
+            ),
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="src.collectors.stock_collector.handler",
             code=_lambda.Code.from_asset(BACKEND_ASSET_PATH),
@@ -160,7 +169,11 @@ class ApiStack(Stack):
         self.news_collector_fn = _lambda.Function(
             self,
             "NewsCollectorFunction",
-            function_name="stock-monitoring-news-collector",
+            function_name=resource_name(
+                deployment_stage,
+                "stock-monitoring-news-collector",
+                "news-collector",
+            ),
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="src.collectors.news_collector.handler",
             code=_lambda.Code.from_asset(BACKEND_ASSET_PATH),
@@ -178,7 +191,11 @@ class ApiStack(Stack):
         self.ai_analyzer_fn = _lambda.Function(
             self,
             "AiAnalyzerFunction",
-            function_name="stock-monitoring-ai-analyzer",
+            function_name=resource_name(
+                deployment_stage,
+                "stock-monitoring-ai-analyzer",
+                "ai-analyzer",
+            ),
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="src.analysis.ai_analyzer.handler",
             code=_lambda.Code.from_asset(BACKEND_ASSET_PATH),
@@ -196,7 +213,11 @@ class ApiStack(Stack):
         self.api_handler_fn = _lambda.Function(
             self,
             "ApiHandlerFunction",
-            function_name="stock-monitoring-api-handler",
+            function_name=resource_name(
+                deployment_stage,
+                "stock-monitoring-api-handler",
+                "api-handler",
+            ),
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="src.api.handler.handler",
             code=_lambda.Code.from_asset(BACKEND_ASSET_PATH),
@@ -225,7 +246,11 @@ class ApiStack(Stack):
         cognito_authorizer = apigw.CognitoUserPoolsAuthorizer(
             self,
             "StockMonitoringAuthorizer",
-            authorizer_name="stock-monitoring-cognito-authorizer",
+            authorizer_name=resource_name(
+                deployment_stage,
+                "stock-monitoring-cognito-authorizer",
+                "cognito-authorizer",
+            ),
             cognito_user_pools=[self.user_pool],
         )
 
@@ -233,10 +258,12 @@ class ApiStack(Stack):
         self.api = apigw.RestApi(
             self,
             "StockMonitoringApi",
-            rest_api_name="Stock Monitoring API",
+            rest_api_name=resource_name(
+                deployment_stage, "Stock Monitoring API", "api"
+            ),
             description="REST API for the Stock Monitoring and Analysis System",
             deploy_options=apigw.StageOptions(
-                stage_name="prod",
+                stage_name=deployment_stage,
                 throttling_rate_limit=100,
                 throttling_burst_limit=200,
             ),
@@ -319,7 +346,11 @@ class ApiStack(Stack):
         events.Rule(
             self,
             "StockCollectionSchedule",
-            rule_name="stock-monitoring-stock-collection",
+            rule_name=resource_name(
+                deployment_stage,
+                "stock-monitoring-stock-collection",
+                "stock-collection",
+            ),
             description="Triggers stock data collection daily at 21:00 UTC",
             schedule=events.Schedule.cron(
                 minute="0", hour="21", day="*", month="*", year="*"
@@ -331,7 +362,11 @@ class ApiStack(Stack):
         events.Rule(
             self,
             "NewsCollectionSchedule",
-            rule_name="stock-monitoring-news-collection",
+            rule_name=resource_name(
+                deployment_stage,
+                "stock-monitoring-news-collection",
+                "news-collection",
+            ),
             description="Triggers news collection every 15 minutes",
             schedule=events.Schedule.rate(Duration.minutes(15)),
             targets=[targets.LambdaFunction(self.news_collector_fn)],
@@ -341,10 +376,21 @@ class ApiStack(Stack):
         events.Rule(
             self,
             "AiAnalysisSchedule",
-            rule_name="stock-monitoring-ai-analysis",
+            rule_name=resource_name(
+                deployment_stage,
+                "stock-monitoring-ai-analysis",
+                "ai-analysis",
+            ),
             description="Triggers AI analysis daily at 22:00 UTC",
             schedule=events.Schedule.cron(
                 minute="0", hour="22", day="*", month="*", year="*"
             ),
             targets=[targets.LambdaFunction(self.ai_analyzer_fn)],
+        )
+
+        CfnOutput(
+            self,
+            "ApiUrl",
+            value=self.api.url,
+            description="Base URL for the API Gateway deployment",
         )

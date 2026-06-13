@@ -3,7 +3,7 @@
 import json
 from datetime import date, datetime
 from decimal import Decimal
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -507,7 +507,7 @@ class TestHandler:
         mock_fetch.return_value = tickers
         mock_process.return_value = (50, 0)
 
-        result = handler({}, None)
+        handler({}, None)
 
         assert mock_process.call_count == 3
         # Check batch sizes

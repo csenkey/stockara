@@ -11,6 +11,8 @@ from aws_cdk import (
 )
 from constructs import Construct
 
+from .naming import resource_name
+
 
 class DatabaseStack(Stack):
     """Defines the Stockara data layer.
@@ -18,13 +20,19 @@ class DatabaseStack(Stack):
     Includes a DynamoDB single-table store, Cognito User Pool, and KMS key.
     """
 
-    def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
+    def __init__(
+        self,
+        scope: Construct,
+        construct_id: str,
+        deployment_stage: str = "prod",
+        **kwargs,
+    ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         self.table = dynamodb.Table(
             self,
             "StockaraTable",
-            table_name="stockara",
+            table_name=resource_name(deployment_stage, "stockara", "data"),
             partition_key=dynamodb.Attribute(
                 name="PK", type=dynamodb.AttributeType.STRING
             ),
@@ -62,7 +70,9 @@ class DatabaseStack(Stack):
         self.user_pool = cognito.UserPool(
             self,
             "StockMonitoringUserPool",
-            user_pool_name="stock-monitoring-users",
+            user_pool_name=resource_name(
+                deployment_stage, "stock-monitoring-users", "users"
+            ),
             self_sign_up_enabled=True,
             sign_in_aliases=cognito.SignInAliases(email=True),
             auto_verify=cognito.AutoVerifiedAttrs(email=True),
@@ -83,7 +93,9 @@ class DatabaseStack(Stack):
             self,
             "StockMonitoringUserPoolClient",
             user_pool=self.user_pool,
-            user_pool_client_name="stock-monitoring-web-client",
+            user_pool_client_name=resource_name(
+                deployment_stage, "stock-monitoring-web-client", "web-client"
+            ),
             auth_flows=cognito.AuthFlow(user_password=True, user_srp=True),
             id_token_validity=Duration.minutes(30),
             access_token_validity=Duration.minutes(30),
@@ -94,7 +106,11 @@ class DatabaseStack(Stack):
         self.portfolio_encryption_key = kms.Key(
             self,
             "PortfolioEncryptionKey",
-            alias="stock-monitoring/portfolio-encryption",
+            alias=resource_name(
+                deployment_stage,
+                "stock-monitoring/portfolio-encryption",
+                "portfolio-encryption",
+            ),
             description="AES-256 encryption key for user portfolio data",
             enable_key_rotation=True,
             removal_policy=RemovalPolicy.RETAIN,

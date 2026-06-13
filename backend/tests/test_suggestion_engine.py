@@ -17,7 +17,6 @@ from backend.src.models.schemas import (
 )
 from backend.src.services.suggestion_engine import (
     SuggestionEngineError,
-    SuggestionItem,
     _determine_timeframe,
     _passes_filters,
     _risk_level_allowed,

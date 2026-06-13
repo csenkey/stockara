@@ -56,7 +56,7 @@ Infrastructure:
 ```bash
 cd infrastructure
 python -m pytest tests/ -v
-cdk deploy --all
+cdk deploy --all -c deploymentStage=prod
 ```
 
 Prefer targeted tests while iterating, then run the relevant full suite before handing off. External provider calls should be mocked in tests; do not require real OpenAI, yfinance, Cognito, KMS, NewsAPI, Finnhub, or Alpha Vantage credentials for unit tests.
@@ -64,7 +64,8 @@ Prefer targeted tests while iterating, then run the relevant full suite before h
 ## How We Work
 
 - Do all development on feature branches. Do not commit implementation work directly on `main`.
-- Every commit on a feature branch is expected to trigger an AWS deployment through CI/CD.
+- Every commit on `main`, `feature/**`, or `codex/**` is expected to trigger an AWS deployment through CI/CD.
+- `main` deploys the stable `prod` stage; feature branches deploy isolated, branch-scoped stages.
 - Before committing, run all relevant local tests and builds. A commit is not ready for deployment until local tests pass.
 - If the AWS deployment fails, fetch the failure details automatically from GitHub Actions logs or related AWS logs, diagnose the issue, correct it, amend the feature-branch commit, and retry deployment.
 - Continue the fix, amend, and retry loop until the feature-branch deployment is green.

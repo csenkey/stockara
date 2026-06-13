@@ -15,7 +15,7 @@ A serverless stock monitoring platform that tracks 1000+ tickers, generates AI-p
 ## Architecture
 
 ```
-AWS Lambda (Python 3.12) + API Gateway + PostgreSQL (RDS Serverless v2)
+AWS Lambda (Python 3.12) + API Gateway + DynamoDB single-table storage
 React SPA on S3/CloudFront | Cognito Auth | EventBridge Scheduling
 ```
 
@@ -31,7 +31,7 @@ Key services:
 |-------|-----------|
 | Backend | Python 3.12, FastAPI, Pydantic, structlog |
 | Frontend | React 18, TypeScript, Vite, Tailwind CSS, Recharts |
-| Database | PostgreSQL (RDS Serverless v2) |
+| Database | DynamoDB single-table, on-demand billing |
 | Auth | AWS Cognito (JWT) |
 | AI | OpenAI GPT-4o-mini |
 | Infrastructure | AWS CDK (Python), GitHub Actions CI/CD |
@@ -48,7 +48,7 @@ stocks/
 │   │   ├── analysis/       # AI analyzer
 │   │   ├── services/       # Business logic (demo accounts, encryption, suggestions)
 │   │   ├── models/         # Pydantic schemas
-│   │   ├── db/             # Connection pool + migrations
+│   │   ├── db/             # DynamoDB table access helpers
 │   │   └── scripts/        # Seed scripts
 │   └── tests/              # pytest + Hypothesis property tests
 ├── frontend/
@@ -69,7 +69,6 @@ stocks/
 
 - Python 3.12+
 - Node.js 18+
-- PostgreSQL (local or remote)
 - AWS CLI (for deployment)
 
 ### Backend
@@ -95,8 +94,26 @@ npm run build   # production build
 cd infrastructure
 pip install -r requirements.txt
 npm install -g aws-cdk
-cdk deploy --all
+cdk deploy --all -c deploymentStage=prod
 ```
+
+### GitHub Actions CI/CD
+
+Pushes to `main`, `feature/**`, or `codex/**` run the deployment workflow:
+
+```text
+Python lint -> backend tests -> frontend lint/build -> infrastructure tests -> CDK synth -> CDK deploy -> /api/health smoke test
+```
+
+`main` deploys the stable `prod` stage and preserves the existing production stack and resource names. Feature branches deploy isolated AWS stacks with a sanitized branch stage, so branch deploys do not collide with production.
+
+Required GitHub configuration:
+
+| Name | Type | Description |
+|------|------|-------------|
+| `AWS_ACCESS_KEY_ID` | Secret | AWS access key used by GitHub Actions |
+| `AWS_SECRET_ACCESS_KEY` | Secret | AWS secret access key used by GitHub Actions |
+| `AWS_REGION` | Repository variable or secret | AWS region; defaults to `us-east-1` if unset |
 
 ## Demo Trading Accounts
 
@@ -137,7 +154,7 @@ python -m pytest tests/ -v
 
 | Variable | Description |
 |----------|-------------|
-| `DATABASE_URL` | PostgreSQL connection string |
+| `STOCKARA_TABLE_NAME` | DynamoDB table name |
 | `OPENAI_API_KEY` | OpenAI API key for AI analysis |
 | `AWS_REGION` | AWS deployment region |
 | `COGNITO_USER_POOL_ID` | Cognito user pool ID |

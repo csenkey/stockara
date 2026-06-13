@@ -9,7 +9,7 @@ Validates: Requirements 1.2, 1.3, 1.4, 1.5
 import random
 from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 
-from hypothesis import given, settings, assume
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 

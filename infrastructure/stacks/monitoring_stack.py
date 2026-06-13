@@ -10,6 +10,8 @@ from aws_cdk import (
 )
 from constructs import Construct
 
+from .naming import resource_name
+
 
 class MonitoringStack(Stack):
     """Defines the monitoring infrastructure for the Stock Monitoring System.
@@ -17,49 +19,79 @@ class MonitoringStack(Stack):
     Includes CloudWatch alarms, log groups, dashboards, and SNS notifications.
     """
 
-    def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
+    def __init__(
+        self,
+        scope: Construct,
+        construct_id: str,
+        deployment_stage: str = "prod",
+        **kwargs,
+    ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         # --- SNS Topic for Alert Notifications ---
         self.alerts_topic = sns.Topic(
             self,
             "AlertsTopic",
-            topic_name="stock-monitoring-alerts",
+            topic_name=resource_name(
+                deployment_stage, "stock-monitoring-alerts", "alerts"
+            ),
             display_name="Stock Monitoring System Alerts",
         )
 
         # --- CloudWatch Log Groups with 30-day retention ---
+        stock_collector_log_group_name = resource_name(
+            deployment_stage, "stock-collector", "stock-collector"
+        )
+        news_collector_log_group_name = resource_name(
+            deployment_stage, "news-collector", "news-collector"
+        )
+        ai_analyzer_log_group_name = resource_name(
+            deployment_stage, "ai-analyzer", "ai-analyzer"
+        )
+        api_handler_log_group_name = resource_name(
+            deployment_stage, "api-handler", "api-handler"
+        )
+
         self.stock_collector_log_group = logs.LogGroup(
             self,
             "StockCollectorLogGroup",
-            log_group_name="/aws/lambda/stock-collector",
+            log_group_name=f"/aws/lambda/{stock_collector_log_group_name}",
             retention=logs.RetentionDays.ONE_MONTH,
         )
 
         self.news_collector_log_group = logs.LogGroup(
             self,
             "NewsCollectorLogGroup",
-            log_group_name="/aws/lambda/news-collector",
+            log_group_name=f"/aws/lambda/{news_collector_log_group_name}",
             retention=logs.RetentionDays.ONE_MONTH,
         )
 
         self.ai_analyzer_log_group = logs.LogGroup(
             self,
             "AiAnalyzerLogGroup",
-            log_group_name="/aws/lambda/ai-analyzer",
+            log_group_name=f"/aws/lambda/{ai_analyzer_log_group_name}",
             retention=logs.RetentionDays.ONE_MONTH,
         )
 
         self.api_handler_log_group = logs.LogGroup(
             self,
             "ApiHandlerLogGroup",
-            log_group_name="/aws/lambda/api-handler",
+            log_group_name=f"/aws/lambda/{api_handler_log_group_name}",
             retention=logs.RetentionDays.ONE_MONTH,
         )
 
         # --- Custom Metrics ---
         # Namespace for all custom metrics
         metrics_namespace = "StockMonitoring"
+        api_handler_function_name = resource_name(
+            deployment_stage, "stock-monitoring-api-handler", "api-handler"
+        )
+        stock_collector_function_name = resource_name(
+            deployment_stage, "stock-monitoring-stock-collector", "stock-collector"
+        )
+        ai_analyzer_function_name = resource_name(
+            deployment_stage, "stock-monitoring-ai-analyzer", "ai-analyzer"
+        )
 
         self.stocks_collected_metric = cloudwatch.Metric(
             namespace=metrics_namespace,
@@ -88,7 +120,7 @@ class MonitoringStack(Stack):
         api_errors_metric = cloudwatch.Metric(
             namespace="AWS/Lambda",
             metric_name="Errors",
-            dimensions_map={"FunctionName": "api-handler"},
+            dimensions_map={"FunctionName": api_handler_function_name},
             statistic="Sum",
             period=Duration.minutes(5),
         )
@@ -96,7 +128,7 @@ class MonitoringStack(Stack):
         api_invocations_metric = cloudwatch.Metric(
             namespace="AWS/Lambda",
             metric_name="Invocations",
-            dimensions_map={"FunctionName": "api-handler"},
+            dimensions_map={"FunctionName": api_handler_function_name},
             statistic="Sum",
             period=Duration.minutes(5),
         )
@@ -105,7 +137,9 @@ class MonitoringStack(Stack):
         self.api_error_rate_alarm = cloudwatch.Alarm(
             self,
             "ApiErrorRateAlarm",
-            alarm_name="stock-monitoring-api-error-rate",
+            alarm_name=resource_name(
+                deployment_stage, "stock-monitoring-api-error-rate", "api-error-rate"
+            ),
             alarm_description="API Lambda error rate exceeds 5% in a 5-minute window",
             metric=cloudwatch.MathExpression(
                 expression="(errors / invocations) * 100",
@@ -128,12 +162,16 @@ class MonitoringStack(Stack):
         self.stock_collector_failure_alarm = cloudwatch.Alarm(
             self,
             "StockCollectorFailureAlarm",
-            alarm_name="stock-monitoring-stock-collector-failure",
+            alarm_name=resource_name(
+                deployment_stage,
+                "stock-monitoring-stock-collector-failure",
+                "stock-collector-failure",
+            ),
             alarm_description="Stock collector Lambda function has errors",
             metric=cloudwatch.Metric(
                 namespace="AWS/Lambda",
                 metric_name="Errors",
-                dimensions_map={"FunctionName": "stock-collector"},
+                dimensions_map={"FunctionName": stock_collector_function_name},
                 statistic="Sum",
                 period=Duration.minutes(5),
             ),
@@ -150,12 +188,16 @@ class MonitoringStack(Stack):
         self.ai_analyzer_failure_alarm = cloudwatch.Alarm(
             self,
             "AiAnalyzerFailureAlarm",
-            alarm_name="stock-monitoring-ai-analyzer-failure",
+            alarm_name=resource_name(
+                deployment_stage,
+                "stock-monitoring-ai-analyzer-failure",
+                "ai-analyzer-failure",
+            ),
             alarm_description="AI analyzer Lambda function has errors",
             metric=cloudwatch.Metric(
                 namespace="AWS/Lambda",
                 metric_name="Errors",
-                dimensions_map={"FunctionName": "ai-analyzer"},
+                dimensions_map={"FunctionName": ai_analyzer_function_name},
                 statistic="Sum",
                 period=Duration.minutes(5),
             ),
@@ -172,7 +214,9 @@ class MonitoringStack(Stack):
         self.dashboard = cloudwatch.Dashboard(
             self,
             "StockMonitoringDashboard",
-            dashboard_name="StockMonitoringDashboard",
+            dashboard_name=resource_name(
+                deployment_stage, "StockMonitoringDashboard", "dashboard"
+            ),
         )
 
         # Row 1: Custom business metrics
@@ -208,14 +252,16 @@ class MonitoringStack(Stack):
                     cloudwatch.Metric(
                         namespace="AWS/Lambda",
                         metric_name="Errors",
-                        dimensions_map={"FunctionName": "stock-collector"},
+                        dimensions_map={
+                            "FunctionName": stock_collector_function_name
+                        },
                         statistic="Sum",
                         period=Duration.minutes(5),
                     ),
                     cloudwatch.Metric(
                         namespace="AWS/Lambda",
                         metric_name="Errors",
-                        dimensions_map={"FunctionName": "ai-analyzer"},
+                        dimensions_map={"FunctionName": ai_analyzer_function_name},
                         statistic="Sum",
                         period=Duration.minutes(5),
                     ),
@@ -232,7 +278,7 @@ class MonitoringStack(Stack):
                     cloudwatch.Metric(
                         namespace="AWS/Lambda",
                         metric_name="Duration",
-                        dimensions_map={"FunctionName": "api-handler"},
+                        dimensions_map={"FunctionName": api_handler_function_name},
                         statistic="Average",
                         period=Duration.minutes(5),
                     ),
@@ -245,14 +291,16 @@ class MonitoringStack(Stack):
                     cloudwatch.Metric(
                         namespace="AWS/Lambda",
                         metric_name="Duration",
-                        dimensions_map={"FunctionName": "stock-collector"},
+                        dimensions_map={
+                            "FunctionName": stock_collector_function_name
+                        },
                         statistic="Average",
                         period=Duration.minutes(5),
                     ),
                     cloudwatch.Metric(
                         namespace="AWS/Lambda",
                         metric_name="Duration",
-                        dimensions_map={"FunctionName": "ai-analyzer"},
+                        dimensions_map={"FunctionName": ai_analyzer_function_name},
                         statistic="Average",
                         period=Duration.minutes(5),
                     ),
