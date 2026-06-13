@@ -17,9 +17,18 @@ env = cdk.Environment(
 )
 
 database_stack = DatabaseStack(app, "StockMonitoringDatabase", env=env)
-api_stack = ApiStack(app, "StockMonitoringApi", env=env)
+api_stack = ApiStack(
+    app,
+    "StockMonitoringApi",
+    data_table=database_stack.table,
+    user_pool=database_stack.user_pool,
+    user_pool_client=database_stack.user_pool_client,
+    env=env,
+)
 frontend_stack = FrontendStack(app, "StockMonitoringFrontend", env=env)
 monitoring_stack = MonitoringStack(app, "StockMonitoringMonitoring", env=env)
-demo_trading_stack = DemoTradingStack(app, "StockMonitoringDemoTrading", env=env)
+demo_trading_stack = DemoTradingStack(
+    app, "StockMonitoringDemoTrading", data_table=database_stack.table, env=env
+)
 
 app.synth()

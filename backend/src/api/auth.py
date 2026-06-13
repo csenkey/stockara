@@ -9,16 +9,14 @@ from typing import Optional
 import boto3
 import requests
 from botocore.exceptions import ClientError
-from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi import APIRouter, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, EmailStr
-from psycopg2.extras import RealDictCursor
-from jose import jwt, JWTError, jwk
-from jose.utils import base64url_decode
+from jose import jwt, JWTError
 
 import structlog
 
-from backend.src.db.connection import get_db_connection
+from backend.src.db.connection import store
 
 logger = structlog.get_logger(__name__)
 
@@ -245,17 +243,8 @@ async def register(request: RegisterRequest):
                 error=str(e),
             )
 
-        # Create user record in local database
-        async with get_db_connection() as conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(
-                    """
-                    INSERT INTO users (id, email)
-                    VALUES (%s, %s)
-                    ON CONFLICT (id) DO NOTHING
-                    """,
-                    (user_sub, request.email),
-                )
+        # Mirror the Cognito user locally for app-owned data references.
+        store.put_user(user_sub, request.email)
 
         logger.info("User registered successfully", user_id=user_sub, email=request.email)
 

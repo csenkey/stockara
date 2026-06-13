@@ -12,7 +12,7 @@ The project also includes a public demo-trading feature: 100 superhero-named sim
 
 - Backend: Python 3.12, FastAPI, Mangum, Pydantic, structlog, pandas
 - Frontend: React 18, TypeScript, Vite, Tailwind CSS, Recharts, lucide-react
-- Database: PostgreSQL with migrations in `backend/src/db/migrations/`
+- Database: DynamoDB single-table design provisioned by CDK
 - Infrastructure: AWS CDK in Python, Lambda, API Gateway, EventBridge, Cognito, KMS, S3, CloudFront, CloudWatch
 - External services: yfinance, Alpha Vantage, NewsAPI, Finnhub, OpenAI GPT-4o-mini
 - Testing: pytest plus Hypothesis-style property tests for trading invariants
@@ -24,7 +24,7 @@ The project also includes a public demo-trading feature: 100 superhero-named sim
 - `backend/src/analysis/ai_analyzer.py`: daily AI recommendation generation
 - `backend/src/services/`: encryption, suggestions, demo account management, demo trade execution
 - `backend/src/models/`: Pydantic schemas, including demo schemas
-- `backend/src/db/`: connection helpers and SQL migrations
+- `backend/src/db/`: DynamoDB table access helpers and repository functions
 - `backend/tests/`: unit and property tests
 - `frontend/src/pages/`: login, dashboard, settings, public demo leaderboard, public demo account detail
 - `frontend/src/components/`: portfolio and suggestion UI components
@@ -38,6 +38,7 @@ Backend:
 
 ```bash
 cd backend
+python -m pip install -r requirements-dev.txt
 python -m pytest tests/ -v
 ```
 
@@ -69,6 +70,7 @@ Prefer targeted tests while iterating, then run the relevant full suite before h
 - Continue the fix, amend, and retry loop until the feature-branch deployment is green.
 - After each successful AWS deployment, run a smoke test against the deployed environment to verify the core application is working.
 - Treat a green deploy plus passing smoke test as the minimum bar before opening or updating a pull request for review.
+- When a feature is ready and approved, squash merge the feature branch into `main`, then delete the feature branch.
 
 ## Core Product Rules
 
@@ -150,7 +152,7 @@ Public demo endpoints:
 - Keep property tests for demo-account invariants when changing trading/account logic.
 - Use structured logs for batch and API operations, especially partial failures.
 - Keep public demo routes outside authenticated frontend layout and backend auth middleware.
-- Prefer migrations for database changes; do not silently mutate schema in application code.
+- Prefer CDK table/index changes for database schema access patterns; do not silently mutate data shapes in application code.
 - Preserve `.kiro` requirements as the source for acceptance criteria and task traceability.
 
 ## Useful Source Specs

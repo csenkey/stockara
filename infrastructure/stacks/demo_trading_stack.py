@@ -1,5 +1,7 @@
 """CDK stack for Demo Trading Accounts infrastructure."""
 
+import os
+
 from aws_cdk import (
     Duration,
     Stack,
@@ -8,8 +10,14 @@ from aws_cdk import (
     aws_iam as iam,
     aws_lambda as _lambda,
     aws_logs as logs,
+    aws_dynamodb as dynamodb,
 )
 from constructs import Construct
+
+
+BACKEND_ASSET_PATH = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "backend")
+)
 
 
 class DemoTradingStack(Stack):
@@ -19,7 +27,13 @@ class DemoTradingStack(Stack):
     to execute trades for all 100 demo accounts based on AI recommendations.
     """
 
-    def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
+    def __init__(
+        self,
+        scope: Construct,
+        construct_id: str,
+        data_table: dynamodb.ITable,
+        **kwargs,
+    ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         # ─── IAM Role (least-privilege) ──────────────────────────────────
@@ -34,19 +48,6 @@ class DemoTradingStack(Stack):
             assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
             managed_policies=[lambda_base_policy],
             description="Role for demo trade executor Lambda",
-        )
-
-        # Read access to analysis_results and stock_data tables
-        # (via RDS/Secrets Manager for DB connection)
-        demo_trade_executor_role.add_to_policy(
-            iam.PolicyStatement(
-                effect=iam.Effect.ALLOW,
-                actions=[
-                    "secretsmanager:GetSecretValue",
-                ],
-                resources=["*"],
-                sid="ReadSecretsForDBConnection",
-            )
         )
 
         # CloudWatch metrics for observability
@@ -78,16 +79,18 @@ class DemoTradingStack(Stack):
             function_name="stock-monitoring-demo-trade-executor",
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="src.services.demo_trade_handler.handler",
-            code=_lambda.Code.from_asset("../backend"),
+            code=_lambda.Code.from_asset(BACKEND_ASSET_PATH),
             memory_size=512,
             timeout=Duration.seconds(300),
             role=demo_trade_executor_role,
             environment={
                 "POWERTOOLS_SERVICE_NAME": "demo-trade-executor",
                 "LOG_LEVEL": "INFO",
+                "STOCKARA_TABLE_NAME": data_table.table_name,
             },
             description="Executes daily simulated trades for 100 demo accounts based on AI recommendations",
         )
+        data_table.grant_read_write_data(self.demo_trade_executor_fn)
 
         # ─── EventBridge Scheduled Rule ──────────────────────────────────
 

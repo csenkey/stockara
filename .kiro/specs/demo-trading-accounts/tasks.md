@@ -2,7 +2,7 @@
 
 ## Overview
 
-Implement 100 simulated trading accounts with daily automated trading based on AI recommendations, a public API layer, and a React frontend with leaderboard and account detail pages. The backend uses Python/FastAPI with PostgreSQL; the frontend uses React/TypeScript with Recharts for charting.
+Implement 100 simulated trading accounts with daily automated trading based on AI recommendations, a public API layer, and a React frontend with leaderboard and account detail pages. The backend uses Python/FastAPI with DynamoDB; the frontend uses React/TypeScript with Recharts for charting.
 
 ## Tasks
 

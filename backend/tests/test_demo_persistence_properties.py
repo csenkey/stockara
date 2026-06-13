@@ -126,8 +126,6 @@ def test_daily_snapshot_exists_for_each_trading_day(
         new_callable=AsyncMock,
         return_value=accounts,
     ), patch(
-        "backend.src.services.demo_trade_executor.get_db_connection",
-    ) as mock_db, patch(
         "backend.src.services.demo_trade_executor.DemoTradeExecutor._evaluate_account",
         new_callable=AsyncMock,
         return_value={"buys": 1, "sells": 0, "skipped_cash": 0},
@@ -139,15 +137,6 @@ def test_daily_snapshot_exists_for_each_trading_day(
     ) as mock_date:
         # Mock date.today() to return our generated trading_date
         mock_date.today.return_value = trading_date
-
-        # Mock the DB context manager
-        mock_conn = MagicMock()
-        mock_cursor = MagicMock()
-        mock_conn.__aenter__ = AsyncMock(return_value=mock_conn)
-        mock_conn.__aexit__ = AsyncMock(return_value=False)
-        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
-        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
-        mock_db.return_value = mock_conn
 
         from backend.src.services.demo_trade_executor import DemoTradeExecutor
 
@@ -248,87 +237,41 @@ async def test_transaction_persistence_round_trip(account_id: int, txn: dict):
     """
     from backend.src.services.demo_account_manager import DemoAccountManager
 
-    # Simulate an in-memory database store for the round-trip
     stored_transactions: list[dict] = []
-    transaction_id_counter = [0]
     account_name = "TestHero"
-
-    def mock_execute_for_record(sql, params):
-        """Capture INSERT into demo_transactions."""
-        if "INSERT INTO demo_transactions" in sql:
-            transaction_id_counter[0] += 1
-            stored_transactions.append({
-                "id": transaction_id_counter[0],
-                "account_id": params[0],
-                "ticker": params[1],
-                "action": params[2],
-                "quantity": params[3],
-                "price_per_share": params[4],
-                "total_value": params[5],
-                "commission_fee": params[6],
-                "cash_after": params[7],
-                "executed_at": datetime(2024, 1, 15, 12, 0, 0),
-            })
-
-    def mock_execute_for_query(sql, params=None):
-        """Handle SELECT queries for get_transactions."""
-        if "SELECT id FROM demo_accounts" in sql:
-            mock_cursor.fetchone.return_value = {"id": account_id}
-        elif "SELECT COUNT" in sql:
-            mock_cursor.fetchone.return_value = {"total": len(stored_transactions)}
-        elif "SELECT id, ticker, action" in sql:
-            # Return stored transactions for this account
-            account_txns = [
-                t for t in stored_transactions if t["account_id"] == account_id
-            ]
-            mock_cursor.fetchall.return_value = [
-                {
-                    "id": t["id"],
-                    "ticker": t["ticker"],
-                    "action": t["action"],
-                    "quantity": t["quantity"],
-                    "price_per_share": str(t["price_per_share"]),
-                    "total_value": str(t["total_value"]),
-                    "commission_fee": str(t["commission_fee"]),
-                    "cash_after": str(t["cash_after"]),
-                    "executed_at": t["executed_at"],
-                }
-                for t in account_txns
-            ]
-
-    # Create a mock connection context manager
-    mock_cursor = MagicMock()
-    mock_conn = MagicMock()
-    mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
-    mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
 
     manager = DemoAccountManager()
 
-    # Phase 1: Record the transaction
-    mock_cursor.execute = MagicMock(side_effect=mock_execute_for_record)
+    def put_demo_transaction(record_account_id, record_txn):
+        stored_transactions.append({
+            "id": "txn-1",
+            "account_id": record_account_id,
+            "ticker": record_txn["ticker"],
+            "action": record_txn["action"],
+            "quantity": record_txn["quantity"],
+            "price_per_share": record_txn["price_per_share"],
+            "total_value": record_txn["total_value"],
+            "commission_fee": record_txn["commission_fee"],
+            "cash_after": record_txn["cash_after"],
+            "executed_at": datetime(2024, 1, 15, 12, 0, 0),
+        })
 
-    with patch(
-        "backend.src.services.demo_account_manager.get_db_connection"
-    ) as mock_get_conn:
-        # Create async context manager mock
-        mock_async_cm = AsyncMock()
-        mock_async_cm.__aenter__.return_value = mock_conn
-        mock_async_cm.__aexit__.return_value = False
-        mock_get_conn.return_value = mock_async_cm
+    with patch("backend.src.services.demo_account_manager.store") as mock_store:
+        mock_store.put_demo_transaction.side_effect = put_demo_transaction
+        mock_store.get_demo_account_by_name.return_value = {
+            "id": account_id,
+            "account_name": account_name,
+            "cash_balance": Decimal("10000.00"),
+            "created_at": datetime(2024, 1, 1, 0, 0, 0),
+        }
+        mock_store.list_demo_transactions.side_effect = lambda queried_account_id: [
+            t for t in stored_transactions if t["account_id"] == queried_account_id
+        ]
 
+        # Phase 1: Record the transaction
         await manager.record_transaction(account_id, txn)
 
-    # Phase 2: Query the transaction back
-    mock_cursor.execute = MagicMock(side_effect=mock_execute_for_query)
-
-    with patch(
-        "backend.src.services.demo_account_manager.get_db_connection"
-    ) as mock_get_conn:
-        mock_async_cm = AsyncMock()
-        mock_async_cm.__aenter__.return_value = mock_conn
-        mock_async_cm.__aexit__.return_value = False
-        mock_get_conn.return_value = mock_async_cm
-
+        # Phase 2: Query the transaction back
         result = await manager.get_transactions(account_name, page=1, page_size=100)
 
     # Phase 3: Verify round-trip — all fields must match

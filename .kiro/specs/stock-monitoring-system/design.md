@@ -17,8 +17,8 @@ This document describes the architecture and technology choices for the Stock Mo
 ### Cloud Provider: AWS
 - **Why**: Best serverless pricing at low scale, Lambda free tier (1M requests/month), most mature serverless ecosystem
 
-### Database: PostgreSQL (AWS RDS Serverless v2 or Neon)
-- **Why**: Relational model fits stock data well (time series queries, joins for categories), scales to zero with serverless options, encrypted-at-rest for portfolio data
+### Database: DynamoDB (single-table, on-demand)
+- **Why**: Serverless pay-per-request storage fits low-volume scheduled workloads, avoids always-on database capacity, and supports keyed stock, user, portfolio, analysis, news, and demo-account access patterns with GSIs
 
 ### AI/LLM: OpenAI API (GPT-4o-mini)
 - **Why**: Cost-effective for summarization and analysis (~$0.15/1M input tokens), no infrastructure to manage, good at structured output for BUY/HOLD/SELL classification
@@ -60,7 +60,7 @@ This document describes the architecture and technology choices for the Stock Mo
 │  └────────────────────────────────────────────────────────────┘││
 │                           │                                      ││
 │  ┌────────────────────────┼──────────────────────────────────┐  ││
-│  │              PostgreSQL (RDS Serverless v2)                │  ││
+│  │              DynamoDB (single-table)                │  ││
 │  │  ┌──────────┐ ┌───────────┐ ┌────────────┐ ┌──────────┐ │  ││
 │  │  │ stocks   │ │ news_     │ │ portfolios │ │ analysis │ │  ││
 │  │  │ _data    │ │ summaries │ │ (encrypted)│ │ _results │ │  ││
@@ -195,7 +195,7 @@ CREATE TABLE portfolios (
 **Alarms**:
 - Batch job failure (stock collector or AI analyzer Lambda errors)
 - Error rate > 5% on API endpoints
-- RDS connection count approaching limit
+- DynamoDB throttling or elevated latency
 
 **Logs**: Structured JSON logs via Python `structlog`, shipped to CloudWatch Logs
 
@@ -203,80 +203,23 @@ CREATE TABLE portfolios (
 
 ## Database Schema
 
-```sql
--- Stock watchlist
-CREATE TABLE stocks (
-    ticker VARCHAR(10) PRIMARY KEY,
-    company_name VARCHAR(255) NOT NULL,
-    sector VARCHAR(50) NOT NULL,
-    company_size VARCHAR(10) NOT NULL CHECK (company_size IN ('blue_chip', 'mid_cap', 'startup')),
-    added_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    is_active BOOLEAN NOT NULL DEFAULT TRUE
-);
+```text
+Single-table DynamoDB entities:
+- STOCK#{ticker}/META: watchlist metadata and active flag
+- STOCKDATA#{ticker}/DATE#{trading_date}: one OHLCV record per ticker/date
+- NEWS#{title_source_hash}/META: deduplicated article summaries
+- ANALYSIS#{ticker}/DATE#{analysis_date}: AI recommendations
+- USER#{user_id}/PROFILE: Cognito user mirror
+- USER#{user_id}/PORTFOLIO: encrypted portfolio string
+- USER#{user_id}/PREFERENCES: suggestion filters
+- DEMO_ACCOUNT#{account_id}/META plus GSI2 name lookup
+- DEMO_HOLDING#{account_id}/TICKER#{ticker}
+- DEMO_TXN#{account_id}/TS#{timestamp}#{id}
+- DEMO_SNAPSHOT#{account_id}/DATE#{snapshot_date}
 
--- Daily OHLCV data
-CREATE TABLE stock_data (
-    id BIGSERIAL PRIMARY KEY,
-    ticker VARCHAR(10) NOT NULL REFERENCES stocks(ticker),
-    trading_date DATE NOT NULL,
-    open_price DECIMAL(12,4) NOT NULL,
-    high_price DECIMAL(12,4) NOT NULL,
-    low_price DECIMAL(12,4) NOT NULL,
-    close_price DECIMAL(12,4) NOT NULL,
-    volume BIGINT NOT NULL,
-    collected_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    UNIQUE(ticker, trading_date)
-);
-
--- News summaries
-CREATE TABLE news_summaries (
-    id BIGSERIAL PRIMARY KEY,
-    title VARCHAR(500) NOT NULL,
-    source VARCHAR(100) NOT NULL,
-    published_at TIMESTAMP NOT NULL,
-    tickers VARCHAR(10)[] DEFAULT '{}',
-    summary TEXT NOT NULL,
-    is_classified BOOLEAN NOT NULL DEFAULT TRUE,
-    collected_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    title_source_hash VARCHAR(64) UNIQUE NOT NULL
-);
-
--- AI analysis results
-CREATE TABLE analysis_results (
-    id BIGSERIAL PRIMARY KEY,
-    ticker VARCHAR(10) NOT NULL REFERENCES stocks(ticker),
-    analysis_date DATE NOT NULL,
-    short_term_recommendation VARCHAR(4) NOT NULL CHECK (short_term_recommendation IN ('BUY', 'HOLD', 'SELL')),
-    long_term_recommendation VARCHAR(4) NOT NULL CHECK (long_term_recommendation IN ('BUY', 'HOLD', 'SELL')),
-    risk_level VARCHAR(6) NOT NULL CHECK (risk_level IN ('LOW', 'MEDIUM', 'HIGH')),
-    confidence_score INTEGER NOT NULL CHECK (confidence_score BETWEEN 0 AND 100),
-    reasoning TEXT,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    UNIQUE(ticker, analysis_date)
-);
-
--- Users (managed by Cognito, mirrored for FK references)
-CREATE TABLE users (
-    id UUID PRIMARY KEY,
-    email VARCHAR(255) UNIQUE NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
-);
-
--- Encrypted portfolios
-CREATE TABLE portfolios (
-    user_id UUID PRIMARY KEY REFERENCES users(id),
-    encrypted_data TEXT NOT NULL,
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
-);
-
--- User preferences
-CREATE TABLE user_preferences (
-    user_id UUID PRIMARY KEY REFERENCES users(id),
-    preferred_sectors VARCHAR(50)[] DEFAULT '{}',
-    preferred_sizes VARCHAR(10)[] DEFAULT '{}',
-    max_risk_level VARCHAR(6) DEFAULT 'HIGH',
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
-);
+GSIs:
+- GSI1: type/date or type/name lookups
+- GSI2: alternate key lookups such as demo account name
 ```
 
 ## API Endpoints
@@ -298,7 +241,7 @@ CREATE TABLE user_preferences (
 ## Deployment
 
 **Infrastructure as Code**: AWS CDK (Python)
-- Defines all resources: Lambda, API Gateway, RDS, S3, CloudFront, Cognito, EventBridge, CloudWatch
+- Defines all resources: Lambda, API Gateway, DynamoDB, S3, CloudFront, Cognito, EventBridge, CloudWatch
 - Single `cdk deploy` for full stack
 
 **CI/CD**: GitHub Actions
@@ -310,7 +253,7 @@ CREATE TABLE user_preferences (
 |---------|-------|-----------|
 | Lambda | ~50K invocations/month (batch + API) | $0 (free tier) |
 | API Gateway | ~100K requests/month | $0.35 |
-| RDS Serverless v2 (0.5 ACU min) | ~730 hours at min | $43.80 |
+| DynamoDB on-demand | low-volume reads and writes | $1-5 |
 | S3 + CloudFront | Frontend hosting, minimal traffic | $1-2 |
 | Cognito | <50K users | $0 (free tier) |
 | CloudWatch | Logs + metrics + alarms | $3-5 |
@@ -321,9 +264,8 @@ CREATE TABLE user_preferences (
 
 ### Cost Optimization Options
 
-1. **Replace RDS Serverless with Neon (free tier)**: 0.5GB storage free, saves ~$44/month → total drops to ~$20-33/month
-2. **Use Supabase free tier**: PostgreSQL + Auth included, eliminates Cognito + RDS cost
-3. **Use Claude Haiku instead of GPT-4o-mini**: Similar cost, potentially better structured output
+1. **Use DynamoDB on-demand**: default path, avoids minimum database capacity and keeps storage serverless
+2. **Use Claude Haiku instead of GPT-4o-mini**: Similar cost, potentially better structured output
 4. **Reduce analysis frequency**: Analyze only stocks with significant price/news changes
 
 ### Recommended Budget Path (≤$30/month):
@@ -331,7 +273,7 @@ CREATE TABLE user_preferences (
 | Service | Est. Cost |
 |---------|-----------|
 | Lambda + API Gateway | $0.35 |
-| Neon PostgreSQL (free tier, 0.5GB) | $0 |
+| DynamoDB on-demand | $1-5 |
 | S3 + CloudFront | $1-2 |
 | Cognito | $0 |
 | CloudWatch (basic) | $2-3 |
@@ -339,11 +281,11 @@ CREATE TABLE user_preferences (
 | KMS | $1 |
 | **Total** | **~$20-30/month** |
 
-If stock count grows beyond Neon free tier storage, upgrade to Neon Pro ($19/month) or switch to RDS.
+If access patterns outgrow the single-table model, add targeted GSIs or evaluate a purpose-built analytics store for historical data.
 
 ## Security Considerations
 
-- All data encrypted at rest (RDS encryption, S3 encryption)
+- All data encrypted at rest (DynamoDB encryption, S3 encryption)
 - All traffic over HTTPS (CloudFront + API Gateway)
 - Portfolio data: AES-256-GCM via KMS, decrypted only in Lambda memory
 - API authentication: JWT via Cognito
@@ -380,8 +322,7 @@ stocks/
 │   │   ├── models/
 │   │   │   └── schemas.py
 │   │   └── db/
-│   │       ├── connection.py
-│   │       └── migrations/
+│   │       └── connection.py
 │   ├── tests/
 │   └── requirements.txt
 ├── frontend/

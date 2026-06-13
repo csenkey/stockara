@@ -13,13 +13,11 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 import boto3
-import numpy as np
 import pandas as pd
 import structlog
 from openai import OpenAI
-from psycopg2.extras import RealDictCursor
 
-from backend.src.db.connection import DatabasePool
+from backend.src.db.connection import DatabasePool, store
 
 logger = structlog.get_logger(__name__)
 
@@ -140,25 +138,7 @@ def handler(event: dict, context: Any) -> dict:
 
 def _fetch_active_tickers() -> list[dict]:
     """Fetch active tickers with sector and company size from the watchlist."""
-    conn = DatabasePool._pool.getconn()
-    try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT ticker, sector, company_size
-                FROM stocks
-                WHERE is_active = TRUE
-                ORDER BY ticker
-                """
-            )
-            rows = cur.fetchall()
-        conn.commit()
-        return [dict(row) for row in rows]
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        DatabasePool._pool.putconn(conn)
+    return store.active_stock_metadata()
 
 
 def _process_batch(stocks: list[dict]) -> tuple[int, int]:
@@ -239,61 +219,23 @@ def _analyze_stock(
 def _get_ohlcv_data(ticker: str, as_of_date: date) -> list[dict] | None:
     """Retrieve last 30 days of OHLCV data for a ticker."""
     start_date = as_of_date - timedelta(days=HISTORY_DAYS)
-
-    conn = DatabasePool._pool.getconn()
     try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT trading_date, open_price, high_price, low_price,
-                       close_price, volume
-                FROM stock_data
-                WHERE ticker = %s
-                  AND trading_date >= %s
-                  AND trading_date <= %s
-                ORDER BY trading_date ASC
-                """,
-                (ticker, start_date, as_of_date),
-            )
-            rows = cur.fetchall()
-        conn.commit()
-        return [dict(row) for row in rows] if rows else None
+        rows = store.get_stock_data(ticker, start_date, as_of_date)
+        return rows if rows else None
     except Exception as e:
-        conn.rollback()
         logger.error("ohlcv_fetch_failed", ticker=ticker, error=str(e))
         return None
-    finally:
-        DatabasePool._pool.putconn(conn)
 
 
 def _get_news_summaries(ticker: str, as_of_date: date) -> list[dict]:
     """Retrieve last 7 days of news summaries related to a ticker."""
     start_date = as_of_date - timedelta(days=NEWS_DAYS)
 
-    conn = DatabasePool._pool.getconn()
     try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT title, source, published_at, summary
-                FROM news_summaries
-                WHERE %s = ANY(tickers)
-                  AND published_at >= %s
-                  AND published_at <= %s
-                ORDER BY published_at DESC
-                LIMIT 20
-                """,
-                (ticker, start_date, as_of_date),
-            )
-            rows = cur.fetchall()
-        conn.commit()
-        return [dict(row) for row in rows] if rows else []
+        return store.news_for_ticker(ticker, start_date, as_of_date)
     except Exception as e:
-        conn.rollback()
         logger.warning("news_fetch_failed", ticker=ticker, error=str(e))
         return []
-    finally:
-        DatabasePool._pool.putconn(conn)
 
 
 def _calculate_technical_indicators(ohlcv_data: list[dict]) -> dict:
@@ -542,52 +484,17 @@ def _validate_response(response: dict, ticker: str) -> dict | None:
 
 
 def _store_analysis(result: dict, analysis_date: date) -> None:
-    """Store analysis result in the analysis_results table.
-
-    Uses ON CONFLICT to handle UNIQUE(ticker, analysis_date) constraint,
-    updating the existing record if one already exists for today.
-    """
-    conn = DatabasePool._pool.getconn()
+    """Store or replace analysis result for a ticker/date."""
     try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO analysis_results
-                    (ticker, analysis_date, short_term_recommendation,
-                     long_term_recommendation, risk_level, confidence_score,
-                     reasoning, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (ticker, analysis_date) DO UPDATE SET
-                    short_term_recommendation = EXCLUDED.short_term_recommendation,
-                    long_term_recommendation = EXCLUDED.long_term_recommendation,
-                    risk_level = EXCLUDED.risk_level,
-                    confidence_score = EXCLUDED.confidence_score,
-                    reasoning = EXCLUDED.reasoning,
-                    created_at = EXCLUDED.created_at
-                """,
-                (
-                    result["ticker"],
-                    analysis_date,
-                    result["short_term_recommendation"],
-                    result["long_term_recommendation"],
-                    result["risk_level"],
-                    result["confidence_score"],
-                    result["reasoning"],
-                    datetime.utcnow(),
-                ),
-            )
-        conn.commit()
+        store.put_analysis(result, analysis_date)
         logger.info("analysis_stored", ticker=result["ticker"])
     except Exception as e:
-        conn.rollback()
         logger.error(
             "analysis_store_failed",
             ticker=result["ticker"],
             error=str(e),
         )
         raise
-    finally:
-        DatabasePool._pool.putconn(conn)
 
 
 def _emit_metric(metric_name: str, value: float) -> None:

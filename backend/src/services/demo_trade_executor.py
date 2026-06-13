@@ -4,11 +4,9 @@ from datetime import date
 from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 from dataclasses import dataclass, field
 
-from psycopg2.extras import RealDictCursor
-
 import structlog
 
-from backend.src.db.connection import get_db_connection
+from backend.src.db.connection import store
 from backend.src.services.demo_account_manager import DemoAccountManager
 
 logger = structlog.get_logger(__name__)
@@ -77,26 +75,22 @@ class DemoTradeExecutor:
         for batch_start in range(0, len(accounts), BATCH_SIZE):
             batch = accounts[batch_start:batch_start + BATCH_SIZE]
 
-            async with get_db_connection() as conn:
-                with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    for account in batch:
-                        try:
-                            batch_summary = await self._evaluate_account(
-                                cur, account, recommendations, prices
-                            )
-                            summary.buys_executed += batch_summary["buys"]
-                            summary.sells_executed += batch_summary["sells"]
-                            summary.skipped_insufficient_cash += batch_summary["skipped_cash"]
-                            summary.accounts_processed += 1
-                        except Exception as e:
-                            logger.error(
-                                "Error processing account",
-                                account_name=account["account_name"],
-                                error=str(e),
-                            )
-                            summary.errors.append(
-                                f"{account['account_name']}: {str(e)}"
-                            )
+            for account in batch:
+                try:
+                    batch_summary = await self._evaluate_account(
+                        account, recommendations, prices
+                    )
+                    summary.buys_executed += batch_summary["buys"]
+                    summary.sells_executed += batch_summary["sells"]
+                    summary.skipped_insufficient_cash += batch_summary["skipped_cash"]
+                    summary.accounts_processed += 1
+                except Exception as e:
+                    logger.error(
+                        "Error processing account",
+                        account_name=account["account_name"],
+                        error=str(e),
+                    )
+                    summary.errors.append(f"{account['account_name']}: {str(e)}")
 
             # Take daily snapshots for this batch (outside the transaction)
             for account in batch:
@@ -131,7 +125,6 @@ class DemoTradeExecutor:
 
     async def _evaluate_account(
         self,
-        cur,
         account: dict,
         recommendations: dict[str, str],
         prices: dict[str, Decimal],
@@ -139,7 +132,6 @@ class DemoTradeExecutor:
         """Determine buy/sell actions for a single account based on recommendations.
 
         Args:
-            cur: Database cursor (within an active transaction).
             account: Dict with account_id, account_name, cash_balance.
             recommendations: Dict mapping ticker -> recommendation (BUY/SELL/HOLD).
             prices: Dict mapping ticker -> latest closing price.
@@ -153,15 +145,9 @@ class DemoTradeExecutor:
         cash_balance = Decimal(str(account["cash_balance"]))
 
         # Get current holdings for this account
-        cur.execute(
-            """
-            SELECT ticker, quantity, purchase_price
-            FROM demo_holdings
-            WHERE account_id = %s
-            """,
-            (account_id,),
-        )
-        holdings = {row["ticker"]: row for row in cur.fetchall()}
+        holdings = {
+            row["ticker"]: row for row in store.list_demo_holdings(account_id)
+        }
 
         # Calculate current portfolio value for buy allocation
         holdings_value = sum(
@@ -192,31 +178,10 @@ class DemoTradeExecutor:
                     int(holdings[ticker]["quantity"]), cash_balance
                 )
                 if txn:
-                    cur.execute(
-                        """
-                        INSERT INTO demo_transactions
-                            (account_id, ticker, action, quantity, price_per_share,
-                             total_value, commission_fee, cash_after)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                        """,
-                        (
-                            account_id, txn["ticker"], txn["action"],
-                            txn["quantity"], txn["price_per_share"],
-                            txn["total_value"], txn["commission_fee"],
-                            txn["cash_after"],
-                        ),
-                    )
-                    # Remove holding
-                    cur.execute(
-                        "DELETE FROM demo_holdings WHERE account_id = %s AND ticker = %s",
-                        (account_id, ticker),
-                    )
-                    # Update cash balance
+                    store.put_demo_transaction(account_id, txn)
+                    store.delete_demo_holding(account_id, ticker)
                     cash_balance = txn["cash_after"]
-                    cur.execute(
-                        "UPDATE demo_accounts SET cash_balance = %s WHERE id = %s",
-                        (cash_balance, account_id),
-                    )
+                    store.update_demo_cash(account_id, cash_balance)
                     result["sells"] += 1
 
             elif recommendation == "BUY" and ticker not in holdings:
@@ -228,37 +193,12 @@ class DemoTradeExecutor:
                 if txn is None:
                     result["skipped_cash"] += 1
                 else:
-                    cur.execute(
-                        """
-                        INSERT INTO demo_transactions
-                            (account_id, ticker, action, quantity, price_per_share,
-                             total_value, commission_fee, cash_after)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                        """,
-                        (
-                            account_id, txn["ticker"], txn["action"],
-                            txn["quantity"], txn["price_per_share"],
-                            txn["total_value"], txn["commission_fee"],
-                            txn["cash_after"],
-                        ),
+                    store.put_demo_transaction(account_id, txn)
+                    store.upsert_demo_holding(
+                        account_id, ticker, txn["quantity"], close_price
                     )
-                    # Insert or update holding
-                    cur.execute(
-                        """
-                        INSERT INTO demo_holdings (account_id, ticker, quantity, purchase_price)
-                        VALUES (%s, %s, %s, %s)
-                        ON CONFLICT (account_id, ticker) DO UPDATE
-                        SET quantity = demo_holdings.quantity + EXCLUDED.quantity,
-                            purchase_price = EXCLUDED.purchase_price
-                        """,
-                        (account_id, ticker, txn["quantity"], close_price),
-                    )
-                    # Update cash balance
                     cash_balance = txn["cash_after"]
-                    cur.execute(
-                        "UPDATE demo_accounts SET cash_balance = %s WHERE id = %s",
-                        (cash_balance, account_id),
-                    )
+                    store.update_demo_cash(account_id, cash_balance)
                     result["buys"] += 1
 
         return result
@@ -418,25 +358,7 @@ class DemoTradeExecutor:
         Returns:
             Dict mapping ticker -> recommendation (BUY, SELL, or HOLD).
         """
-        async with get_db_connection() as conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(
-                    """
-                    SELECT DISTINCT ON (ticker)
-                        ticker, recommendation
-                    FROM analysis_results
-                    ORDER BY ticker, analyzed_at DESC
-                    """
-                )
-                rows = cur.fetchall()
-
-        recommendations = {}
-        for row in rows:
-            rec = row["recommendation"].upper() if row["recommendation"] else "HOLD"
-            if rec in ("BUY", "SELL", "HOLD"):
-                recommendations[row["ticker"]] = rec
-            else:
-                recommendations[row["ticker"]] = "HOLD"
+        recommendations = store.latest_recommendations()
 
         logger.info(
             "Fetched AI recommendations",
@@ -454,24 +376,7 @@ class DemoTradeExecutor:
         Returns:
             Dict mapping ticker -> latest closing price.
         """
-        async with get_db_connection() as conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(
-                    """
-                    SELECT DISTINCT ON (ticker)
-                        ticker, close_price
-                    FROM stock_data
-                    WHERE close_price IS NOT NULL
-                    ORDER BY ticker, date DESC
-                    """
-                )
-                rows = cur.fetchall()
-
-        prices = {
-            row["ticker"]: Decimal(str(row["close_price"]))
-            for row in rows
-        }
-
+        prices = store.latest_prices()
         logger.info("Fetched latest stock prices", count=len(prices))
         return prices
 
@@ -481,15 +386,4 @@ class DemoTradeExecutor:
         Returns:
             List of dicts with id, account_name, cash_balance.
         """
-        async with get_db_connection() as conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(
-                    """
-                    SELECT id, account_name, cash_balance
-                    FROM demo_accounts
-                    ORDER BY id
-                    """
-                )
-                rows = cur.fetchall()
-
-        return [dict(row) for row in rows]
+        return store.list_demo_accounts()

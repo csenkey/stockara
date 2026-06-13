@@ -281,38 +281,35 @@ class TestFetchFinnhubArticles:
 
 
 class TestGetExistingHashes:
-    """Tests for database hash deduplication lookup."""
+    """Tests for DynamoDB hash deduplication lookup."""
 
-    def test_returns_existing_hashes(self):
+    @patch("backend.src.collectors.news_collector.store")
+    def test_returns_existing_hashes(self, mock_store):
         """Test that existing hashes are returned as a set."""
         mock_conn = MagicMock()
-        mock_cursor = MagicMock()
-        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
-        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
-        mock_cursor.fetchall.return_value = [
-            {"title_source_hash": "hash1"},
-            {"title_source_hash": "hash2"},
-        ]
+        mock_store.existing_news_hashes.return_value = {"hash1", "hash2"}
 
         result = get_existing_hashes(mock_conn, ["hash1", "hash2", "hash3"])
+
         assert result == {"hash1", "hash2"}
+        mock_store.existing_news_hashes.assert_called_once_with(
+            ["hash1", "hash2", "hash3"]
+        )
 
     def test_returns_empty_set_for_empty_input(self):
         """Test that empty input returns empty set without DB query."""
         mock_conn = MagicMock()
         result = get_existing_hashes(mock_conn, [])
         assert result == set()
-        mock_conn.cursor.assert_not_called()
 
-    def test_returns_empty_set_when_none_exist(self):
+    @patch("backend.src.collectors.news_collector.store")
+    def test_returns_empty_set_when_none_exist(self, mock_store):
         """Test that non-existing hashes return empty set."""
         mock_conn = MagicMock()
-        mock_cursor = MagicMock()
-        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
-        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
-        mock_cursor.fetchall.return_value = []
+        mock_store.existing_news_hashes.return_value = set()
 
         result = get_existing_hashes(mock_conn, ["newhash1", "newhash2"])
+
         assert result == set()
 
 
@@ -398,15 +395,12 @@ class TestGenerateSummary:
 
 
 class TestStoreArticle:
-    """Tests for storing articles in the database."""
+    """Tests for storing articles in DynamoDB."""
 
-    def test_stores_article_with_tickers(self):
+    @patch("backend.src.collectors.news_collector.store")
+    def test_stores_article_with_tickers(self, mock_store):
         """Test article with tickers is stored as classified."""
         mock_conn = MagicMock()
-        mock_cursor = MagicMock()
-        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
-        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
-
         article = {
             "title": "Apple Earnings",
             "source": "Reuters",
@@ -417,19 +411,14 @@ class TestStoreArticle:
 
         store_article(mock_conn, article, summary_data, title_source_hash)
 
-        mock_cursor.execute.assert_called_once()
-        call_args = mock_cursor.execute.call_args[0]
-        # is_classified should be True when tickers exist
-        assert call_args[1][5] is True  # is_classified
-        assert call_args[1][4] == "Strong earnings."  # summary
+        mock_store.put_news_summary.assert_called_once_with(
+            article, summary_data, title_source_hash
+        )
 
-    def test_stores_article_without_tickers_as_unclassified(self):
+    @patch("backend.src.collectors.news_collector.store")
+    def test_stores_article_without_tickers_as_unclassified(self, mock_store):
         """Requirement 2.7: Article without tickers marked as unclassified."""
         mock_conn = MagicMock()
-        mock_cursor = MagicMock()
-        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
-        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
-
         article = {
             "title": "Market Overview",
             "source": "CNN",
@@ -440,19 +429,14 @@ class TestStoreArticle:
 
         store_article(mock_conn, article, summary_data, title_source_hash)
 
-        mock_cursor.execute.assert_called_once()
-        call_args = mock_cursor.execute.call_args[0]
-        # is_classified should be False when no tickers
-        assert call_args[1][5] is False  # is_classified
-        assert call_args[1][3] == []  # tickers is empty list
+        mock_store.put_news_summary.assert_called_once_with(
+            article, summary_data, title_source_hash
+        )
 
-    def test_title_truncated_to_500(self):
-        """Test that long titles are truncated to 500 chars."""
+    @patch("backend.src.collectors.news_collector.store")
+    def test_store_delegates_long_title_to_store(self, mock_store):
+        """Store layer owns DynamoDB item normalization such as title truncation."""
         mock_conn = MagicMock()
-        mock_cursor = MagicMock()
-        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
-        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
-
         long_title = "A" * 600
         article = {
             "title": long_title,
@@ -464,8 +448,9 @@ class TestStoreArticle:
 
         store_article(mock_conn, article, summary_data, title_source_hash)
 
-        call_args = mock_cursor.execute.call_args[0]
-        assert len(call_args[1][0]) == 500
+        mock_store.put_news_summary.assert_called_once_with(
+            article, summary_data, title_source_hash
+        )
 
 
 # --- Tests for collect_news (Requirements 2.4, 2.5, 2.6) ---

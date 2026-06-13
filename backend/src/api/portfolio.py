@@ -1,6 +1,5 @@
 """FastAPI router for portfolio management endpoints."""
 
-import os
 from datetime import date
 from decimal import Decimal
 from typing import Optional
@@ -8,12 +7,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Header
 from pydantic import BaseModel, Field, field_validator
-from psycopg2.extras import RealDictCursor
 
 import structlog
 
-from backend.src.db.connection import get_db_connection
-from backend.src.models.schemas import Portfolio, PortfolioHolding, validate_ticker
+from backend.src.db.connection import store
+from backend.src.models.schemas import validate_ticker
 from backend.src.services.encryption_service import (
     DecryptionError,
     EncryptionService,
@@ -79,31 +77,24 @@ def _get_encryption_service() -> EncryptionService:
 @router.get("", response_model=PortfolioResponse)
 async def get_portfolio(user_id: UUID = Depends(get_current_user_id)):
     """Get the decrypted portfolio for the authenticated user."""
-    async with get_db_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                "SELECT encrypted_data, updated_at FROM portfolios WHERE user_id = %s",
-                (str(user_id),),
-            )
-            row = cur.fetchone()
+    row = store.get_portfolio(str(user_id))
+    if not row:
+        return PortfolioResponse(holdings=[], updated_at=None)
 
-            if not row:
-                return PortfolioResponse(holdings=[], updated_at=None)
+    try:
+        encryption_service = _get_encryption_service()
+        portfolio_data = encryption_service.decrypt_portfolio(row["encrypted_data"])
+    except DecryptionError:
+        logger.error("Failed to decrypt portfolio", user_id=str(user_id))
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to retrieve portfolio data",
+        )
 
-            try:
-                encryption_service = _get_encryption_service()
-                portfolio_data = encryption_service.decrypt_portfolio(row["encrypted_data"])
-            except DecryptionError:
-                logger.error("Failed to decrypt portfolio", user_id=str(user_id))
-                raise HTTPException(
-                    status_code=500,
-                    detail="Failed to retrieve portfolio data",
-                )
-
-            return PortfolioResponse(
-                holdings=portfolio_data.get("holdings", []),
-                updated_at=row["updated_at"].isoformat() if row["updated_at"] else None,
-            )
+    return PortfolioResponse(
+        holdings=portfolio_data.get("holdings", []),
+        updated_at=row.get("updated_at"),
+    )
 
 
 @router.put("/stocks", response_model=PortfolioResponse)
@@ -116,74 +107,45 @@ async def add_stock_to_portfolio(
     Validates that the ticker exists in the stocks watchlist and that
     quantity/buying_price are positive.
     """
-    async with get_db_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            # Validate ticker exists in the stocks watchlist
-            cur.execute(
-                "SELECT ticker FROM stocks WHERE ticker = %s",
-                (request.ticker,),
+    if not store.get_stock(request.ticker):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Ticker '{request.ticker}' does not exist in the watchlist",
+        )
+
+    row = store.get_portfolio(str(user_id))
+    encryption_service = _get_encryption_service()
+
+    if row:
+        try:
+            portfolio_data = encryption_service.decrypt_portfolio(row["encrypted_data"])
+        except DecryptionError:
+            logger.error("Failed to decrypt portfolio for update", user_id=str(user_id))
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to retrieve portfolio data",
             )
-            if not cur.fetchone():
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Ticker '{request.ticker}' does not exist in the watchlist",
-                )
+    else:
+        portfolio_data = {"holdings": []}
 
-            # Get existing portfolio or start fresh
-            cur.execute(
-                "SELECT encrypted_data FROM portfolios WHERE user_id = %s",
-                (str(user_id),),
-            )
-            row = cur.fetchone()
+    new_holding = {
+        "ticker": request.ticker,
+        "quantity": request.quantity,
+        "buying_price": float(request.buying_price),
+        "added_date": request.added_date.isoformat()
+        if request.added_date
+        else date.today().isoformat(),
+    }
+    portfolio_data["holdings"].append(new_holding)
 
-            encryption_service = _get_encryption_service()
+    encrypted_data = encryption_service.encrypt_portfolio(portfolio_data)
+    result = store.put_portfolio(str(user_id), encrypted_data)
 
-            if row:
-                try:
-                    portfolio_data = encryption_service.decrypt_portfolio(row["encrypted_data"])
-                except DecryptionError:
-                    logger.error("Failed to decrypt portfolio for update", user_id=str(user_id))
-                    raise HTTPException(
-                        status_code=500,
-                        detail="Failed to retrieve portfolio data",
-                    )
-            else:
-                portfolio_data = {"holdings": []}
-
-            # Add the new holding
-            new_holding = {
-                "ticker": request.ticker,
-                "quantity": request.quantity,
-                "buying_price": float(request.buying_price),
-                "added_date": request.added_date.isoformat() if request.added_date else date.today().isoformat(),
-            }
-            portfolio_data["holdings"].append(new_holding)
-
-            # Encrypt and store
-            encrypted_data = encryption_service.encrypt_portfolio(portfolio_data)
-
-            cur.execute(
-                """
-                INSERT INTO portfolios (user_id, encrypted_data, updated_at)
-                VALUES (%s, %s, NOW())
-                ON CONFLICT (user_id)
-                DO UPDATE SET encrypted_data = EXCLUDED.encrypted_data, updated_at = NOW()
-                RETURNING updated_at
-                """,
-                (str(user_id), encrypted_data),
-            )
-            result = cur.fetchone()
-
-            logger.info(
-                "Stock added to portfolio",
-                user_id=str(user_id),
-                ticker=request.ticker,
-            )
-
-            return PortfolioResponse(
-                holdings=portfolio_data["holdings"],
-                updated_at=result["updated_at"].isoformat() if result["updated_at"] else None,
-            )
+    logger.info("Stock added to portfolio", user_id=str(user_id), ticker=request.ticker)
+    return PortfolioResponse(
+        holdings=portfolio_data["holdings"],
+        updated_at=result.get("updated_at"),
+    )
 
 
 @router.delete("/stocks/{ticker}")
@@ -194,60 +156,33 @@ async def remove_stock_from_portfolio(
     """Remove a stock from the authenticated user's portfolio."""
     ticker = validate_ticker(ticker)
 
-    async with get_db_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            # Get existing portfolio
-            cur.execute(
-                "SELECT encrypted_data FROM portfolios WHERE user_id = %s",
-                (str(user_id),),
-            )
-            row = cur.fetchone()
+    row = store.get_portfolio(str(user_id))
+    if not row:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
 
-            if not row:
-                raise HTTPException(
-                    status_code=404,
-                    detail="Portfolio not found",
-                )
+    encryption_service = _get_encryption_service()
+    try:
+        portfolio_data = encryption_service.decrypt_portfolio(row["encrypted_data"])
+    except DecryptionError:
+        logger.error("Failed to decrypt portfolio for removal", user_id=str(user_id))
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to retrieve portfolio data",
+        )
 
-            encryption_service = _get_encryption_service()
+    original_count = len(portfolio_data["holdings"])
+    portfolio_data["holdings"] = [
+        h for h in portfolio_data["holdings"] if h["ticker"] != ticker
+    ]
 
-            try:
-                portfolio_data = encryption_service.decrypt_portfolio(row["encrypted_data"])
-            except DecryptionError:
-                logger.error("Failed to decrypt portfolio for removal", user_id=str(user_id))
-                raise HTTPException(
-                    status_code=500,
-                    detail="Failed to retrieve portfolio data",
-                )
+    if len(portfolio_data["holdings"]) == original_count:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Stock '{ticker}' not found in portfolio",
+        )
 
-            # Find and remove the holding
-            original_count = len(portfolio_data["holdings"])
-            portfolio_data["holdings"] = [
-                h for h in portfolio_data["holdings"] if h["ticker"] != ticker
-            ]
+    encrypted_data = encryption_service.encrypt_portfolio(portfolio_data)
+    store.put_portfolio(str(user_id), encrypted_data)
 
-            if len(portfolio_data["holdings"]) == original_count:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Stock '{ticker}' not found in portfolio",
-                )
-
-            # Encrypt and store updated portfolio
-            encrypted_data = encryption_service.encrypt_portfolio(portfolio_data)
-
-            cur.execute(
-                """
-                UPDATE portfolios
-                SET encrypted_data = %s, updated_at = NOW()
-                WHERE user_id = %s
-                """,
-                (encrypted_data, str(user_id)),
-            )
-
-            logger.info(
-                "Stock removed from portfolio",
-                user_id=str(user_id),
-                ticker=ticker,
-            )
-
-            return {"message": f"Stock '{ticker}' removed from portfolio"}
+    logger.info("Stock removed from portfolio", user_id=str(user_id), ticker=ticker)
+    return {"message": f"Stock '{ticker}' removed from portfolio"}

@@ -13,10 +13,9 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Optional
 
-from psycopg2.extras import RealDictCursor
 import structlog
 
-from backend.src.db.connection import get_db_connection
+from backend.src.db.connection import store
 from backend.src.models.schemas import (
     Portfolio,
     Recommendation,
@@ -89,39 +88,10 @@ async def get_latest_analysis() -> tuple[list[dict], date]:
     Raises:
         SuggestionEngineError: If no analysis data exists at all.
     """
-    async with get_db_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            # Find the most recent analysis date
-            cur.execute(
-                "SELECT MAX(analysis_date) as latest_date FROM analysis_results"
-            )
-            row = cur.fetchone()
-            if row is None or row["latest_date"] is None:
-                raise SuggestionEngineError("No analysis data available")
-
-            latest_date = row["latest_date"]
-
-            # Fetch all analysis for that date, joined with stock metadata
-            cur.execute(
-                """
-                SELECT
-                    ar.ticker,
-                    ar.short_term_recommendation,
-                    ar.long_term_recommendation,
-                    ar.risk_level,
-                    ar.confidence_score,
-                    ar.reasoning,
-                    s.sector,
-                    s.company_size
-                FROM analysis_results ar
-                JOIN stocks s ON ar.ticker = s.ticker
-                WHERE ar.analysis_date = %s
-                  AND s.is_active = TRUE
-                """,
-                (latest_date,),
-            )
-            rows = cur.fetchall()
-
+    latest_date = store.latest_analysis_date()
+    if latest_date is None:
+        raise SuggestionEngineError("No analysis data available")
+    rows = store.analysis_for_date(latest_date)
     return rows, latest_date
 
 

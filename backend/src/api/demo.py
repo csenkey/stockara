@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 import structlog
 
+from backend.src.db.connection import store
 from backend.src.models.demo_schemas import (
     AccountDetailResponse,
     AllocationEntry,
@@ -119,39 +120,14 @@ async def get_performance(name: str):
 # --- Helpers ---
 
 
-async def _get_holdings_with_prices(account_id: int) -> list[DemoHolding]:
+async def _get_holdings_with_prices(account_id: str) -> list[DemoHolding]:
     """Fetch holdings for an account with current prices and unrealized P&L."""
-    from psycopg2.extras import RealDictCursor
-
-    from backend.src.db.connection import get_db_connection
-
-    async with get_db_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT
-                    dh.ticker,
-                    dh.quantity,
-                    dh.purchase_price,
-                    (
-                        SELECT sd.close_price
-                        FROM stock_data sd
-                        WHERE sd.ticker = dh.ticker
-                        ORDER BY sd.date DESC
-                        LIMIT 1
-                    ) AS current_price
-                FROM demo_holdings dh
-                WHERE dh.account_id = %s
-                ORDER BY dh.ticker
-                """,
-                (account_id,),
-            )
-            rows = cur.fetchall()
-
+    latest_prices = store.latest_prices()
+    rows = store.list_demo_holdings(account_id)
     holdings = []
     for row in rows:
         purchase_price = Decimal(str(row["purchase_price"]))
-        current_price = Decimal(str(row["current_price"])) if row["current_price"] else None
+        current_price = latest_prices.get(row["ticker"])
         quantity = row["quantity"]
 
         unrealized_gain_loss = None

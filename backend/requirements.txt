@@ -3,7 +3,6 @@ mangum==0.19.0
 boto3==1.35.0
 yfinance==0.2.43
 openai==1.51.0
-psycopg2-binary==2.9.9
 pydantic==2.9.2
 structlog==24.4.0
 pandas==2.2.3

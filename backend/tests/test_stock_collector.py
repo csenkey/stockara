@@ -272,11 +272,10 @@ class TestProcessBatch:
 class TestStoreRecords:
     """Tests for duplicate detection and record storage."""
 
-    def test_insert_new_records(self, mock_db_pool):
+    @patch("backend.src.collectors.stock_collector.store")
+    def test_insert_new_records(self, mock_store, mock_db_pool):
         """New records are inserted successfully."""
-        _, mock_conn, mock_cursor = mock_db_pool
-        mock_cursor.rowcount = 1
-
+        mock_store.put_stock_data.return_value = True
         records = [{
             "ticker": "AAPL",
             "trading_date": date(2025, 1, 15),
@@ -289,17 +288,12 @@ class TestStoreRecords:
 
         result = _store_records(records)
         assert result == 1
-        mock_cursor.execute.assert_called_once()
-        # Verify ON CONFLICT DO NOTHING is in the SQL
-        sql = mock_cursor.execute.call_args[0][0]
-        assert "ON CONFLICT" in sql
-        assert "DO NOTHING" in sql
+        mock_store.put_stock_data.assert_called_once()
 
-    def test_duplicate_record_skipped(self, mock_db_pool):
+    @patch("backend.src.collectors.stock_collector.store")
+    def test_duplicate_record_skipped(self, mock_store, mock_db_pool):
         """Duplicate records (rowcount=0) are skipped."""
-        _, mock_conn, mock_cursor = mock_db_pool
-        mock_cursor.rowcount = 0  # ON CONFLICT DO NOTHING triggers
-
+        mock_store.put_stock_data.return_value = False
         records = [{
             "ticker": "AAPL",
             "trading_date": date(2025, 1, 15),
@@ -315,19 +309,13 @@ class TestStoreRecords:
 
     def test_empty_records_list(self, mock_db_pool):
         """Empty records list returns 0 without DB call."""
-        _, mock_conn, mock_cursor = mock_db_pool
         result = _store_records([])
         assert result == 0
-        mock_cursor.execute.assert_not_called()
 
-    def test_mixed_new_and_duplicate(self, mock_db_pool):
+    @patch("backend.src.collectors.stock_collector.store")
+    def test_mixed_new_and_duplicate(self, mock_store, mock_db_pool):
         """Mix of new and duplicate records counts correctly."""
-        _, mock_conn, mock_cursor = mock_db_pool
-        # First call: new record, second: duplicate
-        type(mock_cursor).rowcount = pytest.importorskip(
-            "unittest.mock"
-        ).PropertyMock(side_effect=[1, 0])
-
+        mock_store.put_stock_data.side_effect = [True, False]
         records = [
             {
                 "ticker": "AAPL", "trading_date": date(2025, 1, 15),

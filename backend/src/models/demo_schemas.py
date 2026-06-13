@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 class DemoAccount(BaseModel):
     """A simulated demo trading account."""
 
-    id: int
+    id: str | int
     account_name: str
     cash_balance: Decimal
     created_at: datetime
@@ -29,7 +29,7 @@ class DemoHolding(BaseModel):
 class DemoTransaction(BaseModel):
     """A recorded transaction (buy or sell) in a demo account."""
 
-    id: int
+    id: str | int
     ticker: str
     action: Literal["BUY", "SELL"]
     quantity: int

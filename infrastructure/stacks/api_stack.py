@@ -1,5 +1,7 @@
 """CDK stack for API Gateway, Lambda functions, and EventBridge rules."""
 
+import os
+
 from aws_cdk import (
     Duration,
     Stack,
@@ -9,8 +11,14 @@ from aws_cdk import (
     aws_events_targets as targets,
     aws_iam as iam,
     aws_lambda as _lambda,
+    aws_dynamodb as dynamodb,
 )
 from constructs import Construct
+
+
+BACKEND_ASSET_PATH = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "backend")
+)
 
 
 class ApiStack(Stack):
@@ -20,35 +28,18 @@ class ApiStack(Stack):
     and EventBridge scheduled rules for batch processing.
     """
 
-    def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
+    def __init__(
+        self,
+        scope: Construct,
+        construct_id: str,
+        data_table: dynamodb.ITable,
+        user_pool: cognito.IUserPool,
+        user_pool_client: cognito.IUserPoolClient,
+        **kwargs,
+    ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        # ─── Cognito User Pool (for API authorization) ───────────────────
-        self.user_pool = cognito.UserPool(
-            self,
-            "StockMonitoringUserPool",
-            user_pool_name="stock-monitoring-users",
-            self_sign_up_enabled=True,
-            sign_in_aliases=cognito.SignInAliases(email=True),
-            password_policy=cognito.PasswordPolicy(
-                min_length=8,
-                require_uppercase=True,
-                require_lowercase=True,
-                require_digits=True,
-                require_symbols=False,
-            ),
-            account_recovery=cognito.AccountRecovery.EMAIL_ONLY,
-        )
-
-        user_pool_client = self.user_pool.add_client(
-            "StockMonitoringAppClient",
-            user_pool_client_name="stock-monitoring-web",
-            auth_flows=cognito.AuthFlow(
-                user_password=True,
-                user_srp=True,
-            ),
-            prevent_user_existence_errors=True,
-        )
+        self.user_pool = user_pool
 
         # ─── IAM Roles (least-privilege) ─────────────────────────────────
 
@@ -57,7 +48,7 @@ class ApiStack(Stack):
             "service-role/AWSLambdaBasicExecutionRole"
         )
 
-        # Stock Collector role - needs RDS access, CloudWatch metrics
+        # Stock Collector role - needs DynamoDB access, CloudWatch metrics
         stock_collector_role = iam.Role(
             self,
             "StockCollectorRole",
@@ -76,7 +67,7 @@ class ApiStack(Stack):
             )
         )
 
-        # News Collector role - needs RDS access, Secrets Manager for API keys
+        # News Collector role - needs DynamoDB access, Secrets Manager for API keys
         news_collector_role = iam.Role(
             self,
             "NewsCollectorRole",
@@ -95,7 +86,7 @@ class ApiStack(Stack):
             )
         )
 
-        # AI Analyzer role - needs RDS access, Secrets Manager for OpenAI key
+        # AI Analyzer role - needs DynamoDB access, Secrets Manager for OpenAI key
         ai_analyzer_role = iam.Role(
             self,
             "AiAnalyzerRole",
@@ -114,7 +105,7 @@ class ApiStack(Stack):
             )
         )
 
-        # API Handler role - needs RDS, KMS for portfolio encryption, Cognito
+        # API Handler role - needs DynamoDB, KMS for portfolio encryption, Cognito
         api_handler_role = iam.Role(
             self,
             "ApiHandlerRole",
@@ -144,6 +135,7 @@ class ApiStack(Stack):
         common_env = {
             "POWERTOOLS_SERVICE_NAME": "stock-monitoring",
             "LOG_LEVEL": "INFO",
+            "STOCKARA_TABLE_NAME": data_table.table_name,
         }
 
         # Stock Collector Lambda - 512MB, 15 min timeout
@@ -153,7 +145,7 @@ class ApiStack(Stack):
             function_name="stock-monitoring-stock-collector",
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="src.collectors.stock_collector.handler",
-            code=_lambda.Code.from_asset("../backend"),
+            code=_lambda.Code.from_asset(BACKEND_ASSET_PATH),
             memory_size=512,
             timeout=Duration.minutes(15),
             role=stock_collector_role,
@@ -171,7 +163,7 @@ class ApiStack(Stack):
             function_name="stock-monitoring-news-collector",
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="src.collectors.news_collector.handler",
-            code=_lambda.Code.from_asset("../backend"),
+            code=_lambda.Code.from_asset(BACKEND_ASSET_PATH),
             memory_size=256,
             timeout=Duration.minutes(5),
             role=news_collector_role,
@@ -189,7 +181,7 @@ class ApiStack(Stack):
             function_name="stock-monitoring-ai-analyzer",
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="src.analysis.ai_analyzer.handler",
-            code=_lambda.Code.from_asset("../backend"),
+            code=_lambda.Code.from_asset(BACKEND_ASSET_PATH),
             memory_size=1024,
             timeout=Duration.minutes(15),
             role=ai_analyzer_role,
@@ -207,7 +199,7 @@ class ApiStack(Stack):
             function_name="stock-monitoring-api-handler",
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="src.api.handler.handler",
-            code=_lambda.Code.from_asset("../backend"),
+            code=_lambda.Code.from_asset(BACKEND_ASSET_PATH),
             memory_size=512,
             timeout=Duration.seconds(30),
             role=api_handler_role,
@@ -216,9 +208,16 @@ class ApiStack(Stack):
                 "POWERTOOLS_SERVICE_NAME": "api-handler",
                 "USER_POOL_ID": self.user_pool.user_pool_id,
                 "USER_POOL_CLIENT_ID": user_pool_client.user_pool_client_id,
+                "COGNITO_USER_POOL_ID": self.user_pool.user_pool_id,
+                "COGNITO_CLIENT_ID": user_pool_client.user_pool_client_id,
             },
             description="Handles REST API requests via API Gateway",
         )
+
+        data_table.grant_read_write_data(self.stock_collector_fn)
+        data_table.grant_read_write_data(self.news_collector_fn)
+        data_table.grant_read_write_data(self.ai_analyzer_fn)
+        data_table.grant_read_write_data(self.api_handler_fn)
 
         # ─── API Gateway ─────────────────────────────────────────────────
 

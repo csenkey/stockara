@@ -4,7 +4,7 @@
 
 This feature adds 100 simulated trading accounts to the Stock Monitoring and Analysis System. Each account is named after a superhero, starts with $10,000, and autonomously executes trades based on existing AI recommendations with a 1% commission per transaction. A public-facing dashboard (no auth) shows a leaderboard, portfolio performance charts, and full transaction history.
 
-The feature integrates with the existing `ai_analyzer` output and `stock_data` tables, triggered daily via EventBridge after AI analysis completes. The frontend uses Recharts for charting on two new public pages.
+The feature integrates with the existing `ai_analyzer` output and `stock_data` DynamoDB entities, triggered daily via EventBridge after AI analysis completes. The frontend uses Recharts for charting on two new public pages.
 
 ## Architecture
 
@@ -21,7 +21,7 @@ graph TB
 
     subgraph "Demo Trading Backend"
         DTE --> DAM[DemoAccountManager]
-        DAM --> DB[(PostgreSQL)]
+        DAM --> DB[(DynamoDB)]
         DTE --> AR
         DTE --> SD
     end

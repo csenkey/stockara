@@ -14,9 +14,8 @@ from typing import Any
 import boto3
 import structlog
 from openai import OpenAI
-from psycopg2.extras import RealDictCursor
 
-from backend.src.db.connection import DatabasePool
+from backend.src.db.connection import DatabasePool, store
 
 logger = structlog.get_logger(__name__)
 
@@ -153,12 +152,7 @@ def get_existing_hashes(conn, hashes: list[str]) -> set[str]:
     if not hashes:
         return set()
 
-    with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute(
-            "SELECT title_source_hash FROM news_summaries WHERE title_source_hash = ANY(%s)",
-            (hashes,),
-        )
-        return {row["title_source_hash"] for row in cur.fetchall()}
+    return store.existing_news_hashes(hashes)
 
 
 def generate_summary(client: OpenAI, title: str, content: str) -> dict[str, Any]:
@@ -223,26 +217,7 @@ def store_article(conn, article: dict[str, Any], summary_data: dict[str, Any], t
         summary_data: Generated summary with summary text and tickers.
         title_source_hash: Deduplication hash.
     """
-    tickers = summary_data.get("tickers", [])
-    is_classified = len(tickers) > 0
-
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO news_summaries (title, source, published_at, tickers, summary, is_classified, title_source_hash)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (title_source_hash) DO NOTHING
-            """,
-            (
-                article["title"][:500],
-                article["source"][:100],
-                article["published_at"],
-                tickers,
-                summary_data["summary"],
-                is_classified,
-                title_source_hash,
-            ),
-        )
+    store.put_news_summary(article, summary_data, title_source_hash)
 
 
 def emit_metrics(articles_processed: int, sources_available: int, sources_total: int) -> None:
@@ -335,7 +310,7 @@ def collect_news() -> dict[str, Any]:
 
     # Check existing articles in DB
     DatabasePool.initialize()
-    conn = DatabasePool._pool.getconn()
+    conn = DatabasePool.table()
     try:
         existing_hashes = get_existing_hashes(conn, article_hashes)
 
@@ -369,15 +344,11 @@ def collect_news() -> dict[str, Any]:
                 )
                 continue
 
-        conn.commit()
         logger.info("News collection complete", articles_stored=articles_stored)
 
     except Exception as e:
-        conn.rollback()
         logger.error("News collection failed", error=str(e))
         raise
-    finally:
-        DatabasePool._pool.putconn(conn)
 
     emit_metrics(
         articles_processed=articles_stored,

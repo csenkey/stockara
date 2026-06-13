@@ -6,11 +6,10 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from pydantic import BaseModel, Field
-from psycopg2.extras import RealDictCursor
 
 import structlog
 
-from backend.src.db.connection import get_db_connection
+from backend.src.db.connection import store
 from backend.src.models.schemas import (
     CompanySize,
     Portfolio,
@@ -101,64 +100,45 @@ def _suggestion_item_to_response(item: SuggestionItem) -> SuggestionResponse:
 
 async def _get_user_portfolio(user_id: UUID) -> Portfolio:
     """Retrieve and decrypt the user's portfolio from the database."""
-    async with get_db_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                "SELECT encrypted_data FROM portfolios WHERE user_id = %s",
-                (str(user_id),),
-            )
-            row = cur.fetchone()
+    row = store.get_portfolio(str(user_id))
+    if not row:
+        return Portfolio(holdings=[])
 
-            if not row:
-                # No portfolio stored — return empty portfolio
-                return Portfolio(holdings=[])
+    try:
+        encryption_service = EncryptionService()
+        portfolio_data = encryption_service.decrypt_portfolio(row["encrypted_data"])
+    except DecryptionError:
+        logger.error("Failed to decrypt portfolio", user_id=str(user_id))
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to retrieve portfolio data",
+        )
 
-            try:
-                encryption_service = EncryptionService()
-                portfolio_data = encryption_service.decrypt_portfolio(row["encrypted_data"])
-            except DecryptionError:
-                logger.error("Failed to decrypt portfolio", user_id=str(user_id))
-                raise HTTPException(
-                    status_code=500,
-                    detail="Failed to retrieve portfolio data",
-                )
-
-            holdings = [
-                PortfolioHolding(
-                    ticker=h["ticker"],
-                    quantity=h["quantity"],
-                    buying_price=h["buying_price"],
-                    added_date=h.get("added_date"),
-                )
-                for h in portfolio_data.get("holdings", [])
-            ]
-            return Portfolio(holdings=holdings)
+    holdings = [
+        PortfolioHolding(
+            ticker=h["ticker"],
+            quantity=h["quantity"],
+            buying_price=h["buying_price"],
+            added_date=h.get("added_date"),
+        )
+        for h in portfolio_data.get("holdings", [])
+    ]
+    return Portfolio(holdings=holdings)
 
 
 async def _get_user_preferences(user_id: UUID) -> UserPreferences:
     """Retrieve user preferences from the database."""
-    async with get_db_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                "SELECT preferred_sectors, preferred_sizes, max_risk_level "
-                "FROM user_preferences WHERE user_id = %s",
-                (str(user_id),),
-            )
-            row = cur.fetchone()
+    row = store.get_preferences(str(user_id))
+    if not row:
+        return UserPreferences()
 
-            if not row:
-                # No preferences stored — return defaults (no filtering)
-                return UserPreferences()
-
-            return UserPreferences(
-                preferred_sectors=row["preferred_sectors"] or [],
-                preferred_sizes=[
-                    CompanySize(s) for s in (row["preferred_sizes"] or [])
-                ],
-                max_risk_level=RiskLevel(row["max_risk_level"])
-                if row["max_risk_level"]
-                else RiskLevel.HIGH,
-            )
+    return UserPreferences(
+        preferred_sectors=row.get("preferred_sectors") or [],
+        preferred_sizes=[CompanySize(s) for s in (row.get("preferred_sizes") or [])],
+        max_risk_level=RiskLevel(row["max_risk_level"])
+        if row.get("max_risk_level")
+        else RiskLevel.HIGH,
+    )
 
 
 # --- Endpoints ---
@@ -226,28 +206,7 @@ async def get_stock_analysis(ticker: str):
     """
     ticker = ticker.strip().upper()
 
-    async with get_db_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT
-                    ticker,
-                    analysis_date,
-                    short_term_recommendation,
-                    long_term_recommendation,
-                    risk_level,
-                    confidence_score,
-                    reasoning,
-                    created_at
-                FROM analysis_results
-                WHERE ticker = %s
-                ORDER BY analysis_date DESC
-                LIMIT 1
-                """,
-                (ticker,),
-            )
-            row = cur.fetchone()
-
+    row = store.latest_analysis_for_ticker(ticker)
     if not row:
         raise HTTPException(
             status_code=404,

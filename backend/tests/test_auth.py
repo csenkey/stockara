@@ -24,25 +24,10 @@ def client(app):
 
 
 @pytest.fixture
-def mock_db_connection():
-    """Mock the database connection context manager."""
-    mock_conn = MagicMock()
-    mock_cursor = MagicMock()
-    mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
-    mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
-
-    class MockAsyncContextManager:
-        def __init__(self):
-            self.conn = mock_conn
-
-        async def __aenter__(self):
-            return self.conn
-
-        async def __aexit__(self, *args):
-            pass
-
-    with patch("backend.src.api.auth.get_db_connection", return_value=MockAsyncContextManager()):
-        yield mock_conn, mock_cursor
+def mock_store():
+    """Mock the DynamoDB store used by the auth router."""
+    with patch("backend.src.api.auth.store") as store:
+        yield store
 
 
 @pytest.fixture
@@ -105,7 +90,7 @@ class TestPasswordValidation:
 class TestRegister:
     """Tests for POST /api/auth/register."""
 
-    def test_register_success(self, client, mock_cognito_client, mock_db_connection):
+    def test_register_success(self, client, mock_cognito_client, mock_store):
         """Successful registration returns 201 with user_id."""
         mock_cognito_client.sign_up.return_value = {"UserSub": "test-uuid-123"}
         mock_cognito_client.admin_confirm_sign_up.return_value = {}
@@ -144,22 +129,17 @@ class TestRegister:
         assert response.status_code == 409
         assert "already exists" in response.json()["detail"]
 
-    def test_register_creates_local_user(self, client, mock_cognito_client, mock_db_connection):
+    def test_register_creates_local_user(self, client, mock_cognito_client, mock_store):
         """Registration creates a record in the local users table."""
         mock_cognito_client.sign_up.return_value = {"UserSub": "user-uuid-456"}
         mock_cognito_client.admin_confirm_sign_up.return_value = {}
-        _, mock_cursor = mock_db_connection
-
         response = client.post(
             "/api/auth/register",
             json={"email": "new@example.com", "password": "ValidPass1"},
         )
 
         assert response.status_code == 201
-        mock_cursor.execute.assert_called_once()
-        call_args = mock_cursor.execute.call_args
-        assert "INSERT INTO users" in call_args[0][0]
-        assert call_args[0][1] == ("user-uuid-456", "new@example.com")
+        mock_store.put_user.assert_called_once_with("user-uuid-456", "new@example.com")
 
 
 # --- Login Tests ---

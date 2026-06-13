@@ -2,14 +2,14 @@
 
 ## Overview
 
-Build a serverless stock monitoring system on AWS using Python (FastAPI) for the backend, React + TypeScript for the frontend, PostgreSQL for data storage, and OpenAI GPT-4o-mini for AI analysis. The system collects daily stock data and news, generates buy/hold/sell recommendations, and provides personalized suggestions through a web dashboard.
+Build a serverless stock monitoring system on AWS using Python (FastAPI) for the backend, React + TypeScript for the frontend, DynamoDB for data storage, and OpenAI GPT-4o-mini for AI analysis. The system collects daily stock data and news, generates buy/hold/sell recommendations, and provides personalized suggestions through a web dashboard.
 
 ## Tasks
 
 - [x] 1. Set up project structure and shared infrastructure
   - [x] 1.1 Initialize backend Python project with FastAPI
     - Create `backend/` directory with `src/`, `tests/` structure
-    - Create `backend/requirements.txt` with dependencies: fastapi, mangum, boto3, yfinance, openai, psycopg2-binary, pydantic, structlog, pandas
+    - Create `backend/requirements.txt` with dependencies: fastapi, mangum, boto3, yfinance, openai, pydantic, structlog, pandas
     - Create `backend/src/__init__.py` and module structure for collectors, analysis, api, services, models, db
     - _Requirements: 10.1_
 
@@ -25,9 +25,9 @@ Build a serverless stock monitoring system on AWS using Python (FastAPI) for the
     - Define empty stack files: `api_stack.py`, `database_stack.py`, `frontend_stack.py`, `monitoring_stack.py`
     - _Requirements: 10.1, 10.2_
 
-  - [x] 1.4 Create database schema and migrations
-    - Create `backend/src/db/migrations/001_initial_schema.sql` with all tables: stocks, stock_data, news_summaries, analysis_results, users, portfolios, user_preferences
-    - Create `backend/src/db/connection.py` with async PostgreSQL connection pool using environment variables
+  - [x] 1.4 Create database schema and access layer
+    - Create CDK-provisioned DynamoDB single-table schema for stocks, stock_data, news, analysis, users, portfolios, and preferences
+    - Create `backend/src/db/connection.py` with DynamoDB table access helpers using `STOCKARA_TABLE_NAME`
     - _Requirements: 1.2, 2.2, 3.1, 4.6, 5.1, 5.4_
 
   - [x] 1.5 Define core Pydantic models and schemas
@@ -230,7 +230,7 @@ Build a serverless stock monitoring system on AWS using Python (FastAPI) for the
 
 - [x] 18. Implement AWS CDK Infrastructure Stacks
   - [x] 18.1 Implement database and auth CDK stack
-    - Define RDS Serverless v2 (or Neon connection) in `infrastructure/stacks/database_stack.py`
+    - Define DynamoDB single-table resources in `infrastructure/stacks/database_stack.py`
     - Define Cognito User Pool with password policy and lockout settings
     - Define KMS key for portfolio encryption
     - _Requirements: 10.1, 10.2, 7.5, 7.6_
@@ -269,7 +269,7 @@ Build a serverless stock monitoring system on AWS using Python (FastAPI) for the
 - Each task references specific requirements for traceability
 - Checkpoints ensure incremental validation
 - The backend uses Python (FastAPI + Mangum for Lambda), frontend uses React + TypeScript
-- Database migrations should be run before testing dependent components
+- CDK DynamoDB table/index changes should be synthesized before testing dependent components
 - The seed watchlist at `data/watchlist_seed.csv` is preloaded during initial setup
 - Unit tests mock external services (yfinance, OpenAI, Cognito, KMS) to run without credentials
 

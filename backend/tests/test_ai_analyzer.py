@@ -421,17 +421,11 @@ class TestProcessBatch:
 
 
 class TestStoreAnalysis:
-    """Tests for _store_analysis with mocked database."""
+    """Tests for _store_analysis with mocked DynamoDB store."""
 
-    @patch("backend.src.analysis.ai_analyzer.DatabasePool")
-    def test_store_analysis_success(self, mock_db_pool):
-        """Analysis is stored via INSERT with ON CONFLICT."""
-        mock_conn = MagicMock()
-        mock_cursor = MagicMock()
-        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
-        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
-        mock_db_pool._pool.getconn.return_value = mock_conn
-
+    @patch("backend.src.analysis.ai_analyzer.store")
+    def test_store_analysis_success(self, mock_store):
+        """Analysis is stored via DynamoDB upsert."""
         result = {
             "ticker": "AAPL",
             "short_term_recommendation": "BUY",
@@ -443,20 +437,12 @@ class TestStoreAnalysis:
 
         _store_analysis(result, date(2025, 1, 15))
 
-        mock_cursor.execute.assert_called_once()
-        mock_conn.commit.assert_called_once()
-        mock_db_pool._pool.putconn.assert_called_once_with(mock_conn)
+        mock_store.put_analysis.assert_called_once_with(result, date(2025, 1, 15))
 
-    @patch("backend.src.analysis.ai_analyzer.DatabasePool")
-    def test_store_analysis_db_error_raises(self, mock_db_pool):
-        """Database error during store causes rollback and re-raises."""
-        mock_conn = MagicMock()
-        mock_cursor = MagicMock()
-        mock_cursor.execute.side_effect = Exception("DB connection lost")
-        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
-        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
-        mock_db_pool._pool.getconn.return_value = mock_conn
-
+    @patch("backend.src.analysis.ai_analyzer.store")
+    def test_store_analysis_db_error_raises(self, mock_store):
+        """Database error during store is re-raised."""
+        mock_store.put_analysis.side_effect = Exception("DynamoDB write failed")
         result = {
             "ticker": "AAPL",
             "short_term_recommendation": "BUY",
@@ -466,11 +452,8 @@ class TestStoreAnalysis:
             "reasoning": "Test.",
         }
 
-        with pytest.raises(Exception, match="DB connection lost"):
+        with pytest.raises(Exception, match="DynamoDB write failed"):
             _store_analysis(result, date(2025, 1, 15))
-
-        mock_conn.rollback.assert_called_once()
-        mock_db_pool._pool.putconn.assert_called_once_with(mock_conn)
 
 
 class TestHandler:

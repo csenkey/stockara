@@ -5,11 +5,10 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Header
 from pydantic import BaseModel, Field, field_validator
-from psycopg2.extras import RealDictCursor
 
 import structlog
 
-from backend.src.db.connection import get_db_connection
+from backend.src.db.connection import store
 from backend.src.models.schemas import (
     CompanySize,
     RiskLevel,
@@ -97,30 +96,19 @@ async def get_preferences(user_id: UUID = Depends(get_current_user_id)):
 
     Returns default values if no preferences have been stored.
     """
-    async with get_db_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT preferred_sectors, preferred_sizes, max_risk_level
-                FROM user_preferences
-                WHERE user_id = %s
-                """,
-                (str(user_id),),
-            )
-            row = cur.fetchone()
+    row = store.get_preferences(str(user_id))
+    if not row:
+        return PreferencesResponse(
+            preferred_sectors=[],
+            preferred_sizes=[],
+            max_risk_level="HIGH",
+        )
 
-            if not row:
-                return PreferencesResponse(
-                    preferred_sectors=[],
-                    preferred_sizes=[],
-                    max_risk_level="HIGH",
-                )
-
-            return PreferencesResponse(
-                preferred_sectors=row["preferred_sectors"] or [],
-                preferred_sizes=row["preferred_sizes"] or [],
-                max_risk_level=row["max_risk_level"] or "HIGH",
-            )
+    return PreferencesResponse(
+        preferred_sectors=row.get("preferred_sectors") or [],
+        preferred_sizes=row.get("preferred_sizes") or [],
+        max_risk_level=row.get("max_risk_level") or "HIGH",
+    )
 
 
 @router.put("", response_model=PreferencesResponse)
@@ -132,39 +120,23 @@ async def update_preferences(
 
     Creates preferences if they don't exist, updates if they do.
     """
-    async with get_db_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
-                INSERT INTO user_preferences (user_id, preferred_sectors, preferred_sizes, max_risk_level, updated_at)
-                VALUES (%s, %s, %s, %s, NOW())
-                ON CONFLICT (user_id)
-                DO UPDATE SET
-                    preferred_sectors = EXCLUDED.preferred_sectors,
-                    preferred_sizes = EXCLUDED.preferred_sizes,
-                    max_risk_level = EXCLUDED.max_risk_level,
-                    updated_at = NOW()
-                RETURNING preferred_sectors, preferred_sizes, max_risk_level
-                """,
-                (
-                    str(user_id),
-                    request.preferred_sectors,
-                    request.preferred_sizes,
-                    request.max_risk_level,
-                ),
-            )
-            row = cur.fetchone()
+    row = store.put_preferences(
+        str(user_id),
+        request.preferred_sectors,
+        request.preferred_sizes,
+        request.max_risk_level,
+    )
 
-            logger.info(
-                "User preferences updated",
-                user_id=str(user_id),
-                sectors=request.preferred_sectors,
-                sizes=request.preferred_sizes,
-                max_risk_level=request.max_risk_level,
-            )
+    logger.info(
+        "User preferences updated",
+        user_id=str(user_id),
+        sectors=request.preferred_sectors,
+        sizes=request.preferred_sizes,
+        max_risk_level=request.max_risk_level,
+    )
 
-            return PreferencesResponse(
-                preferred_sectors=row["preferred_sectors"] or [],
-                preferred_sizes=row["preferred_sizes"] or [],
-                max_risk_level=row["max_risk_level"] or "HIGH",
-            )
+    return PreferencesResponse(
+        preferred_sectors=row.get("preferred_sectors") or [],
+        preferred_sizes=row.get("preferred_sizes") or [],
+        max_risk_level=row.get("max_risk_level") or "HIGH",
+    )

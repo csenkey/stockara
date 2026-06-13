@@ -16,9 +16,8 @@ import boto3
 import requests
 import structlog
 import yfinance as yf
-from psycopg2.extras import RealDictCursor
 
-from backend.src.db.connection import DatabasePool
+from backend.src.db.connection import DatabasePool, store
 
 logger = structlog.get_logger(__name__)
 
@@ -99,21 +98,7 @@ def handler(event: dict, context: Any) -> dict:
 
 def _fetch_watchlist() -> list[str]:
     """Fetch active tickers from the stocks watchlist table."""
-    DatabasePool.initialize()
-    conn = DatabasePool._pool.getconn()
-    try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                "SELECT ticker FROM stocks WHERE is_active = TRUE ORDER BY ticker"
-            )
-            rows = cur.fetchall()
-        conn.commit()
-        return [row["ticker"] for row in rows]
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        DatabasePool._pool.putconn(conn)
+    return store.active_tickers()
 
 
 def _process_batch(tickers: list[str]) -> tuple[int, list[str]]:
@@ -301,61 +286,28 @@ def _to_decimal(value: Any) -> Decimal | None:
 
 
 def _store_records(records: list[dict]) -> int:
-    """Store OHLCV records in the database, skipping duplicates.
-
-    Uses ON CONFLICT DO NOTHING to skip records where (ticker, trading_date)
-    already exists (UNIQUE constraint).
-
-    Returns the number of successfully inserted records.
-    """
+    """Store OHLCV records in DynamoDB, skipping duplicate ticker/date items."""
     if not records:
         return 0
 
     inserted = 0
-    conn = DatabasePool._pool.getconn()
-    try:
-        with conn.cursor() as cur:
-            for record in records:
-                try:
-                    cur.execute(
-                        """
-                        INSERT INTO stock_data
-                            (ticker, trading_date, open_price, high_price,
-                             low_price, close_price, volume, collected_at)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (ticker, trading_date) DO NOTHING
-                        """,
-                        (
-                            record["ticker"],
-                            record["trading_date"],
-                            record["open_price"],
-                            record["high_price"],
-                            record["low_price"],
-                            record["close_price"],
-                            record["volume"],
-                            datetime.utcnow(),
-                        ),
-                    )
-                    if cur.rowcount > 0:
-                        inserted += 1
-                    else:
-                        logger.debug(
-                            "duplicate_record_skipped",
-                            ticker=record["ticker"],
-                            trading_date=str(record["trading_date"]),
-                        )
-                except Exception as e:
-                    logger.warning(
-                        "record_insert_failed",
-                        ticker=record["ticker"],
-                        error=str(e),
-                    )
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        DatabasePool._pool.putconn(conn)
+    for record in records:
+        try:
+            record["collected_at"] = datetime.utcnow().isoformat()
+            if store.put_stock_data(record):
+                inserted += 1
+            else:
+                logger.debug(
+                    "duplicate_record_skipped",
+                    ticker=record["ticker"],
+                    trading_date=str(record["trading_date"]),
+                )
+        except Exception as e:
+            logger.warning(
+                "record_insert_failed",
+                ticker=record["ticker"],
+                error=str(e),
+            )
 
     return inserted
 
