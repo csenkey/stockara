@@ -32,9 +32,14 @@ def user_id():
 
 @pytest.fixture
 def mock_store():
-    with patch("backend.src.api.suggestions.store") as store:
+    with patch("backend.src.api.suggestions.store") as store, patch(
+        "backend.src.api.suggestions.EncryptionService"
+    ) as encryption_service:
         store.get_portfolio.return_value = None
         store.get_preferences.return_value = None
+        encryption_service.return_value.encrypt_portfolio.return_value = "encrypted-history"
+        encryption_service.return_value.decrypt_portfolio.return_value = {"holdings": []}
+        store._encryption_service = encryption_service
         yield store
 
 
@@ -78,6 +83,12 @@ class TestGetSuggestions:
         assert data["sell_suggestions"][0]["ticker"] == "AAPL"
         assert data["buy_suggestions"][0]["ticker"] == "MSFT"
         assert data["analysis_date"] == "2025-07-01"
+        mock_store.put_suggestion_history.assert_called_once()
+        assert mock_store.put_suggestion_history.call_args.kwargs["user_id"] == user_id
+        assert (
+            mock_store.put_suggestion_history.call_args.kwargs["encrypted_data"]
+            == "encrypted-history"
+        )
 
     def test_returns_401_without_auth(self, client):
         assert client.get("/api/suggestions").status_code == 401
@@ -136,6 +147,55 @@ class TestGetSuggestions:
             response = client.get("/api/suggestions", headers={"X-User-Id": user_id})
 
         assert response.status_code == 500
+
+
+class TestGetSuggestionHistory:
+    def test_returns_suggestion_history_for_authenticated_user(
+        self, client, user_id, mock_store
+    ):
+        mock_store.list_suggestion_history.return_value = [
+            {
+                "suggestion_date": "2025-07-02",
+                "analysis_date": "2025-07-01",
+                "encrypted_data": "encrypted-history",
+                "created_at": "2025-07-02T09:00:00",
+            }
+        ]
+        mock_store._encryption_service.return_value.decrypt_portfolio.return_value = {
+            "sell_suggestions": [
+                {
+                    "ticker": "AAPL",
+                    "recommendation": "SELL",
+                    "risk_level": "MEDIUM",
+                    "timeframe": "short_term",
+                    "confidence_score": 75,
+                    "reasoning": "Overvalued",
+                }
+            ],
+            "buy_suggestions": [
+                {
+                    "ticker": "MSFT",
+                    "recommendation": "BUY",
+                    "risk_level": "LOW",
+                    "timeframe": "long_term",
+                    "confidence_score": 85,
+                    "reasoning": "Strong growth",
+                }
+            ],
+        }
+
+        response = client.get(
+            "/api/suggestions/history", headers={"X-User-Id": user_id}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data[0]["suggestion_date"] == "2025-07-02"
+        assert data[0]["buy_suggestions"][0]["ticker"] == "MSFT"
+        mock_store.list_suggestion_history.assert_called_once_with(user_id)
+
+    def test_returns_401_without_auth(self, client):
+        assert client.get("/api/suggestions/history").status_code == 401
 
 
 class TestGetStockAnalysis:

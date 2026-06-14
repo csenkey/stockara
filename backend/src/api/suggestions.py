@@ -19,7 +19,11 @@ from backend.src.models.schemas import (
     Timeframe,
     UserPreferences,
 )
-from backend.src.services.encryption_service import DecryptionError, EncryptionService
+from backend.src.services.encryption_service import (
+    DecryptionError,
+    EncryptionError,
+    EncryptionService,
+)
 from backend.src.services.suggestion_engine import (
     SuggestionEngineError,
     SuggestionItem,
@@ -70,6 +74,16 @@ class SuggestionsListResponse(BaseModel):
     analysis_date: str
 
 
+class SuggestionHistoryResponse(BaseModel):
+    """Suggestions generated for one user on one day."""
+
+    suggestion_date: str
+    analysis_date: str
+    sell_suggestions: list[SuggestionResponse]
+    buy_suggestions: list[SuggestionResponse]
+    created_at: Optional[str] = None
+
+
 class AnalysisResponse(BaseModel):
     """Response model for a stock's latest analysis."""
 
@@ -96,6 +110,18 @@ def _suggestion_item_to_response(item: SuggestionItem) -> SuggestionResponse:
         confidence_score=item.confidence_score,
         reasoning=item.reasoning,
     )
+
+
+def _suggestion_item_to_history(item: SuggestionItem) -> dict:
+    """Convert a SuggestionItem dataclass to a DynamoDB-friendly dict."""
+    return {
+        "ticker": item.ticker,
+        "recommendation": item.recommendation.value,
+        "risk_level": item.risk_level.value,
+        "timeframe": item.timeframe.value,
+        "confidence_score": item.confidence_score,
+        "reasoning": item.reasoning,
+    }
 
 
 async def _get_user_portfolio(user_id: UUID) -> Portfolio:
@@ -186,6 +212,30 @@ async def get_suggestions(
         logger.error("Suggestion engine error", error=str(e), user_id=str(user_id))
         raise HTTPException(status_code=500, detail=str(e))
 
+    history_payload = {
+        "sell_suggestions": [
+            _suggestion_item_to_history(s) for s in result.sell_suggestions
+        ],
+        "buy_suggestions": [
+            _suggestion_item_to_history(s) for s in result.buy_suggestions
+        ],
+    }
+    try:
+        encrypted_history = EncryptionService().encrypt_portfolio(history_payload)
+    except EncryptionError:
+        logger.error("Failed to encrypt suggestion history", user_id=str(user_id))
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to store suggestion history",
+        )
+
+    store.put_suggestion_history(
+        user_id=str(user_id),
+        suggestion_date=date.today(),
+        analysis_date=result.analysis_date,
+        encrypted_data=encrypted_history,
+    )
+
     return SuggestionsListResponse(
         sell_suggestions=[
             _suggestion_item_to_response(s) for s in result.sell_suggestions
@@ -195,6 +245,46 @@ async def get_suggestions(
         ],
         analysis_date=result.analysis_date.isoformat(),
     )
+
+
+@router.get("/api/suggestions/history", response_model=list[SuggestionHistoryResponse])
+async def get_suggestion_history(
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """Return stored suggestion snapshots for the authenticated user."""
+    rows = store.list_suggestion_history(str(user_id))
+    encryption_service = EncryptionService()
+    history: list[SuggestionHistoryResponse] = []
+    for row in rows:
+        try:
+            payload = encryption_service.decrypt_portfolio(row["encrypted_data"])
+        except DecryptionError:
+            logger.error(
+                "Failed to decrypt suggestion history",
+                user_id=str(user_id),
+                suggestion_date=row.get("suggestion_date"),
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to retrieve suggestion history",
+            )
+
+        history.append(
+            SuggestionHistoryResponse(
+                suggestion_date=row["suggestion_date"],
+                analysis_date=row["analysis_date"],
+                sell_suggestions=[
+                    SuggestionResponse(**suggestion)
+                    for suggestion in payload.get("sell_suggestions", [])
+                ],
+                buy_suggestions=[
+                    SuggestionResponse(**suggestion)
+                    for suggestion in payload.get("buy_suggestions", [])
+                ],
+                created_at=row.get("created_at"),
+            )
+        )
+    return history
 
 
 @router.get("/api/stocks/{ticker}/analysis", response_model=AnalysisResponse)

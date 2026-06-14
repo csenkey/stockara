@@ -198,6 +198,28 @@ class DynamoStore:
             for r in self.list_stocks(is_active=True)
         ]
 
+    def put_stock_profile(self, profile: dict[str, Any]) -> dict[str, Any]:
+        ticker = profile["ticker"]
+        item = {
+            "PK": f"STOCK#{ticker}",
+            "SK": "PROFILE",
+            "entity": "stock_profile",
+            "ticker": ticker,
+            "company_history": profile.get("company_history"),
+            "business_description": profile.get("business_description"),
+            "leading_products": profile.get("leading_products", []),
+            "business_stats": profile.get("business_stats", {}),
+            "updated_at": profile.get("updated_at", _now()),
+        }
+        self.table.put_item(Item=item)
+        return _strip_keys(item)
+
+    def get_stock_profile(self, ticker: str) -> dict[str, Any] | None:
+        row = self.table.get_item(
+            Key={"PK": f"STOCK#{ticker}", "SK": "PROFILE"}
+        ).get("Item")
+        return _strip_keys(row) if row else None
+
     # Stock data
     def put_stock_data(self, record: dict[str, Any]) -> bool:
         trading_date = _date_str(record["trading_date"])
@@ -254,6 +276,72 @@ class DynamoStore:
     def last_stock_collection(self) -> str | None:
         rows = self._scan(FilterExpression=Attr("entity").eq("stock_data"))
         return max((r.get("collected_at") for r in rows if r.get("collected_at")), default=None)
+
+    # Dividends and earnings calls
+    def put_dividend_event(self, event: dict[str, Any]) -> dict[str, Any]:
+        ticker = event["ticker"]
+        ex_dividend_date = _date_str(event["ex_dividend_date"])
+        item = {
+            "PK": f"DIVIDEND#{ticker}",
+            "SK": f"DATE#{ex_dividend_date}",
+            "GSI1PK": "DIVIDEND",
+            "GSI1SK": f"{ex_dividend_date}#{ticker}",
+            "entity": "dividend_event",
+            "ticker": ticker,
+            "ex_dividend_date": ex_dividend_date,
+            "dividend_value": _decimal(event["dividend_value"]),
+            "currency": event.get("currency", "USD"),
+            "payment_date": _date_str(event["payment_date"])
+            if event.get("payment_date")
+            else None,
+            "price_impact": event.get("price_impact"),
+            "collected_at": event.get("collected_at", _now()),
+        }
+        self.table.put_item(Item=item)
+        return _strip_keys(item)
+
+    def list_dividend_events(
+        self, ticker: str, start_date: date | None = None, end_date: date | None = None
+    ) -> list[dict[str, Any]]:
+        start = f"DATE#{_date_str(start_date)}" if start_date else "DATE#0000-00-00"
+        end = f"DATE#{_date_str(end_date)}" if end_date else "DATE#9999-99-99"
+        rows = self._query(
+            KeyConditionExpression=Key("PK").eq(f"DIVIDEND#{ticker}")
+            & Key("SK").between(start, end)
+        )
+        return sorted((_strip_keys(row) for row in rows), key=lambda r: r["ex_dividend_date"])
+
+    def put_earnings_call_summary(self, summary: dict[str, Any]) -> dict[str, Any]:
+        ticker = summary["ticker"]
+        call_date = _date_str(summary["call_date"])
+        item = {
+            "PK": f"EARNINGS_CALL#{ticker}",
+            "SK": f"DATE#{call_date}",
+            "GSI1PK": "EARNINGS_CALL",
+            "GSI1SK": f"{call_date}#{ticker}",
+            "entity": "earnings_call_summary",
+            "ticker": ticker,
+            "call_date": call_date,
+            "fiscal_period": summary["fiscal_period"],
+            "summary": summary["summary"],
+            "key_topics": summary.get("key_topics", []),
+            "sentiment": summary.get("sentiment"),
+            "price_impact": summary.get("price_impact"),
+            "collected_at": summary.get("collected_at", _now()),
+        }
+        self.table.put_item(Item=item)
+        return _strip_keys(item)
+
+    def list_earnings_call_summaries(
+        self, ticker: str, start_date: date | None = None, end_date: date | None = None
+    ) -> list[dict[str, Any]]:
+        start = f"DATE#{_date_str(start_date)}" if start_date else "DATE#0000-00-00"
+        end = f"DATE#{_date_str(end_date)}" if end_date else "DATE#9999-99-99"
+        rows = self._query(
+            KeyConditionExpression=Key("PK").eq(f"EARNINGS_CALL#{ticker}")
+            & Key("SK").between(start, end)
+        )
+        return sorted((_strip_keys(row) for row in rows), key=lambda r: r["call_date"])
 
     # News
     def existing_news_hashes(self, hashes: Iterable[str]) -> set[str]:
@@ -391,6 +479,103 @@ class DynamoStore:
         rows = self._scan(FilterExpression=Attr("entity").eq("analysis"))
         return max((r.get("created_at") for r in rows if r.get("created_at")), default=None)
 
+    # Sectors and trend/correlation data
+    def put_sector(self, sector: dict[str, Any]) -> dict[str, Any]:
+        name = sector["name"]
+        item = {
+            "PK": f"SECTOR#{name}",
+            "SK": "META",
+            "GSI1PK": "SECTOR",
+            "GSI1SK": name,
+            "entity": "sector",
+            "name": name,
+            "description": sector.get("description"),
+            "benchmark_symbol": sector.get("benchmark_symbol"),
+            "updated_at": sector.get("updated_at", _now()),
+        }
+        self.table.put_item(Item=item)
+        return _strip_keys(item)
+
+    def get_sector(self, name: str) -> dict[str, Any] | None:
+        row = self.table.get_item(
+            Key={"PK": f"SECTOR#{name}", "SK": "META"}
+        ).get("Item")
+        return _strip_keys(row) if row else None
+
+    def put_sector_trend(self, trend: dict[str, Any]) -> dict[str, Any]:
+        sector = trend["sector"]
+        trend_date = _date_str(trend["trend_date"])
+        item = {
+            "PK": f"SECTOR#{sector}",
+            "SK": f"TREND#DATE#{trend_date}",
+            "GSI1PK": "SECTOR_TREND",
+            "GSI1SK": f"{trend_date}#{sector}",
+            "entity": "sector_trend",
+            "sector": sector,
+            "trend_date": trend_date,
+            "benchmark_symbol": trend.get("benchmark_symbol"),
+            "benchmark_close": _decimal(trend["benchmark_close"])
+            if trend.get("benchmark_close") is not None
+            else None,
+            "percent_change": _decimal(trend["percent_change"])
+            if trend.get("percent_change") is not None
+            else None,
+            "trend_score": _decimal(trend["trend_score"])
+            if trend.get("trend_score") is not None
+            else None,
+            "collected_at": trend.get("collected_at", _now()),
+        }
+        self.table.put_item(Item=item)
+        return _strip_keys(item)
+
+    def list_sector_trends(
+        self, sector: str, start_date: date | None = None, end_date: date | None = None
+    ) -> list[dict[str, Any]]:
+        start = f"TREND#DATE#{_date_str(start_date)}" if start_date else "TREND#DATE#0000-00-00"
+        end = f"TREND#DATE#{_date_str(end_date)}" if end_date else "TREND#DATE#9999-99-99"
+        rows = self._query(
+            KeyConditionExpression=Key("PK").eq(f"SECTOR#{sector}")
+            & Key("SK").between(start, end)
+        )
+        return sorted((_strip_keys(row) for row in rows), key=lambda r: r["trend_date"])
+
+    def put_sector_ticker_correlation(self, correlation: dict[str, Any]) -> dict[str, Any]:
+        sector = correlation["sector"]
+        ticker = correlation["ticker"]
+        calculation_date = _date_str(correlation["calculation_date"])
+        window_days = int(correlation["window_days"])
+        item = {
+            "PK": f"SECTOR#{sector}",
+            "SK": f"CORRELATION#TICKER#{ticker}#DATE#{calculation_date}#WINDOW#{window_days}",
+            "GSI1PK": f"SECTOR_CORRELATION#{ticker}",
+            "GSI1SK": f"{calculation_date}#{sector}#{window_days}",
+            "entity": "sector_ticker_correlation",
+            "sector": sector,
+            "ticker": ticker,
+            "calculation_date": calculation_date,
+            "window_days": window_days,
+            "correlation": _decimal(correlation["correlation"]),
+            "sample_size": int(correlation["sample_size"]),
+            "method": correlation.get("method", "pearson"),
+        }
+        self.table.put_item(Item=item)
+        return _strip_keys(item)
+
+    def list_sector_ticker_correlations(
+        self, sector: str, ticker: str | None = None
+    ) -> list[dict[str, Any]]:
+        prefix = "CORRELATION#"
+        if ticker:
+            prefix = f"CORRELATION#TICKER#{ticker}#"
+        rows = self._query(
+            KeyConditionExpression=Key("PK").eq(f"SECTOR#{sector}")
+            & Key("SK").begins_with(prefix)
+        )
+        return sorted(
+            (_strip_keys(row) for row in rows),
+            key=lambda r: (r["ticker"], r["calculation_date"], r["window_days"]),
+        )
+
     # Users, portfolios, preferences
     def put_user(self, user_id: str, email: str) -> None:
         self.table.put_item(
@@ -450,6 +635,83 @@ class DynamoStore:
         }
         self.table.put_item(Item=item)
         return _strip_keys(item)
+
+    def put_suggestion_history(
+        self,
+        user_id: str,
+        suggestion_date: date,
+        analysis_date: date,
+        encrypted_data: str,
+    ) -> dict[str, Any]:
+        suggestion_date_key = _date_str(suggestion_date)
+        item = {
+            "PK": f"USER#{user_id}",
+            "SK": f"SUGGESTIONS#DATE#{suggestion_date_key}",
+            "GSI1PK": f"SUGGESTIONS#{suggestion_date_key}",
+            "GSI1SK": user_id,
+            "entity": "suggestion_history",
+            "user_id": user_id,
+            "suggestion_date": suggestion_date_key,
+            "analysis_date": _date_str(analysis_date),
+            "encrypted_data": encrypted_data,
+            "created_at": _now(),
+        }
+        self.table.put_item(Item=item)
+        return _strip_keys(item)
+
+    def list_suggestion_history(
+        self, user_id: str, start_date: date | None = None, end_date: date | None = None
+    ) -> list[dict[str, Any]]:
+        start = (
+            f"SUGGESTIONS#DATE#{_date_str(start_date)}"
+            if start_date
+            else "SUGGESTIONS#DATE#0000-00-00"
+        )
+        end = (
+            f"SUGGESTIONS#DATE#{_date_str(end_date)}"
+            if end_date
+            else "SUGGESTIONS#DATE#9999-99-99"
+        )
+        rows = self._query(
+            KeyConditionExpression=Key("PK").eq(f"USER#{user_id}")
+            & Key("SK").between(start, end)
+        )
+        return sorted((_strip_keys(row) for row in rows), key=lambda r: r["suggestion_date"])
+
+    # Public top pick
+    def put_top_pick(self, top_pick: dict[str, Any]) -> dict[str, Any]:
+        pick_date = _date_str(top_pick["pick_date"])
+        item = {
+            "PK": "TOP_PICK",
+            "SK": f"DATE#{pick_date}",
+            "GSI1PK": "TOP_PICK",
+            "GSI1SK": pick_date,
+            "entity": "top_pick",
+            "pick_date": pick_date,
+            "ticker": top_pick["ticker"],
+            "company_name": top_pick.get("company_name"),
+            "reasoning": top_pick["reasoning"],
+            "analysis_date": _date_str(top_pick["analysis_date"])
+            if top_pick.get("analysis_date")
+            else None,
+            "generated_at": top_pick.get("generated_at", _now()),
+        }
+        self.table.put_item(Item=item)
+        return _strip_keys(item)
+
+    def top_pick_for_date(self, pick_date: date) -> dict[str, Any] | None:
+        row = self.table.get_item(
+            Key={"PK": "TOP_PICK", "SK": f"DATE#{_date_str(pick_date)}"}
+        ).get("Item")
+        return _strip_keys(row) if row else None
+
+    def latest_top_pick(self) -> dict[str, Any] | None:
+        rows = self._query(
+            IndexName=GSI1,
+            KeyConditionExpression=Key("GSI1PK").eq("TOP_PICK"),
+            ScanIndexForward=False,
+        )
+        return _strip_keys(rows[0]) if rows else None
 
     # Demo accounts
     def create_demo_account(self, name: str, cash_balance: Decimal) -> dict[str, Any]:

@@ -15,6 +15,7 @@ from backend.src.api.portfolio import router as portfolio_router
 from backend.src.api.preferences import router as preferences_router
 from backend.src.api.stocks import router as stocks_router
 from backend.src.api.suggestions import router as suggestions_router
+from backend.src.api.top_pick import router as top_pick_router
 
 app = FastAPI(
     title="Stock Monitoring and Analysis System",
@@ -26,6 +27,7 @@ app = FastAPI(
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(demo_router)
+app.include_router(top_pick_router)
 
 # Protected routers (auth handled per-router via dependencies)
 app.include_router(stocks_router)

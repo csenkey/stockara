@@ -43,6 +43,14 @@ class Timeframe(str, Enum):
     BOTH = "both"
 
 
+class PriceImpactDirection(str, Enum):
+    """Observed direction of a price move after a business event."""
+
+    POSITIVE = "POSITIVE"
+    NEGATIVE = "NEGATIVE"
+    NEUTRAL = "NEUTRAL"
+
+
 # --- Predefined Sectors ---
 
 VALID_SECTORS = [
@@ -102,6 +110,30 @@ class Stock(BaseModel):
         return v
 
 
+class StockProfile(BaseModel):
+    """Rich business profile for a monitored stock."""
+
+    ticker: str = Field(..., max_length=10, description="Stock ticker symbol")
+    company_history: Optional[str] = Field(
+        default=None, max_length=5000, description="Brief company history"
+    )
+    business_description: Optional[str] = Field(
+        default=None, max_length=5000, description="Current business description"
+    )
+    leading_products: list[str] = Field(
+        default_factory=list, description="Leading products or services"
+    )
+    business_stats: dict[str, Decimal | int | float | str] = Field(
+        default_factory=dict, description="Financial and business statistics"
+    )
+    updated_at: Optional[datetime] = Field(default=None, description="Last profile update")
+
+    @field_validator("ticker")
+    @classmethod
+    def validate_ticker_field(cls, v: str) -> str:
+        return validate_ticker(v)
+
+
 class StockData(BaseModel):
     """Daily OHLCV data for a stock."""
 
@@ -113,6 +145,67 @@ class StockData(BaseModel):
     close_price: Decimal = Field(..., gt=0, decimal_places=4, description="Closing price")
     volume: int = Field(..., ge=0, description="Trading volume")
     collected_at: Optional[datetime] = Field(default=None, description="When data was collected")
+
+    @field_validator("ticker")
+    @classmethod
+    def validate_ticker_field(cls, v: str) -> str:
+        return validate_ticker(v)
+
+
+class PriceImpact(BaseModel):
+    """Price movement observed after a dividend, earnings call, or similar event."""
+
+    window_days: int = Field(..., ge=0, le=365, description="Observation window in days")
+    price_before: Optional[Decimal] = Field(default=None, gt=0, decimal_places=4)
+    price_after: Optional[Decimal] = Field(default=None, gt=0, decimal_places=4)
+    absolute_change: Optional[Decimal] = Field(default=None, decimal_places=4)
+    percent_change: Optional[Decimal] = Field(default=None, decimal_places=4)
+    benchmark_percent_change: Optional[Decimal] = Field(
+        default=None,
+        decimal_places=4,
+        description="Sector or market benchmark movement over the same window",
+    )
+    abnormal_percent_change: Optional[Decimal] = Field(
+        default=None,
+        decimal_places=4,
+        description="Ticker move minus benchmark move",
+    )
+    direction: PriceImpactDirection = Field(default=PriceImpactDirection.NEUTRAL)
+
+
+class DividendEvent(BaseModel):
+    """A dividend event and its observed stock-price impact."""
+
+    ticker: str = Field(..., max_length=10, description="Stock ticker symbol")
+    ex_dividend_date: date = Field(..., description="Ex-dividend date")
+    dividend_value: Decimal = Field(..., gt=0, decimal_places=4)
+    currency: str = Field(default="USD", min_length=3, max_length=3)
+    payment_date: Optional[date] = None
+    price_impact: Optional[PriceImpact] = None
+    collected_at: Optional[datetime] = None
+
+    @field_validator("ticker")
+    @classmethod
+    def validate_ticker_field(cls, v: str) -> str:
+        return validate_ticker(v)
+
+    @field_validator("currency")
+    @classmethod
+    def normalize_currency(cls, v: str) -> str:
+        return v.strip().upper()
+
+
+class EarningsCallSummary(BaseModel):
+    """Summarized earnings call and its observed stock-price impact."""
+
+    ticker: str = Field(..., max_length=10, description="Stock ticker symbol")
+    call_date: date = Field(..., description="Earnings call date")
+    fiscal_period: str = Field(..., min_length=1, max_length=20)
+    summary: str = Field(..., min_length=1, max_length=5000)
+    key_topics: list[str] = Field(default_factory=list)
+    sentiment: Optional[str] = Field(default=None, max_length=50)
+    price_impact: Optional[PriceImpact] = None
+    collected_at: Optional[datetime] = None
 
     @field_validator("ticker")
     @classmethod
@@ -153,6 +246,75 @@ class AnalysisResult(BaseModel):
     )
     reasoning: Optional[str] = Field(default=None, description="Analysis reasoning")
     created_at: Optional[datetime] = Field(default=None, description="When analysis was created")
+
+    @field_validator("ticker")
+    @classmethod
+    def validate_ticker_field(cls, v: str) -> str:
+        return validate_ticker(v)
+
+
+class Sector(BaseModel):
+    """A market sector tracked as its own analytical entity."""
+
+    name: str = Field(..., description="Sector name from predefined list")
+    description: Optional[str] = Field(default=None, max_length=2000)
+    benchmark_symbol: Optional[str] = Field(
+        default=None,
+        max_length=20,
+        description="Optional ETF or benchmark used for sector trend comparisons",
+    )
+    updated_at: Optional[datetime] = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        if v not in VALID_SECTORS:
+            raise ValueError(f"Sector must be one of: {', '.join(VALID_SECTORS)}")
+        return v
+
+
+class SectorTrend(BaseModel):
+    """Daily or periodic sector trend data used for correlation calculations."""
+
+    sector: str = Field(..., description="Sector name from predefined list")
+    trend_date: date
+    benchmark_symbol: Optional[str] = Field(default=None, max_length=20)
+    benchmark_close: Optional[Decimal] = Field(default=None, gt=0, decimal_places=4)
+    percent_change: Optional[Decimal] = Field(default=None, decimal_places=4)
+    trend_score: Optional[Decimal] = Field(
+        default=None,
+        ge=-100,
+        le=100,
+        decimal_places=4,
+        description="Normalized sector trend score",
+    )
+    collected_at: Optional[datetime] = None
+
+    @field_validator("sector")
+    @classmethod
+    def validate_sector(cls, v: str) -> str:
+        if v not in VALID_SECTORS:
+            raise ValueError(f"Sector must be one of: {', '.join(VALID_SECTORS)}")
+        return v
+
+
+class SectorTickerCorrelation(BaseModel):
+    """Correlation between a sector trend and one ticker over a date window."""
+
+    sector: str = Field(..., description="Sector name from predefined list")
+    ticker: str = Field(..., max_length=10)
+    calculation_date: date
+    window_days: int = Field(..., gt=0, le=3650)
+    correlation: Decimal = Field(..., ge=-1, le=1, decimal_places=6)
+    sample_size: int = Field(..., gt=1)
+    method: str = Field(default="pearson", min_length=1, max_length=50)
+
+    @field_validator("sector")
+    @classmethod
+    def validate_sector(cls, v: str) -> str:
+        if v not in VALID_SECTORS:
+            raise ValueError(f"Sector must be one of: {', '.join(VALID_SECTORS)}")
+        return v
 
     @field_validator("ticker")
     @classmethod
@@ -227,3 +389,30 @@ class Suggestion(BaseModel):
         if v == Recommendation.HOLD:
             raise ValueError("Suggestions must be BUY or SELL, not HOLD")
         return v
+
+
+class SuggestionHistory(BaseModel):
+    """Suggestions generated for one customer on one analysis date."""
+
+    user_id: str = Field(..., min_length=1)
+    suggestion_date: date
+    analysis_date: date
+    sell_suggestions: list[Suggestion] = Field(default_factory=list)
+    buy_suggestions: list[Suggestion] = Field(default_factory=list)
+    created_at: Optional[datetime] = None
+
+
+class TopPick(BaseModel):
+    """Public daily top-pick content generated from analysis."""
+
+    pick_date: date
+    ticker: str = Field(..., max_length=10)
+    company_name: Optional[str] = Field(default=None, max_length=255)
+    reasoning: str = Field(..., min_length=1, max_length=5000)
+    analysis_date: Optional[date] = None
+    generated_at: Optional[datetime] = None
+
+    @field_validator("ticker")
+    @classmethod
+    def validate_ticker_field(cls, v: str) -> str:
+        return validate_ticker(v)
