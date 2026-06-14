@@ -8,15 +8,25 @@ import pytest
 from src.models.schemas import (
     AnalysisResult,
     CompanySize,
+    DividendEvent,
+    EarningsCallSummary,
     NewsSummary,
     Portfolio,
     PortfolioHolding,
+    PriceImpact,
+    PriceImpactDirection,
     Recommendation,
     RiskLevel,
+    Sector,
+    SectorTickerCorrelation,
+    SectorTrend,
     Stock,
     StockData,
+    StockProfile,
     Suggestion,
+    SuggestionHistory,
     Timeframe,
+    TopPick,
     UserPreferences,
 )
 
@@ -120,6 +130,60 @@ class TestStockData:
             )
 
 
+class TestStockProfile:
+    def test_valid_profile(self):
+        profile = StockProfile(
+            ticker="aapl",
+            company_history="Founded in 1976.",
+            business_description="Consumer technology company.",
+            leading_products=["iPhone", "Mac"],
+            business_stats={"revenue_growth_pct": Decimal("8.5")},
+        )
+
+        assert profile.ticker == "AAPL"
+        assert profile.leading_products == ["iPhone", "Mac"]
+
+
+class TestBusinessEvents:
+    def test_valid_dividend_event_with_price_impact(self):
+        event = DividendEvent(
+            ticker="MSFT",
+            ex_dividend_date=date(2025, 5, 15),
+            dividend_value=Decimal("0.8300"),
+            currency="usd",
+            price_impact=PriceImpact(
+                window_days=1,
+                price_before=Decimal("420.0000"),
+                price_after=Decimal("418.5000"),
+                percent_change=Decimal("-0.3571"),
+                direction=PriceImpactDirection.NEGATIVE,
+            ),
+        )
+
+        assert event.currency == "USD"
+        assert event.price_impact.direction == PriceImpactDirection.NEGATIVE
+
+    def test_valid_earnings_call_summary(self):
+        summary = EarningsCallSummary(
+            ticker="NVDA",
+            call_date=date(2025, 8, 20),
+            fiscal_period="Q2 FY2026",
+            summary="Management discussed data-center demand and margin outlook.",
+            key_topics=["data center", "gross margin"],
+            sentiment="positive",
+            price_impact=PriceImpact(
+                window_days=7,
+                percent_change=Decimal("4.2500"),
+                benchmark_percent_change=Decimal("1.1000"),
+                abnormal_percent_change=Decimal("3.1500"),
+                direction=PriceImpactDirection.POSITIVE,
+            ),
+        )
+
+        assert summary.ticker == "NVDA"
+        assert summary.price_impact.abnormal_percent_change == Decimal("3.1500")
+
+
 class TestNewsSummary:
     def test_valid_news_summary(self):
         news = NewsSummary(
@@ -187,6 +251,46 @@ class TestAnalysisResult:
                 risk_level=RiskLevel.HIGH,
                 confidence_score=-1,
             )
+
+
+class TestSectorModels:
+    def test_valid_sector(self):
+        sector = Sector(
+            name="Technology",
+            description="Software, hardware, and digital platforms.",
+            benchmark_symbol="XLK",
+        )
+
+        assert sector.benchmark_symbol == "XLK"
+
+    def test_invalid_sector_rejected(self):
+        with pytest.raises(ValueError, match="Sector must be one of"):
+            Sector(name="Invalid")
+
+    def test_valid_sector_trend(self):
+        trend = SectorTrend(
+            sector="Technology",
+            trend_date=date(2025, 7, 1),
+            benchmark_symbol="XLK",
+            benchmark_close=Decimal("250.1200"),
+            percent_change=Decimal("1.2300"),
+            trend_score=Decimal("62.5"),
+        )
+
+        assert trend.trend_score == Decimal("62.5")
+
+    def test_valid_sector_ticker_correlation(self):
+        correlation = SectorTickerCorrelation(
+            sector="Technology",
+            ticker="aapl",
+            calculation_date=date(2025, 7, 1),
+            window_days=90,
+            correlation=Decimal("0.812345"),
+            sample_size=63,
+        )
+
+        assert correlation.ticker == "AAPL"
+        assert correlation.method == "pearson"
 
 
 class TestPortfolioHolding:
@@ -294,3 +398,33 @@ class TestSuggestion:
                 risk_level=RiskLevel.LOW,
                 timeframe=Timeframe.SHORT_TERM,
             )
+
+
+class TestSuggestionHistoryAndTopPick:
+    def test_valid_suggestion_history(self):
+        history = SuggestionHistory(
+            user_id="user-1",
+            suggestion_date=date(2025, 7, 2),
+            analysis_date=date(2025, 7, 1),
+            buy_suggestions=[
+                Suggestion(
+                    ticker="MSFT",
+                    recommendation=Recommendation.BUY,
+                    risk_level=RiskLevel.LOW,
+                    timeframe=Timeframe.LONG_TERM,
+                )
+            ],
+        )
+
+        assert history.buy_suggestions[0].ticker == "MSFT"
+
+    def test_valid_top_pick(self):
+        top_pick = TopPick(
+            pick_date=date(2025, 7, 2),
+            ticker="nvda",
+            company_name="NVIDIA Corporation",
+            reasoning="High-confidence BUY with strong business momentum.",
+            analysis_date=date(2025, 7, 1),
+        )
+
+        assert top_pick.ticker == "NVDA"
