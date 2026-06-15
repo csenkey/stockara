@@ -245,7 +245,8 @@ GSIs:
 - Single `cdk deploy` for full stack
 
 **CI/CD**: GitHub Actions
-- On push to main: lint → test → build frontend → cdk deploy
+- On push to `main`, `feature/**`, or `codex/**`: lint → test → build frontend → CDK synth → CDK deploy → `/api/health` smoke test
+- `main` deploys the stable `prod` stage; feature branches deploy isolated branch-scoped stages
 
 ## Cost Estimate (Monthly)
 

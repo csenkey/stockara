@@ -8,10 +8,8 @@ Validates: Requirements 2.4, 2.5, 2.6, 2.7
 
 import hashlib
 import json
-from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
-import pytest
 
 from backend.src.collectors.news_collector import (
     compute_title_source_hash,

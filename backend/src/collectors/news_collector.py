@@ -15,7 +15,7 @@ import boto3
 import structlog
 from openai import OpenAI
 
-from backend.src.db.connection import DatabasePool, store
+from src.db.connection import DatabasePool, store
 
 logger = structlog.get_logger(__name__)
 
@@ -155,7 +155,7 @@ def get_existing_hashes(conn, hashes: list[str]) -> set[str]:
     return store.existing_news_hashes(hashes)
 
 
-def generate_summary(client: OpenAI, title: str, content: str) -> dict[str, Any]:
+def generate_summary(client: OpenAI | None, title: str, content: str) -> dict[str, Any]:
     """Generate a structured summary using OpenAI GPT-4o-mini.
 
     Args:
@@ -171,14 +171,18 @@ def generate_summary(client: OpenAI, title: str, content: str) -> dict[str, Any]
         "1. A concise summary (maximum 500 characters) capturing the key financial information.\n"
         "2. A list of stock ticker symbols mentioned or clearly related to this article "
         "(use standard US exchange tickers like AAPL, MSFT, etc.).\n\n"
+        "3. Sentiment direction for the likely stock impact: positive, negative, or neutral.\n\n"
         f"Title: {title}\n"
         f"Content: {content}\n\n"
         "Respond in JSON format:\n"
-        '{"summary": "...", "tickers": ["TICKER1", "TICKER2"]}\n'
+        '{"summary": "...", "tickers": ["TICKER1", "TICKER2"], "sentiment": "neutral"}\n'
         "If no specific tickers can be identified, return an empty tickers list."
     )
 
     try:
+        if client is None:
+            raise RuntimeError("OPENAI_API_KEY is not configured")
+
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
@@ -200,12 +204,21 @@ def generate_summary(client: OpenAI, title: str, content: str) -> dict[str, Any]
             if isinstance(t, str) and t.strip() and len(t.strip()) <= 10
         ]
 
-        return {"summary": summary, "tickers": valid_tickers}
+        sentiment = str(result.get("sentiment", "neutral")).lower()
+        if sentiment not in {"positive", "negative", "neutral"}:
+            sentiment = "neutral"
+
+        return {"summary": summary, "tickers": valid_tickers, "sentiment": sentiment}
 
     except Exception as e:
         logger.error("OpenAI summary generation failed", error=str(e), title=title)
-        # Fallback: use truncated title as summary, no tickers
-        return {"summary": title[:500], "tickers": []}
+        try:
+            active_tickers = set(store.active_tickers())
+        except Exception:
+            active_tickers = set()
+        text = f"{title} {content}".upper()
+        tickers = [ticker for ticker in active_tickers if ticker in text]
+        return {"summary": title[:500], "tickers": tickers, "sentiment": "neutral"}
 
 
 def store_article(conn, article: dict[str, Any], summary_data: dict[str, Any], title_source_hash: str) -> None:
@@ -323,8 +336,9 @@ def collect_news() -> dict[str, Any]:
             new_articles=len(new_articles),
         )
 
-        # Generate summaries and store
-        openai_client = OpenAI(api_key=OPENAI_API_KEY)
+        # Generate summaries and store. If no OpenAI key is configured, the
+        # summary function falls back to title-based summaries and ticker matching.
+        openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
         articles_stored = 0
 
         for article in new_articles:

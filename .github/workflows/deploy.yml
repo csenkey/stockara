@@ -1,74 +1,154 @@
-name: Deploy Stock Monitoring System
+name: Deploy Stockara
 
 on:
   push:
     branches:
       - main
+      - "feature/**"
+      - "codex/**"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.ref_name }}
+  cancel-in-progress: false
 
 env:
   PYTHON_VERSION: "3.12"
-  NODE_VERSION: "18"
-  AWS_REGION: ${{ secrets.AWS_REGION }}
+  NODE_VERSION: "22"
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
 
 jobs:
   deploy:
+    name: Test, build, and deploy
     runs-on: ubuntu-latest
 
     permissions:
-      id-token: write
       contents: read
+      id-token: write
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Resolve deployment stage
+        shell: bash
+        run: |
+          branch="${GITHUB_REF_NAME}"
+          if [[ "$branch" == "main" ]]; then
+            stage="prod"
+          else
+            stage="$(printf '%s' "$branch" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9-]+/-/g; s/-+/-/g; s/^-|-$//g' | cut -c1-24 | sed -E 's/^-|-$//g')"
+            if [[ -z "$stage" ]]; then
+              stage="feature"
+            fi
+          fi
+
+          echo "DEPLOYMENT_STAGE=$stage" >> "$GITHUB_ENV"
+          echo "Resolved deployment stage: $stage"
+
       - name: Set up Python ${{ env.PYTHON_VERSION }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          cache: "pip"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+            infrastructure/requirements.txt
 
       - name: Set up Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: "npm"
-          cache-dependency-path: frontend/package-lock.json
+
+      - name: Update npm
+        run: |
+          npm install -g npm@11.17.0
+          npm --version
+          npm cache clean --force
 
       - name: Install backend dependencies
-        run: pip install -r backend/requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r backend/requirements-dev.txt
+          python -m pip install ruff
 
-      - name: Install linting tools
-        run: pip install ruff
-
-      - name: Lint backend
-        run: ruff check backend/
+      - name: Lint Python
+        run: ruff check backend infrastructure scripts
 
       - name: Run backend tests
-        run: python -m pytest
+        run: python -m pytest tests -q
         working-directory: backend
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: npm install --package-lock=false --no-audit --no-fund --prefer-online
+        working-directory: frontend
+
+      - name: Lint frontend
+        run: npm run lint
         working-directory: frontend
 
       - name: Build frontend
         run: npm run build
         working-directory: frontend
 
+      - name: Install CDK dependencies
+        run: |
+          python -m pip install -r infrastructure/requirements.txt
+          python -m pip install pytest
+          npm install -g aws-cdk
+
+      - name: Run infrastructure tests
+        run: python -m pytest tests -q
+        working-directory: infrastructure
+
+      - name: CDK synth
+        run: cdk synth -c deploymentStage="$DEPLOYMENT_STAGE" -c region="$AWS_REGION"
+        working-directory: infrastructure
+
+      - name: Check AWS OIDC role configuration
+        run: |
+          if [[ -z "${{ secrets.AWS_ROLE_TO_ASSUME }}" ]]; then
+            echo "Missing GitHub secret AWS_ROLE_TO_ASSUME."
+            echo "Create the AWS GitHub OIDC deployment role, then add its ARN as this repository secret."
+            exit 1
+          fi
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
-
-      - name: Install CDK dependencies
-        run: |
-          pip install -r requirements.txt
-          npm install -g aws-cdk
-        working-directory: infrastructure
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: stockara-github-actions-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: CDK deploy
-        run: cdk deploy --all --require-approval never
+        run: |
+          cdk deploy --all --require-approval never \
+            --outputs-file cdk-outputs.json \
+            -c deploymentStage="$DEPLOYMENT_STAGE" \
+            -c region="$AWS_REGION"
+        working-directory: infrastructure
+
+      - name: Smoke test deployed API
+        run: |
+          api_url="$(python -c "import json; data=json.load(open('cdk-outputs.json')); print(next(outputs['ApiUrl'] for outputs in data.values() if 'ApiUrl' in outputs))")"
+          curl --fail --silent --show-error "${api_url%/}/api/health"
+        working-directory: infrastructure
+
+      - name: Smoke test static artifacts when present
+        run: |
+          bucket="$(python -c "import json; data=json.load(open('cdk-outputs.json')); print(next((outputs['BucketName'] for outputs in data.values() if 'BucketName' in outputs), ''))")"
+          if [[ -z "$bucket" ]]; then
+            echo "No frontend bucket output found; skipping static artifact smoke test."
+            exit 0
+          fi
+
+          for key in top-picks/latest.json sell-alerts/latest.json; do
+            if aws s3api head-object --bucket "$bucket" --key "$key" >/dev/null 2>&1; then
+              aws s3 cp "s3://$bucket/$key" - | python -m json.tool >/dev/null
+              echo "Validated $key"
+            else
+              echo "$key not published yet; skipping validation."
+            fi
+          done
         working-directory: infrastructure
