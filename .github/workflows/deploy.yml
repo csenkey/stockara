@@ -14,7 +14,7 @@ concurrency:
 
 env:
   PYTHON_VERSION: "3.12"
-  NODE_VERSION: "18"
+  NODE_VERSION: "22"
   AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
 
 jobs:
