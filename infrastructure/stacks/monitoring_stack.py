@@ -1,4 +1,4 @@
-"""CDK stack for monitoring and observability resources."""
+"""CloudWatch monitoring for Stockara Phase 1."""
 
 from aws_cdk import (
     Duration,
@@ -14,10 +14,7 @@ from .naming import resource_name
 
 
 class MonitoringStack(Stack):
-    """Defines the monitoring infrastructure for the Stock Monitoring System.
-
-    Includes CloudWatch alarms, log groups, dashboards, and SNS notifications.
-    """
+    """Low-cost alarms and dashboard for Phase 1 scheduled jobs."""
 
     def __init__(
         self,
@@ -28,296 +25,100 @@ class MonitoringStack(Stack):
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        # --- SNS Topic for Alert Notifications ---
         self.alerts_topic = sns.Topic(
             self,
             "AlertsTopic",
-            topic_name=resource_name(
-                deployment_stage, "stock-monitoring-alerts", "alerts"
+            topic_name=resource_name(deployment_stage, "stockara-alerts", "alerts"),
+            display_name="Stockara Phase 1 Alerts",
+        )
+
+        function_names = {
+            "stock_collector": resource_name(
+                deployment_stage, "stockara-stock-collector", "stock-collector"
             ),
-            display_name="Stock Monitoring System Alerts",
-        )
-
-        # --- CloudWatch Log Groups with 30-day retention ---
-        stock_collector_log_group_name = resource_name(
-            deployment_stage, "stock-collector", "stock-collector"
-        )
-        news_collector_log_group_name = resource_name(
-            deployment_stage, "news-collector", "news-collector"
-        )
-        ai_analyzer_log_group_name = resource_name(
-            deployment_stage, "ai-analyzer", "ai-analyzer"
-        )
-        api_handler_log_group_name = resource_name(
-            deployment_stage, "api-handler", "api-handler"
-        )
-
-        self.stock_collector_log_group = logs.LogGroup(
-            self,
-            "StockCollectorLogGroup",
-            log_group_name=f"/aws/lambda/{stock_collector_log_group_name}",
-            retention=logs.RetentionDays.ONE_MONTH,
-        )
-
-        self.news_collector_log_group = logs.LogGroup(
-            self,
-            "NewsCollectorLogGroup",
-            log_group_name=f"/aws/lambda/{news_collector_log_group_name}",
-            retention=logs.RetentionDays.ONE_MONTH,
-        )
-
-        self.ai_analyzer_log_group = logs.LogGroup(
-            self,
-            "AiAnalyzerLogGroup",
-            log_group_name=f"/aws/lambda/{ai_analyzer_log_group_name}",
-            retention=logs.RetentionDays.ONE_MONTH,
-        )
-
-        self.api_handler_log_group = logs.LogGroup(
-            self,
-            "ApiHandlerLogGroup",
-            log_group_name=f"/aws/lambda/{api_handler_log_group_name}",
-            retention=logs.RetentionDays.ONE_MONTH,
-        )
-
-        # --- Custom Metrics ---
-        # Namespace for all custom metrics
-        metrics_namespace = "StockMonitoring"
-        api_handler_function_name = resource_name(
-            deployment_stage, "stock-monitoring-api-handler", "api-handler"
-        )
-        stock_collector_function_name = resource_name(
-            deployment_stage, "stock-monitoring-stock-collector", "stock-collector"
-        )
-        ai_analyzer_function_name = resource_name(
-            deployment_stage, "stock-monitoring-ai-analyzer", "ai-analyzer"
-        )
-
-        self.stocks_collected_metric = cloudwatch.Metric(
-            namespace=metrics_namespace,
-            metric_name="stocks_collected",
-            statistic="Sum",
-            period=Duration.minutes(5),
-        )
-
-        self.news_articles_processed_metric = cloudwatch.Metric(
-            namespace=metrics_namespace,
-            metric_name="news_articles_processed",
-            statistic="Sum",
-            period=Duration.minutes(5),
-        )
-
-        self.analysis_generated_metric = cloudwatch.Metric(
-            namespace=metrics_namespace,
-            metric_name="analysis_generated",
-            statistic="Sum",
-            period=Duration.minutes(5),
-        )
-
-        # --- Alarms ---
-
-        # Error rate alarm: API Lambda errors > 5% in 5-minute window
-        api_errors_metric = cloudwatch.Metric(
-            namespace="AWS/Lambda",
-            metric_name="Errors",
-            dimensions_map={"FunctionName": api_handler_function_name},
-            statistic="Sum",
-            period=Duration.minutes(5),
-        )
-
-        api_invocations_metric = cloudwatch.Metric(
-            namespace="AWS/Lambda",
-            metric_name="Invocations",
-            dimensions_map={"FunctionName": api_handler_function_name},
-            statistic="Sum",
-            period=Duration.minutes(5),
-        )
-
-        # Use math expression for error rate percentage
-        self.api_error_rate_alarm = cloudwatch.Alarm(
-            self,
-            "ApiErrorRateAlarm",
-            alarm_name=resource_name(
-                deployment_stage, "stock-monitoring-api-error-rate", "api-error-rate"
+            "news_collector": resource_name(
+                deployment_stage, "stockara-news-collector", "news-collector"
             ),
-            alarm_description="API Lambda error rate exceeds 5% in a 5-minute window",
-            metric=cloudwatch.MathExpression(
-                expression="(errors / invocations) * 100",
-                using_metrics={
-                    "errors": api_errors_metric,
-                    "invocations": api_invocations_metric,
-                },
-                period=Duration.minutes(5),
-            ),
-            threshold=5,
-            evaluation_periods=1,
-            comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
-            treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
-        )
-        self.api_error_rate_alarm.add_alarm_action(
-            cw_actions.SnsAction(self.alerts_topic)
-        )
-
-        # Batch job failure alarm: stock_collector Lambda errors >= 1
-        self.stock_collector_failure_alarm = cloudwatch.Alarm(
-            self,
-            "StockCollectorFailureAlarm",
-            alarm_name=resource_name(
+            "publisher": resource_name(
                 deployment_stage,
-                "stock-monitoring-stock-collector-failure",
-                "stock-collector-failure",
+                "stockara-phase1-analyzer-publisher",
+                "phase1-analyzer-publisher",
             ),
-            alarm_description="Stock collector Lambda function has errors",
-            metric=cloudwatch.Metric(
-                namespace="AWS/Lambda",
-                metric_name="Errors",
-                dimensions_map={"FunctionName": stock_collector_function_name},
-                statistic="Sum",
-                period=Duration.minutes(5),
+            "health_api": resource_name(
+                deployment_stage, "stockara-health-api", "health-api"
             ),
-            threshold=1,
-            evaluation_periods=1,
-            comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
-            treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
-        )
-        self.stock_collector_failure_alarm.add_alarm_action(
-            cw_actions.SnsAction(self.alerts_topic)
-        )
+        }
 
-        # Batch job failure alarm: ai_analyzer Lambda errors >= 1
-        self.ai_analyzer_failure_alarm = cloudwatch.Alarm(
-            self,
-            "AiAnalyzerFailureAlarm",
-            alarm_name=resource_name(
-                deployment_stage,
-                "stock-monitoring-ai-analyzer-failure",
-                "ai-analyzer-failure",
-            ),
-            alarm_description="AI analyzer Lambda function has errors",
-            metric=cloudwatch.Metric(
-                namespace="AWS/Lambda",
-                metric_name="Errors",
-                dimensions_map={"FunctionName": ai_analyzer_function_name},
-                statistic="Sum",
-                period=Duration.minutes(5),
-            ),
-            threshold=1,
-            evaluation_periods=1,
-            comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
-            treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
-        )
-        self.ai_analyzer_failure_alarm.add_alarm_action(
-            cw_actions.SnsAction(self.alerts_topic)
-        )
+        for logical_name, function_name in function_names.items():
+            logs.LogGroup(
+                self,
+                f"{logical_name}LogGroup",
+                log_group_name=f"/aws/lambda/{function_name}",
+                retention=logs.RetentionDays.ONE_MONTH,
+            )
+            alarm = cloudwatch.Alarm(
+                self,
+                f"{logical_name}FailureAlarm",
+                alarm_name=resource_name(
+                    deployment_stage,
+                    f"stockara-{logical_name}-failure",
+                    f"{logical_name}-failure",
+                ),
+                alarm_description=f"{function_name} has Lambda errors",
+                metric=cloudwatch.Metric(
+                    namespace="AWS/Lambda",
+                    metric_name="Errors",
+                    dimensions_map={"FunctionName": function_name},
+                    statistic="Sum",
+                    period=Duration.minutes(5),
+                ),
+                threshold=1,
+                evaluation_periods=1,
+                comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+            )
+            alarm.add_alarm_action(cw_actions.SnsAction(self.alerts_topic))
 
-        # --- CloudWatch Dashboard ---
         self.dashboard = cloudwatch.Dashboard(
             self,
-            "StockMonitoringDashboard",
+            "Phase1Dashboard",
             dashboard_name=resource_name(
-                deployment_stage, "StockMonitoringDashboard", "dashboard"
+                deployment_stage, "StockaraPhase1Dashboard", "dashboard"
             ),
         )
-
-        # Row 1: Custom business metrics
         self.dashboard.add_widgets(
             cloudwatch.GraphWidget(
-                title="Stocks Collected",
-                left=[self.stocks_collected_metric],
-                width=8,
-            ),
-            cloudwatch.GraphWidget(
-                title="News Articles Processed",
-                left=[self.news_articles_processed_metric],
-                width=8,
-            ),
-            cloudwatch.GraphWidget(
-                title="Analysis Generated",
-                left=[self.analysis_generated_metric],
-                width=8,
-            ),
-        )
-
-        # Row 2: Lambda error and invocation metrics
-        self.dashboard.add_widgets(
-            cloudwatch.GraphWidget(
-                title="API Handler - Errors & Invocations",
-                left=[api_invocations_metric],
-                right=[api_errors_metric],
-                width=12,
-            ),
-            cloudwatch.GraphWidget(
-                title="Batch Jobs - Errors",
+                title="Published picks and alerts",
                 left=[
                     cloudwatch.Metric(
-                        namespace="AWS/Lambda",
-                        metric_name="Errors",
-                        dimensions_map={
-                            "FunctionName": stock_collector_function_name
-                        },
+                        namespace="StockaraPhase1",
+                        metric_name="top_picks_published",
                         statistic="Sum",
-                        period=Duration.minutes(5),
+                        period=Duration.hours(1),
                     ),
                     cloudwatch.Metric(
-                        namespace="AWS/Lambda",
-                        metric_name="Errors",
-                        dimensions_map={"FunctionName": ai_analyzer_function_name},
+                        namespace="StockaraPhase1",
+                        metric_name="sell_alerts_published",
                         statistic="Sum",
-                        period=Duration.minutes(5),
+                        period=Duration.hours(1),
                     ),
                 ],
-                width=12,
-            ),
-        )
-
-        # Row 3: Lambda duration metrics
-        self.dashboard.add_widgets(
-            cloudwatch.GraphWidget(
-                title="API Response Times",
-                left=[
-                    cloudwatch.Metric(
-                        namespace="AWS/Lambda",
-                        metric_name="Duration",
-                        dimensions_map={"FunctionName": api_handler_function_name},
-                        statistic="Average",
-                        period=Duration.minutes(5),
-                    ),
-                ],
-                width=12,
             ),
             cloudwatch.GraphWidget(
-                title="Batch Job Durations",
+                title="Candidate funnel",
                 left=[
                     cloudwatch.Metric(
-                        namespace="AWS/Lambda",
-                        metric_name="Duration",
-                        dimensions_map={
-                            "FunctionName": stock_collector_function_name
-                        },
-                        statistic="Average",
-                        period=Duration.minutes(5),
+                        namespace="StockaraPhase1",
+                        metric_name="candidates_scored",
+                        statistic="Sum",
+                        period=Duration.hours(1),
                     ),
                     cloudwatch.Metric(
-                        namespace="AWS/Lambda",
-                        metric_name="Duration",
-                        dimensions_map={"FunctionName": ai_analyzer_function_name},
-                        statistic="Average",
-                        period=Duration.minutes(5),
+                        namespace="StockaraPhase1",
+                        metric_name="ai_candidates_analyzed",
+                        statistic="Sum",
+                        period=Duration.hours(1),
                     ),
                 ],
-                width=12,
-            ),
-        )
-
-        # Row 4: Alarm status
-        self.dashboard.add_widgets(
-            cloudwatch.AlarmStatusWidget(
-                title="Alarm Status",
-                alarms=[
-                    self.api_error_rate_alarm,
-                    self.stock_collector_failure_alarm,
-                    self.ai_analyzer_failure_alarm,
-                ],
-                width=24,
             ),
         )

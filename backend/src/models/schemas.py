@@ -1,49 +1,50 @@
-"""Pydantic models and schemas for the Stock Monitoring and Analysis System."""
+"""Phase 1 Pydantic models for Stockara top picks and risk alerts."""
 
 from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
 
-# --- Enums ---
-
-
 class CompanySize(str, Enum):
-    """Company size classification."""
-
     BLUE_CHIP = "blue_chip"
     MID_CAP = "mid_cap"
     STARTUP = "startup"
 
 
 class Recommendation(str, Enum):
-    """Stock recommendation classification."""
-
     BUY = "BUY"
     HOLD = "HOLD"
     SELL = "SELL"
 
 
 class RiskLevel(str, Enum):
-    """Risk level classification."""
-
     LOW = "LOW"
     MEDIUM = "MEDIUM"
     HIGH = "HIGH"
 
 
-class Timeframe(str, Enum):
-    """Recommendation timeframe."""
-
-    SHORT_TERM = "short_term"
-    LONG_TERM = "long_term"
-    BOTH = "both"
+class SignalDirection(str, Enum):
+    POSITIVE = "positive"
+    NEGATIVE = "negative"
+    NEUTRAL = "neutral"
 
 
-# --- Predefined Sectors ---
+class SignalType(str, Enum):
+    PRICE_MOVE = "price_move"
+    VOLUME_MOVE = "volume_move"
+    NEWS = "news"
+    EARNINGS = "earnings"
+    DIVIDEND = "dividend"
+    OPTIONS = "options"
+    ANALYST = "analyst"
+    INSIDER = "insider"
+    INSTITUTIONAL = "institutional"
+    SOCIAL_MOMENTUM = "social_momentum"
+    SECTOR_RELATIVE = "sector_relative"
+
 
 VALID_SECTORS = [
     "Technology",
@@ -61,11 +62,7 @@ VALID_SECTORS = [
 ]
 
 
-# --- Validators ---
-
-
 def validate_ticker(value: str) -> str:
-    """Validate stock ticker format: 1-10 uppercase alphanumeric characters."""
     value = value.strip().upper()
     if not value:
         raise ValueError("Ticker must not be empty")
@@ -76,154 +73,152 @@ def validate_ticker(value: str) -> str:
     return value
 
 
-# --- Models ---
-
-
 class Stock(BaseModel):
-    """A monitored stock in the watchlist."""
-
-    ticker: str = Field(..., max_length=10, description="Stock ticker symbol")
-    company_name: str = Field(..., min_length=1, max_length=255, description="Company name")
-    sector: str = Field(..., description="Company sector from predefined list")
-    company_size: CompanySize = Field(..., description="Company size classification")
-    added_at: Optional[datetime] = Field(default=None, description="When the stock was added")
-    is_active: bool = Field(default=True, description="Whether the stock is actively monitored")
+    ticker: str = Field(..., max_length=10)
+    company_name: str = Field(..., min_length=1, max_length=255)
+    sector: str
+    company_size: CompanySize
+    source: str = "seed"
+    added_at: Optional[datetime] = None
+    is_active: bool = True
+    is_sell_alert_watch: bool = False
 
     @field_validator("ticker")
     @classmethod
-    def validate_ticker_field(cls, v: str) -> str:
-        return validate_ticker(v)
+    def validate_ticker_field(cls, value: str) -> str:
+        return validate_ticker(value)
 
     @field_validator("sector")
     @classmethod
-    def validate_sector(cls, v: str) -> str:
-        if v not in VALID_SECTORS:
+    def validate_sector(cls, value: str) -> str:
+        if value not in VALID_SECTORS:
             raise ValueError(f"Sector must be one of: {', '.join(VALID_SECTORS)}")
-        return v
+        return value
 
 
 class StockData(BaseModel):
-    """Daily OHLCV data for a stock."""
-
-    ticker: str = Field(..., max_length=10, description="Stock ticker symbol")
-    trading_date: date = Field(..., description="The trading date")
-    open_price: Decimal = Field(..., gt=0, decimal_places=4, description="Opening price")
-    high_price: Decimal = Field(..., gt=0, decimal_places=4, description="Highest price")
-    low_price: Decimal = Field(..., gt=0, decimal_places=4, description="Lowest price")
-    close_price: Decimal = Field(..., gt=0, decimal_places=4, description="Closing price")
-    volume: int = Field(..., ge=0, description="Trading volume")
-    collected_at: Optional[datetime] = Field(default=None, description="When data was collected")
+    ticker: str
+    trading_date: date
+    open_price: Decimal
+    high_price: Decimal
+    low_price: Decimal
+    close_price: Decimal
+    volume: int = Field(..., ge=0)
+    collected_at: Optional[datetime] = None
 
     @field_validator("ticker")
     @classmethod
-    def validate_ticker_field(cls, v: str) -> str:
-        return validate_ticker(v)
+    def validate_ticker_field(cls, value: str) -> str:
+        return validate_ticker(value)
 
 
 class NewsSummary(BaseModel):
-    """A summarized news article related to stocks."""
-
-    title: str = Field(..., min_length=1, max_length=500, description="Article title")
-    source: str = Field(..., min_length=1, max_length=100, description="News source")
-    published_at: datetime = Field(..., description="Publication date and time")
-    tickers: list[str] = Field(default_factory=list, description="Related stock tickers")
-    summary: str = Field(..., min_length=1, max_length=500, description="Condensed summary text")
-    is_classified: bool = Field(default=True, description="Whether tickers were identified")
+    title: str = Field(..., min_length=1, max_length=500)
+    source: str = Field(..., min_length=1, max_length=100)
+    published_at: datetime
+    tickers: list[str] = Field(default_factory=list)
+    summary: str = Field(..., min_length=1, max_length=500)
+    sentiment: SignalDirection = SignalDirection.NEUTRAL
+    is_classified: bool = True
 
     @field_validator("tickers")
     @classmethod
-    def validate_tickers(cls, v: list[str]) -> list[str]:
-        return [validate_ticker(t) for t in v]
+    def validate_tickers(cls, value: list[str]) -> list[str]:
+        return [validate_ticker(t) for t in value]
 
 
-class AnalysisResult(BaseModel):
-    """AI-generated analysis result for a stock."""
+class SignalSource(BaseModel):
+    provider: str
+    url: Optional[str] = None
+    observed_at: datetime
+    raw: dict[str, Any] = Field(default_factory=dict)
 
-    ticker: str = Field(..., max_length=10, description="Stock ticker symbol")
-    analysis_date: date = Field(..., description="Date of analysis")
-    short_term_recommendation: Recommendation = Field(
-        ..., description="Short-term (1-30 days) recommendation"
-    )
-    long_term_recommendation: Recommendation = Field(
-        ..., description="Long-term (30+ days) recommendation"
-    )
-    risk_level: RiskLevel = Field(..., description="Risk level classification")
-    confidence_score: int = Field(
-        ..., ge=0, le=100, description="Confidence score (0-100)"
-    )
-    reasoning: Optional[str] = Field(default=None, description="Analysis reasoning")
-    created_at: Optional[datetime] = Field(default=None, description="When analysis was created")
+
+class CandidateSignal(BaseModel):
+    ticker: str
+    signal_type: SignalType
+    direction: SignalDirection
+    score: int = Field(..., ge=-100, le=100)
+    title: str
+    summary: str
+    source: SignalSource
 
     @field_validator("ticker")
     @classmethod
-    def validate_ticker_field(cls, v: str) -> str:
-        return validate_ticker(v)
+    def validate_ticker_field(cls, value: str) -> str:
+        return validate_ticker(value)
 
 
-class PortfolioHolding(BaseModel):
-    """A single stock holding in a user's portfolio."""
-
-    ticker: str = Field(..., max_length=10, description="Stock ticker symbol")
-    quantity: int = Field(..., gt=0, description="Number of shares held (must be positive)")
-    buying_price: Decimal = Field(
-        ..., gt=0, description="Purchase price per share (must be positive)"
-    )
-    added_date: Optional[date] = Field(default=None, description="Date the holding was added")
+class CandidateScore(BaseModel):
+    ticker: str
+    score_date: date
+    opportunity_score: int
+    negative_score: int
+    signals: list[CandidateSignal] = Field(default_factory=list)
+    created_at: Optional[datetime] = None
 
     @field_validator("ticker")
     @classmethod
-    def validate_ticker_field(cls, v: str) -> str:
-        return validate_ticker(v)
+    def validate_ticker_field(cls, value: str) -> str:
+        return validate_ticker(value)
 
 
-class Portfolio(BaseModel):
-    """A user's complete portfolio."""
-
-    holdings: list[PortfolioHolding] = Field(
-        default_factory=list, description="List of stock holdings"
-    )
-
-
-class UserPreferences(BaseModel):
-    """User preferences for filtering suggestions."""
-
-    preferred_sectors: list[str] = Field(
-        default_factory=list, description="Preferred sectors for suggestions"
-    )
-    preferred_sizes: list[CompanySize] = Field(
-        default_factory=list, description="Preferred company sizes"
-    )
-    max_risk_level: RiskLevel = Field(
-        default=RiskLevel.HIGH, description="Maximum acceptable risk level"
-    )
-
-    @field_validator("preferred_sectors")
-    @classmethod
-    def validate_preferred_sectors(cls, v: list[str]) -> list[str]:
-        for sector in v:
-            if sector not in VALID_SECTORS:
-                raise ValueError(f"Invalid sector '{sector}'. Must be one of: {', '.join(VALID_SECTORS)}")
-        return v
-
-
-class Suggestion(BaseModel):
-    """A personalized stock suggestion for a user."""
-
-    ticker: str = Field(..., max_length=10, description="Stock ticker symbol")
-    recommendation: Recommendation = Field(
-        ..., description="Recommendation direction (BUY or SELL)"
-    )
-    risk_level: RiskLevel = Field(..., description="Associated risk level")
-    timeframe: Timeframe = Field(..., description="Recommendation timeframe")
+class CandidateAnalysis(BaseModel):
+    ticker: str
+    analysis_date: date
+    recommendation: Recommendation
+    risk_level: RiskLevel
+    confidence_score: int = Field(..., ge=0, le=100)
+    catalyst: str
+    expected_timeframe: str
+    reasoning: str
+    invalidation_criteria: str
+    opportunity_score: int
+    negative_score: int
+    signals: list[CandidateSignal] = Field(default_factory=list)
+    created_at: Optional[datetime] = None
 
     @field_validator("ticker")
     @classmethod
-    def validate_ticker_field(cls, v: str) -> str:
-        return validate_ticker(v)
+    def validate_ticker_field(cls, value: str) -> str:
+        return validate_ticker(value)
 
-    @field_validator("recommendation")
-    @classmethod
-    def validate_recommendation_direction(cls, v: Recommendation) -> Recommendation:
-        if v == Recommendation.HOLD:
-            raise ValueError("Suggestions must be BUY or SELL, not HOLD")
-        return v
+
+class TopPick(BaseModel):
+    rank: int
+    ticker: str
+    company_name: str
+    sector: str
+    recommendation: Recommendation
+    risk_level: RiskLevel
+    confidence_score: int
+    catalyst: str
+    expected_timeframe: str
+    rationale: str
+    invalidation_criteria: str
+    supporting_evidence: list[str]
+    source_traceability: list[SignalSource]
+
+
+class SellAlert(BaseModel):
+    rank: int
+    ticker: str
+    company_name: str
+    sector: str
+    severity: str
+    risk_level: RiskLevel
+    confidence_score: int
+    negative_catalyst: str
+    rationale: str
+    supporting_evidence: list[str]
+    source_traceability: list[SignalSource]
+
+
+class PublishedTopPicks(BaseModel):
+    publication_date: date
+    generated_at: datetime
+    top_picks: list[TopPick]
+    sell_alerts: list[SellAlert]
+    candidate_count: int
+    analyzed_count: int
+    data_warnings: list[str] = Field(default_factory=list)

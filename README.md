@@ -1,153 +1,102 @@
-# Stockara — Stock Monitoring & Analysis System
+# Stockara — Daily Top Picks and Risk Alerts
 
-A serverless stock monitoring platform that tracks 1000+ tickers, generates AI-powered trading recommendations, and simulates 100 demo trading accounts. Built with Python/FastAPI, React/TypeScript, and deployed on AWS.
+Stockara Phase 1 is a low-cost, serverless catalyst scanner. It collects market/news/event signals, analyzes only the highest-signal candidates, and publishes static daily top-pick and sell-alert artifacts for the website.
 
-## Features
+## Phase 1 Scope
 
-- **Stock Data Collection** — Daily OHLCV data from Yahoo Finance with Alpha Vantage fallback
-- **News Aggregation** — Automated collection and AI summarization from NewsAPI and Finnhub
-- **AI Analysis** — GPT-4o-mini generates BUY/HOLD/SELL recommendations with confidence scores
-- **Portfolio Management** — AES-256-GCM encrypted personal portfolios with sell indicators
-- **Personalized Suggestions** — Filtered buy recommendations based on sector, size, and risk preferences
-- **Demo Trading Accounts** — 100 superhero-named simulated accounts trading autonomously
-- **Public Leaderboard** — Real-time rankings with sparkline charts and detailed account pages
+- **Daily top picks**: 5-10 promising near-term opportunities.
+- **Urgent sell alerts**: high-severity negative signals from a configurable watchlist.
+- **Cheap first-pass scanning**: price/volume, news, earnings, dividends, options, analyst, insider, institutional, social/news momentum, and sector-relative signals.
+- **Bounded AI usage**: OpenAI runs only on the shortlisted candidates.
+- **Static read model**: public reads use S3/CloudFront JSON artifacts, not live database queries.
 
 ## Architecture
 
-```
-AWS Lambda (Python 3.12) + API Gateway + DynamoDB single-table storage
-React SPA on S3/CloudFront | Cognito Auth | EventBridge Scheduling
+```text
+EventBridge -> stock/news collectors -> DynamoDB
+EventBridge -> Phase 1 analyzer/publisher -> S3 JSON artifacts
+CloudFront -> React static site + /top-picks/latest.json + /sell-alerts/latest.json
+API Gateway -> Lambda -> /api/health only
 ```
 
-Key services:
-- **Stock Collector** — EventBridge → Lambda, daily at 21:00 UTC
-- **News Collector** — EventBridge → Lambda, every 15 minutes
-- **AI Analyzer** — EventBridge → Lambda, daily at 22:00 UTC
-- **Demo Trade Executor** — EventBridge → Lambda, daily at 22:30 UTC
+Key jobs:
+
+- **Stock Collector**: daily at 21:00 UTC.
+- **News Collector**: daily at 20:30 UTC.
+- **Phase 1 Analyzer/Publisher**: daily at 22:00 UTC.
 
 ## Tech Stack
 
 | Layer | Technology |
-|-------|-----------|
+|-------|------------|
 | Backend | Python 3.12, FastAPI, Pydantic, structlog |
-| Frontend | React 18, TypeScript, Vite, Tailwind CSS, Recharts |
-| Database | DynamoDB single-table, on-demand billing |
-| Auth | AWS Cognito (JWT) |
-| AI | OpenAI GPT-4o-mini |
-| Infrastructure | AWS CDK (Python), GitHub Actions CI/CD |
-| Testing | pytest, Hypothesis (property-based testing) |
+| Frontend | React 18, TypeScript, Vite, Tailwind CSS |
+| Storage | DynamoDB on-demand, S3, CloudFront |
+| AI | OpenAI GPT-4o-mini with deterministic fallback |
+| Infrastructure | AWS CDK in Python, GitHub Actions |
+| Testing | pytest |
 
 ## Project Structure
 
-```
-stocks/
-├── backend/
-│   ├── src/
-│   │   ├── api/            # FastAPI routers (auth, portfolio, stocks, demo)
-│   │   ├── collectors/     # Stock and news data collectors
-│   │   ├── analysis/       # AI analyzer
-│   │   ├── services/       # Business logic (demo accounts, encryption, suggestions)
-│   │   ├── models/         # Pydantic schemas
-│   │   ├── db/             # DynamoDB table access helpers
-│   │   └── scripts/        # Seed scripts
-│   └── tests/              # pytest + Hypothesis property tests
-├── frontend/
-│   ├── src/
-│   │   ├── pages/          # Dashboard, Settings, DemoLeaderboard, DemoAccountDetail
-│   │   ├── components/     # Layout, shared UI
-│   │   └── services/       # API client (axios)
-│   └── package.json
-├── infrastructure/
-│   ├── stacks/             # CDK stacks (API, DB, Frontend, Monitoring, DemoTrading)
-│   └── app.py
-└── .github/workflows/      # CI/CD pipeline
+```text
+backend/src/api/          Public health API
+backend/src/collectors/   Stock and news collectors
+backend/src/analysis/     Phase 1 scanner, analyzer, publisher
+backend/src/db/           DynamoDB access helpers
+backend/src/models/       Phase 1 Pydantic schemas
+frontend/src/pages/       Static artifact dashboard
+infrastructure/stacks/    DynamoDB, API/jobs, frontend, monitoring
+scripts/seed_watchlist.py DynamoDB tracked-universe bootstrap
 ```
 
-## Getting Started
+## Local Commands
 
-### Prerequisites
-
-- Python 3.12+
-- Node.js 18+
-- AWS CLI (for deployment)
-
-### Backend
+Backend:
 
 ```bash
 cd backend
-pip install -r requirements.txt
+python -m pip install -r requirements-dev.txt
 python -m pytest tests/ -v
 ```
 
-### Frontend
+Frontend:
 
 ```bash
 cd frontend
-npm install
-npm run dev     # development server
-npm run build   # production build
+npm ci
+npm run lint
+npm run build
+npm run dev
 ```
 
-### Deploy
+Infrastructure:
 
 ```bash
 cd infrastructure
-pip install -r requirements.txt
-npm install -g aws-cdk
-cdk deploy --all -c deploymentStage=prod
+python -m pip install -r requirements.txt
+python -m pytest tests/ -v
+cdk synth -c deploymentStage=prod
 ```
 
-### GitHub Actions CI/CD
+## Bootstrap
 
-Pushes to `main`, `feature/**`, or `codex/**` run the deployment workflow:
+After deploying, seed the tracked universe:
+
+```bash
+STOCKARA_TABLE_NAME=<table-name> \
+STOCKARA_SELL_ALERT_TICKERS=AAPL,MSFT,NVDA \
+python -m scripts.seed_watchlist
+```
+
+Then run the collectors and analyzer/publisher once manually for the first static artifacts, or wait for the daily schedules.
+
+Published artifacts:
 
 ```text
-Python lint -> backend tests -> frontend lint/build -> infrastructure tests -> CDK synth -> CDK deploy -> /api/health smoke test
-```
-
-`main` deploys the stable `prod` stage and preserves the existing production stack and resource names. Feature branches deploy isolated AWS stacks with a sanitized branch stage, so branch deploys do not collide with production.
-
-Required GitHub configuration:
-
-| Name | Type | Description |
-|------|------|-------------|
-| `AWS_ACCESS_KEY_ID` | Secret | AWS access key used by GitHub Actions |
-| `AWS_SECRET_ACCESS_KEY` | Secret | AWS secret access key used by GitHub Actions |
-| `AWS_REGION` | Repository variable or secret | AWS region; defaults to `us-east-1` if unset |
-
-## Demo Trading Accounts
-
-The system includes 100 simulated trading accounts, each named after a superhero:
-
-- Start with $10,000 bankroll
-- Trade daily based on AI recommendations
-- 1% commission on every transaction
-- Public leaderboard at `/demo` (no auth required)
-- Account detail pages with portfolio charts, holdings, and transaction history
-
-### API Endpoints (Public, No Auth)
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/demo/leaderboard` | All 100 accounts ranked by portfolio value |
-| `GET /api/demo/accounts/{name}` | Account detail with holdings and allocation |
-| `GET /api/demo/accounts/{name}/transactions` | Paginated transaction history |
-| `GET /api/demo/accounts/{name}/performance` | Daily portfolio value time series |
-
-## Testing
-
-The project uses **property-based testing** (Hypothesis) to verify correctness invariants:
-
-- Initial bankroll invariant (cash + holdings = $10,000)
-- Commission is always exactly 1%
-- Buy allocation capped at 10% of portfolio value
-- Sell liquidates entire position
-- Leaderboard sorted by portfolio value descending
-
-Run all tests:
-```bash
-cd backend
-python -m pytest tests/ -v
+/top-picks/latest.json
+/top-picks/history/YYYY-MM-DD.json
+/sell-alerts/latest.json
+/sell-alerts/history/YYYY-MM-DD.json
 ```
 
 ## Environment Variables
@@ -155,10 +104,16 @@ python -m pytest tests/ -v
 | Variable | Description |
 |----------|-------------|
 | `STOCKARA_TABLE_NAME` | DynamoDB table name |
-| `OPENAI_API_KEY` | OpenAI API key for AI analysis |
+| `STOCKARA_ARTIFACT_BUCKET` | S3 bucket for static frontend and generated JSON artifacts |
+| `OPENAI_API_KEY` | Optional OpenAI key; deterministic fallback is used if absent |
+| `NEWSAPI_KEY` | Optional NewsAPI key |
+| `FINNHUB_KEY` | Optional Finnhub key |
+| `ALPHA_VANTAGE_API_KEY` | Optional Alpha Vantage fallback key |
 | `AWS_REGION` | AWS deployment region |
-| `COGNITO_USER_POOL_ID` | Cognito user pool ID |
-| `KMS_KEY_ID` | KMS key for portfolio encryption |
+
+## GitHub Actions
+
+Pushes to `main`, `feature/**`, or `codex/**` run tests, frontend build, CDK synth/deploy, and a `/api/health` smoke test.
 
 ## License
 

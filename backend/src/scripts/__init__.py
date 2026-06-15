@@ -1,1 +1,1 @@
-# Scripts package for demo trading accounts system.
+# Scripts package for Stockara operational helpers.

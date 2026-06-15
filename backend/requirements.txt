@@ -8,6 +8,3 @@ structlog==24.4.0
 pandas==2.2.3
 uvicorn==0.31.0
 requests==2.32.3
-cryptography==43.0.0
-python-jose[cryptography]==3.3.0
-email-validator==2.2.0

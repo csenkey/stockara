@@ -1,5 +1,164 @@
 # Backlog
 
+## Product Roadmap
+
+### Define Phased Shipping Plan
+
+Status: Proposed
+
+Requirement: Ship Stockara in focused phases, starting with a narrow daily recommendation MVP and expanding only after the core data, analysis, and trust loops are working.
+
+Rationale:
+
+- Keeps the first release small enough to validate quickly.
+- Makes each phase easy to explain through one user-facing promise.
+- Avoids building portfolio automation or intraday complexity before the daily analysis loop is reliable.
+- Creates a clear path from recommendation generation to personalization, public validation, and premium features.
+
+Phase 1: Daily top picks and risk alerts
+
+- Promise: every day, surface the 5-10 most promising near-term opportunities and any urgent negative sell signals worth immediate attention.
+- Collect the full Phase 1 signal set: OHLCV price/volume data, financial news, earnings calendar, dividend calendar, stock metadata, configurable watchlists, options activity, analyst rating changes, insider buying/selling, institutional-flow signals, social/news momentum, and sector ETF movement.
+- Run cheap signal scanning across the tracked universe before running expensive AI analysis.
+- Prioritize stocks with upcoming earnings, upcoming dividends, unusual price or volume movement, strong news catalysts, analyst changes, insider/institutional signals, options activity, social/news momentum, and sector movement.
+- Run deeper AI analysis only for the shortlisted candidates instead of analyzing every ticker every day.
+- Publish the daily top 5-10 picks with ticker, recommendation, confidence or risk level, catalyst, expected timeframe, short rationale, supporting evidence, and analysis date.
+- Publish urgent sell alerts from a configurable watchlist when negative signals cross defined severity thresholds.
+- Serve the user-facing daily picks and alerts as static S3/CloudFront JSON/HTML artifacts wherever possible, avoiding live REST/database reads for public read paths.
+- Defer portfolio optimization and trading automation until Phase 2; Phase 1 focuses on global daily opportunities and risk alerts.
+
+### Phase 1: Daily Top Picks and Risk Alerts
+
+Status: Proposed
+
+Requirement: Build a low-cost daily catalyst scanner that finds and publishes the top 5-10 stock opportunities plus urgent sell alerts from configurable watchlists, while using AI only on shortlisted candidates.
+
+Rationale:
+
+- The product should identify promising near-term movement, not merely analyze a large ticker list mechanically.
+- Static generated read models keep public page views cheap and fast.
+- Cheap signals should narrow the candidate set before OpenAI analysis to control variable cost.
+- Urgent sell alerts are a separate product surface from opportunity picks and should use stronger negative-signal thresholds.
+- Phase 1 should collect all planned signal categories, even if some sources start as simple, low-frequency, or provider-limited integrations.
+
+Deliverables:
+
+- Daily static top-picks page and JSON artifact.
+- Daily static urgent sell-alert page and JSON artifact.
+- Configurable tracked universe and urgent sell-alert watchlist.
+- Candidate scanner that scores cheap signals across the tracked universe.
+- AI analyzer that runs only on the shortlisted candidates.
+- Publisher job that writes versioned and latest static artifacts to S3.
+- Frontend page or dashboard panel that reads static artifacts, not a live daily-pick API.
+- Deployment smoke tests that verify the static artifacts are generated and publicly readable.
+
+Data sources and signal coverage:
+
+- OHLCV price and volume data for all tracked tickers.
+- Financial news articles and AI summaries related to tracked tickers.
+- Earnings calendar with upcoming earnings date, confirmed/estimated status, and days until event.
+- Dividend calendar with ex-dividend date, pay date, dividend amount, and yield where available.
+- Stock metadata with ticker, company name, sector, company size, active flag, and source provenance.
+- Configurable tracked universe for opportunity discovery.
+- Configurable urgent sell-alert watchlist.
+- Options activity signals, including unusual volume, put/call skew, and notable implied-volatility changes where provider data allows.
+- Analyst rating-change signals, including upgrades, downgrades, price-target changes, and source/date.
+- Insider buying/selling signals, including transaction direction, size, date, and insider role.
+- Institutional-flow signals, including available ownership/flow changes or provider-derived accumulation/distribution signals.
+- Social and news momentum signals, including mention volume, sentiment direction, and acceleration.
+- Sector ETF movement signals, mapping tickers to representative sector ETFs and comparing stock movement against sector movement.
+
+Execution tasks:
+
+- [ ] Define Phase 1 output schemas for `TopPick`, `SellAlert`, `CandidateSignal`, `SignalSource`, and `PublishedTopPicks`.
+- [ ] Define static artifact paths, including `/top-picks/latest.json`, `/top-picks/history/{date}.json`, `/sell-alerts/latest.json`, and `/sell-alerts/history/{date}.json`.
+- [ ] Add DynamoDB or repository models for signal snapshots, candidate scores, AI candidate analysis, top-pick publication records, and sell-alert publication records.
+- [ ] Add configuration storage for the tracked universe and urgent sell-alert watchlist.
+- [ ] Add a seed/bootstrap script for the initial tracked universe with ticker, company name, sector, company size, and active flag.
+- [ ] Wire provider secrets into deployed Lambdas through environment variables or Secrets Manager-backed configuration.
+- [ ] Implement earnings-calendar collection.
+- [ ] Implement dividend-calendar collection.
+- [ ] Extend OHLCV collection to compute daily price/volume movement signals.
+- [ ] Extend news collection to compute ticker-level news volume, sentiment direction, and interesting-news indicators.
+- [ ] Implement options activity signal collection with provider fallback behavior.
+- [ ] Implement analyst rating-change signal collection with provider fallback behavior.
+- [ ] Implement insider transaction signal collection with provider fallback behavior.
+- [ ] Implement institutional-flow signal collection with provider fallback behavior.
+- [ ] Implement social/news momentum signal collection with provider fallback behavior.
+- [ ] Implement sector ETF movement collection and ticker-to-sector-ETF mapping.
+- [ ] Implement candidate scoring with configurable weights for earnings, dividends, price move, volume move, news, options, analyst, insider, institutional, social/news momentum, and sector-relative movement.
+- [ ] Implement negative-signal scoring for urgent sell alerts with severity thresholds.
+- [ ] Select the daily AI candidate shortlist from the highest-scoring opportunity candidates plus any high-severity negative candidates.
+- [ ] Update the AI prompt to include catalyst signals, upcoming events, news evidence, technical indicators, sector-relative movement, and invalidation criteria.
+- [ ] Store AI analysis only for shortlisted candidates and include candidate score/source details for traceability.
+- [ ] Rank AI-analyzed candidates into top 5-10 picks using recommendation, confidence, catalyst strength, risk, and timeframe.
+- [ ] Rank urgent sell alerts separately using severity, confidence, negative catalyst type, and recency.
+- [ ] Implement a static publisher Lambda or scheduled job that writes latest and historical JSON artifacts to S3.
+- [ ] Optionally generate static HTML pages for top picks and sell alerts after the JSON publisher is stable.
+- [ ] Update the frontend to render top picks and sell alerts from static JSON artifacts.
+- [ ] Keep existing authenticated portfolio views separate from Phase 1 global picks.
+- [ ] Add unit tests for candidate scoring, negative-signal thresholds, ranking, and static artifact generation.
+- [ ] Add integration-style tests with mocked providers for the daily scan-to-publish flow.
+- [ ] Add frontend tests or build checks for rendering empty, loading, successful, and stale-artifact states.
+- [ ] Update GitHub Actions deployment smoke test to verify `/api/health` plus public readability of `top-picks/latest.json` and `sell-alerts/latest.json` when artifacts exist.
+- [ ] Add a manual bootstrap/runbook for first deployment: seed universe, run collectors, run scanner/analyzer, publish static artifacts, verify CloudFront URLs.
+- [ ] Add CloudWatch metrics for signals collected, candidates scored, AI candidates analyzed, top picks published, sell alerts published, provider failures, and artifact publish failures.
+- [ ] Add alarms for failed daily publication, missing fresh top-picks artifact, missing fresh sell-alert artifact, and repeated provider failures.
+
+Acceptance criteria:
+
+- A deployed environment can publish top 5-10 daily picks as static JSON without requiring a live API/database read for page views.
+- A deployed environment can publish urgent sell alerts from a configurable watchlist as static JSON.
+- AI analysis is limited to the candidate shortlist, not the full tracked universe.
+- Every published pick includes catalyst, confidence, risk, timeframe, rationale, supporting evidence, analysis date, and source traceability.
+- Every urgent sell alert includes severity, negative catalyst, confidence, rationale, supporting evidence, analysis date, and source traceability.
+- The tracked universe and urgent sell-alert watchlist can be changed without code changes.
+- Provider failures are logged and surfaced in metrics without breaking the whole daily publication when fallback or partial data is available.
+- Public static artifacts are cacheable through S3/CloudFront and can be consumed by the frontend.
+
+Phase 2: Portfolio-aware suggestions
+
+- Promise: given the user's holdings, explain what they should consider doing next.
+- Encrypt user portfolios at rest and decrypt only in memory.
+- Personalize suggestions around buy more, hold, sell, diversify, reduce exposure, and sector balance.
+- Add stock detail pages with historical analysis.
+- Add user preferences for risk tolerance, sectors of interest, excluded tickers, and investment style.
+- Keep execution manual; Stockara recommends and explains, while the user decides.
+
+Phase 3: Demo trading league
+
+- Promise: publicly show how the recommendations perform over time.
+- Launch 100 superhero-named demo accounts that each start with exactly `$10,000.00`.
+- Execute daily demo trades from AI recommendations with 1% commission on every transaction.
+- Publish unauthenticated leaderboard, account detail, performance, holdings, and transaction-history pages.
+- Use the demo league as both a validation loop and a public product surface.
+
+Phase 4: Intraday intelligence
+
+- Promise: react to meaningful market and news changes during the trading day.
+- Increase data and news collection frequency.
+- Add intraday recommendation refreshes.
+- Detect price breakouts, sudden news volume, recommendation flips, and risk changes.
+- Add alerts for important changes, such as a holding changing from `HOLD` to `SELL` or a strong `BUY` appearing in a preferred sector.
+- Avoid turning the product into a high-frequency day-trading tool; focus on meaningful changes and explainability.
+
+Phase 5: Strategy and backtesting
+
+- Promise: help users trust, compare, and tune the recommendation system.
+- Backtest recommendation strategies against historical data.
+- Compare AI picks against relevant benchmarks.
+- Show win rate, drawdown, volatility, and sector performance over time.
+- Add strategy profiles such as conservative, balanced, aggressive, income, and growth.
+- Use demo trading results as a visible credibility signal.
+
+Phase 6: Automation and premium layer
+
+- Promise: make Stockara a reliable investment assistant worth returning to.
+- Add advanced alerts, personalized reports, and multi-portfolio support.
+- Explore tax-aware or account-type-aware suggestions when the core recommendation quality is proven.
+- Consider broker integration only after the product has earned enough user trust.
+- Reserve premium tiers for higher frequency, deeper personalization, stronger alerting, and advanced analytics.
+
 ## Product Experimentation
 
 ### Add Alpha/Beta Channels for AI Stock Analysis

@@ -122,3 +122,21 @@ jobs:
           api_url="$(python -c "import json; data=json.load(open('cdk-outputs.json')); print(next(outputs['ApiUrl'] for outputs in data.values() if 'ApiUrl' in outputs))")"
           curl --fail --silent --show-error "${api_url%/}/api/health"
         working-directory: infrastructure
+
+      - name: Smoke test static artifacts when present
+        run: |
+          bucket="$(python -c "import json; data=json.load(open('cdk-outputs.json')); print(next((outputs['BucketName'] for outputs in data.values() if 'BucketName' in outputs), ''))")"
+          if [[ -z "$bucket" ]]; then
+            echo "No frontend bucket output found; skipping static artifact smoke test."
+            exit 0
+          fi
+
+          for key in top-picks/latest.json sell-alerts/latest.json; do
+            if aws s3api head-object --bucket "$bucket" --key "$key" >/dev/null 2>&1; then
+              aws s3 cp "s3://$bucket/$key" - | python -m json.tool >/dev/null
+              echo "Validated $key"
+            else
+              echo "$key not published yet; skipping validation."
+            fi
+          done
+        working-directory: infrastructure

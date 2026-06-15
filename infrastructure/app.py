@@ -7,7 +7,6 @@ import aws_cdk as cdk
 
 from stacks.api_stack import ApiStack
 from stacks.database_stack import DatabaseStack
-from stacks.demo_trading_stack import DemoTradingStack
 from stacks.frontend_stack import FrontendStack
 from stacks.monitoring_stack import MonitoringStack
 from stacks.naming import sanitize_stage, stack_id
@@ -36,31 +35,24 @@ database_stack = DatabaseStack(
     deployment_stage=deployment_stage,
     env=env,
 )
-api_stack = ApiStack(
-    app,
-    stack_id("StockMonitoringApi", deployment_stage),
-    data_table=database_stack.table,
-    user_pool=database_stack.user_pool,
-    user_pool_client=database_stack.user_pool_client,
-    deployment_stage=deployment_stage,
-    env=env,
-)
 frontend_stack = FrontendStack(
     app,
     stack_id("StockMonitoringFrontend", deployment_stage),
     deployment_stage=deployment_stage,
     env=env,
 )
-monitoring_stack = MonitoringStack(
+api_stack = ApiStack(
     app,
-    stack_id("StockMonitoringMonitoring", deployment_stage),
+    stack_id("StockMonitoringApi", deployment_stage),
+    data_table=database_stack.table,
+    artifact_bucket=frontend_stack.site_bucket,
     deployment_stage=deployment_stage,
     env=env,
 )
-demo_trading_stack = DemoTradingStack(
+api_stack.add_dependency(frontend_stack)
+monitoring_stack = MonitoringStack(
     app,
-    stack_id("StockMonitoringDemoTrading", deployment_stage),
-    data_table=database_stack.table,
+    stack_id("StockMonitoringMonitoring", deployment_stage),
     deployment_stage=deployment_stage,
     env=env,
 )
