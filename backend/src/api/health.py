@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 import structlog
 
-from backend.src.db.connection import store
+from src.db.connection import store
 
 logger = structlog.get_logger(__name__)
 

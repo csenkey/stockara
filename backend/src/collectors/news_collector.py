@@ -15,7 +15,7 @@ import boto3
 import structlog
 from openai import OpenAI
 
-from backend.src.db.connection import DatabasePool, store
+from src.db.connection import DatabasePool, store
 
 logger = structlog.get_logger(__name__)
 

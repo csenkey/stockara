@@ -3,6 +3,7 @@
 import os
 
 from aws_cdk import (
+    BundlingOptions,
     CfnOutput,
     Duration,
     Stack,
@@ -76,6 +77,17 @@ class ApiStack(Stack):
             "STOCKARA_ARTIFACT_BUCKET": artifact_bucket.bucket_name,
             "DEPLOYMENT_STAGE": deployment_stage,
         }
+        backend_code = _lambda.Code.from_asset(
+            BACKEND_ASSET_PATH,
+            bundling=BundlingOptions(
+                image=_lambda.Runtime.PYTHON_3_12.bundling_image,
+                command=[
+                    "bash",
+                    "-c",
+                    "pip install -r requirements.txt -t /asset-output && cp -au . /asset-output",
+                ],
+            ),
+        )
 
         self.stock_collector_fn = _lambda.Function(
             self,
@@ -87,7 +99,7 @@ class ApiStack(Stack):
             ),
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="src.collectors.stock_collector.handler",
-            code=_lambda.Code.from_asset(BACKEND_ASSET_PATH),
+            code=backend_code,
             memory_size=512,
             timeout=Duration.minutes(15),
             role=batch_role,
@@ -105,7 +117,7 @@ class ApiStack(Stack):
             ),
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="src.collectors.news_collector.handler",
-            code=_lambda.Code.from_asset(BACKEND_ASSET_PATH),
+            code=backend_code,
             memory_size=256,
             timeout=Duration.minutes(5),
             role=batch_role,
@@ -123,7 +135,7 @@ class ApiStack(Stack):
             ),
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="src.analysis.ai_analyzer.handler",
-            code=_lambda.Code.from_asset(BACKEND_ASSET_PATH),
+            code=backend_code,
             memory_size=1024,
             timeout=Duration.minutes(15),
             role=batch_role,
@@ -141,7 +153,7 @@ class ApiStack(Stack):
             ),
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="src.api.handler.handler",
-            code=_lambda.Code.from_asset(BACKEND_ASSET_PATH),
+            code=backend_code,
             memory_size=256,
             timeout=Duration.seconds(15),
             role=api_role,

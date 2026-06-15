@@ -3,7 +3,7 @@
 from fastapi import FastAPI
 from mangum import Mangum
 
-from backend.src.api.health import router as health_router
+from src.api.health import router as health_router
 
 app = FastAPI(
     title="Stockara Phase 1",

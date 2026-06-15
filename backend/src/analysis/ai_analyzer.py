@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from backend.src.analysis.phase1_pipeline import run_phase1_pipeline
+from src.analysis.phase1_pipeline import run_phase1_pipeline
 
 
 def handler(event: dict, context: Any) -> dict:
