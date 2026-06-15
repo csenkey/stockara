@@ -81,7 +81,7 @@ jobs:
         working-directory: backend
 
       - name: Install frontend dependencies
-        run: npm ci --no-audit --no-fund --prefer-online
+        run: npm install --package-lock=false --no-audit --no-fund --prefer-online
         working-directory: frontend
 
       - name: Lint frontend
