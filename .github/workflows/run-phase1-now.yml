@@ -91,8 +91,10 @@ jobs:
           aws lambda invoke \
             --function-name "$STOCK_COLLECTOR_FN" \
             --payload '{"max_tickers":${{ inputs.stock_max_tickers }}}' \
+            --log-type Tail \
             --cli-binary-format raw-in-base64-out \
             stock-response.json > stock-invoke.json
+          python -c "import base64, json; meta=json.load(open('stock-invoke.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
           python -c "import json, sys; meta=json.load(open('stock-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
           cat stock-response.json
           python -m json.tool stock-response.json
@@ -104,8 +106,10 @@ jobs:
           aws lambda invoke \
             --function-name "$NEWS_COLLECTOR_FN" \
             --payload '{}' \
+            --log-type Tail \
             --cli-binary-format raw-in-base64-out \
             news-response.json > news-invoke.json
+          python -c "import base64, json; meta=json.load(open('news-invoke.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
           python -c "import json, sys; meta=json.load(open('news-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
           cat news-response.json
           python -m json.tool news-response.json
@@ -117,8 +121,10 @@ jobs:
           aws lambda invoke \
             --function-name "$EARNINGS_COLLECTOR_FN" \
             --payload '{"max_tickers":${{ inputs.earnings_max_tickers }}}' \
+            --log-type Tail \
             --cli-binary-format raw-in-base64-out \
             earnings-response.json > earnings-invoke.json
+          python -c "import base64, json; meta=json.load(open('earnings-invoke.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
           python -c "import json, sys; meta=json.load(open('earnings-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
           cat earnings-response.json
           python -m json.tool earnings-response.json
@@ -130,8 +136,10 @@ jobs:
           aws lambda invoke \
             --function-name "$DIVIDEND_COLLECTOR_FN" \
             --payload '{"max_tickers":${{ inputs.dividend_max_tickers }}}' \
+            --log-type Tail \
             --cli-binary-format raw-in-base64-out \
             dividend-response.json > dividend-invoke.json
+          python -c "import base64, json; meta=json.load(open('dividend-invoke.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
           python -c "import json, sys; meta=json.load(open('dividend-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
           cat dividend-response.json
           python -m json.tool dividend-response.json
@@ -144,8 +152,10 @@ jobs:
           aws lambda invoke \
             --function-name "$PUBLISHER_FN" \
             --payload '{}' \
+            --log-type Tail \
             --cli-binary-format raw-in-base64-out \
             publisher-response.json > publisher-invoke.json
+          python -c "import base64, json; meta=json.load(open('publisher-invoke.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
           python -c "import json, sys; meta=json.load(open('publisher-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
           cat publisher-response.json
           python -m json.tool publisher-response.json
