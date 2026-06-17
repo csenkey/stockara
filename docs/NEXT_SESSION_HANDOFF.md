@@ -10,7 +10,7 @@ Operational update 2026-06-17:
 - The workflow invokes the deployed stock, news, earnings, dividend, and optionally publisher Lambdas in order and prints Lambda tail logs.
 - A production diagnostic run proved invocation worked, but stock collection produced no data because yfinance/Yahoo returned empty JSON/429-style provider failures and Alpha Vantage was not configured.
 - The same run exposed a DynamoDB write bug: collection summaries containing Python floats failed with `Float types are not supported. Use Decimal types instead.`
-- The collector now preserves summary numerics as DynamoDB-safe `Decimal` values and includes a keyless Stooq daily CSV fallback that stores a bounded recent history window per ticker.
+- The collector now preserves summary numerics as DynamoDB-safe `Decimal` values and includes a keyless Nasdaq historical-data fallback that stores a bounded recent history window per ticker. Stooq remains a last fallback only; it now rejects JavaScript verification pages.
 - If top picks are still empty after deployment, run **Run Phase 1 Pipeline Now** with `stock_max_tickers=25` and inspect the stock collector tail logs first. AWS Console test events are still useful for isolated Lambda debugging, but they should not be the default runbook path.
 
 ## Context
@@ -88,7 +88,7 @@ Collector logic now:
 - Fetches never-collected tickers with `period=5y`.
 - Fetches previously collected tickers with `period=10d`.
 - Uses small yfinance batches with `threads=False`, retry/backoff, and a pause between batches.
-- Uses Alpha Vantage as a configured fallback and Stooq as a no-key daily CSV fallback for failed tickers.
+- Uses Alpha Vantage as a configured fallback, Nasdaq as the first no-key recent-history fallback, and Stooq as a last opportunistic CSV fallback for failed tickers.
 
 The EventBridge stock collector schedule was changed to every 15 minutes with `{"max_tickers": 25}`. At that pace, the first 1000-ticker historical fill should complete in roughly 40 runs, about 10 hours, without one giant Lambda invocation.
 
@@ -199,7 +199,7 @@ Useful alternatives discussed:
 - Financial Modeling Prep: free Basic around 250 calls/day; Starter around $22/month annually and includes 5 years of historical data.
 - Finnhub: has free and paid market-data APIs.
 
-Recommended direction: keep yfinance as opportunistic primary for now, use Stooq as the no-key daily EOD fallback, and use Alpha Vantage only as a narrow fallback unless paid.
+Recommended direction: keep yfinance as opportunistic primary for now, use Nasdaq as the first no-key recent-history fallback, keep Stooq opportunistic only because it can return JavaScript verification pages, and use Alpha Vantage only as a narrow fallback unless paid.
 
 ## Important Caveats
 

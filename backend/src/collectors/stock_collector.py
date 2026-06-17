@@ -25,7 +25,14 @@ logger = structlog.get_logger(__name__)
 # Configuration
 ALPHA_VANTAGE_API_KEY = os.environ.get("ALPHA_VANTAGE_API_KEY", "")
 ALPHA_VANTAGE_BASE_URL = "https://www.alphavantage.co/query"
+NASDAQ_HISTORICAL_BASE_URL = os.environ.get(
+    "NASDAQ_HISTORICAL_BASE_URL",
+    "https://api.nasdaq.com/api/quote/{ticker}/historical",
+)
 STOOQ_BASE_URL = os.environ.get("STOOQ_BASE_URL", "https://stooq.com/q/d/l/")
+NASDAQ_MAX_RECORDS_PER_TICKER = int(
+    os.environ.get("NASDAQ_MAX_RECORDS_PER_TICKER", "90")
+)
 STOOQ_MAX_RECORDS_PER_TICKER = int(os.environ.get("STOOQ_MAX_RECORDS_PER_TICKER", "90"))
 DEFAULT_MARKET_DATA_CURRENCY = os.environ.get("STOCK_DATA_DEFAULT_CURRENCY", "USD")
 BATCH_SIZE = int(os.environ.get("STOCK_COLLECTOR_BATCH_SIZE", "5"))
@@ -159,6 +166,17 @@ def handler(event: dict, context: Any) -> dict:
             duplicate_count += fallback_result.duplicate_records
             collected_tickers.update(fallback_succeeded)
             remaining_tickers = sorted(set(failed_tickers) - fallback_succeeded)
+
+            if remaining_tickers:
+                nasdaq_result, nasdaq_succeeded = _nasdaq_fallback_with_details(
+                    remaining_tickers,
+                    stock_metadata_by_ticker=stock_metadata_by_ticker,
+                )
+                collected_count += nasdaq_result.inserted_records
+                duplicate_count += nasdaq_result.duplicate_records
+                fallback_succeeded.update(nasdaq_succeeded)
+                collected_tickers.update(nasdaq_succeeded)
+                remaining_tickers = sorted(set(failed_tickers) - fallback_succeeded)
 
             if remaining_tickers:
                 stooq_result, stooq_succeeded = _stooq_fallback_with_details(
@@ -914,6 +932,30 @@ def _alpha_vantage_fallback_with_details(
     return result, successful_tickers
 
 
+def _nasdaq_fallback_with_details(
+    tickers: list[str],
+    stock_metadata_by_ticker: dict[str, dict[str, Any]] | None = None,
+) -> tuple[StoreResult, set[str]]:
+    """Attempt no-key Nasdaq historical-data fallback."""
+    result = StoreResult()
+    successful_tickers: set[str] = set()
+
+    for ticker in tickers:
+        records = _fetch_nasdaq_with_retry(
+            ticker,
+            stock_metadata=(stock_metadata_by_ticker or {}).get(ticker),
+        )
+        if records:
+            stored = _store_records(records)
+            result.inserted_records += stored.inserted_records
+            result.duplicate_records += stored.duplicate_records
+            result.failed_records += stored.failed_records
+            if stored.inserted_records > 0 or stored.duplicate_records > 0:
+                successful_tickers.add(ticker)
+
+    return result, successful_tickers
+
+
 def _stooq_fallback_with_details(
     tickers: list[str],
     stock_metadata_by_ticker: dict[str, dict[str, Any]] | None = None,
@@ -1010,6 +1052,162 @@ def _fetch_alpha_vantage_with_retry(
     return None
 
 
+def _fetch_nasdaq_with_retry(
+    ticker: str,
+    stock_metadata: dict[str, Any] | None = None,
+) -> list[dict] | None:
+    """Fetch recent daily OHLCV records from Nasdaq's historical endpoint."""
+    backoff = INITIAL_BACKOFF_SECONDS
+    today = date.today()
+    from_date = today - timedelta(days=120)
+    url = NASDAQ_HISTORICAL_BASE_URL.format(ticker=ticker.upper())
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            log = logger.bind(ticker=ticker, attempt=attempt, provider="nasdaq")
+            log.info("nasdaq_fetch_attempt")
+            response = requests.get(
+                url,
+                params={
+                    "assetclass": "stocks",
+                    "fromdate": from_date.isoformat(),
+                    "todate": today.isoformat(),
+                    "limit": NASDAQ_MAX_RECORDS_PER_TICKER,
+                },
+                headers={
+                    "Accept": "application/json",
+                    "User-Agent": "Mozilla/5.0 Stockara/1.0",
+                },
+                timeout=30,
+            )
+            response.raise_for_status()
+            records = _parse_nasdaq_response(
+                ticker,
+                response.json(),
+                stock_metadata=stock_metadata,
+            )
+            if records:
+                log.info("nasdaq_fetch_success")
+                return records
+            log.warning("nasdaq_no_data")
+
+        except (requests.exceptions.RequestException, ValueError) as e:
+            logger.warning(
+                "nasdaq_request_failed",
+                ticker=ticker,
+                attempt=attempt,
+                error=str(e),
+            )
+
+        if attempt < MAX_RETRIES:
+            logger.info("nasdaq_retry_backoff", wait_seconds=backoff)
+            time.sleep(backoff)
+            backoff *= 2
+
+    logger.error("nasdaq_all_retries_exhausted", ticker=ticker)
+    return None
+
+
+def _parse_nasdaq_response(
+    ticker: str,
+    data: dict[str, Any],
+    stock_metadata: dict[str, Any] | None = None,
+) -> list[dict] | None:
+    rows = (
+        data.get("data", {})
+        .get("tradesTable", {})
+        .get("rows", [])
+    )
+    if not rows:
+        return None
+
+    records: list[dict] = []
+    for row in rows[:NASDAQ_MAX_RECORDS_PER_TICKER]:
+        record = _parse_nasdaq_record(ticker, row, stock_metadata=stock_metadata)
+        if record:
+            records.append(record)
+    return records or None
+
+
+def _parse_nasdaq_record(
+    ticker: str,
+    values: dict[str, Any],
+    stock_metadata: dict[str, Any] | None = None,
+) -> dict | None:
+    try:
+        record_date = datetime.strptime(str(values.get("date", "")), "%m/%d/%Y").date()
+        open_price = _to_decimal(_strip_market_value(values.get("open")))
+        high_price = _to_decimal(_strip_market_value(values.get("high")))
+        low_price = _to_decimal(_strip_market_value(values.get("low")))
+        close_price = _to_decimal(_strip_market_value(values.get("close")))
+        volume = int(_strip_market_value(values.get("volume")) or 0)
+
+        if any(p is None for p in [open_price, high_price, low_price, close_price]):
+            logger.warning(
+                "nasdaq_malformed_record",
+                ticker=ticker,
+                trading_date=str(values.get("date")),
+            )
+            return None
+
+        if any(p <= 0 for p in [open_price, high_price, low_price, close_price]):
+            logger.warning(
+                "nasdaq_invalid_prices",
+                ticker=ticker,
+                trading_date=str(values.get("date")),
+            )
+            return None
+
+        if volume < 0:
+            logger.warning(
+                "nasdaq_invalid_volume",
+                ticker=ticker,
+                trading_date=str(values.get("date")),
+            )
+            return None
+
+        return {
+            "ticker": ticker,
+            "trading_date": record_date,
+            "open_price": open_price,
+            "high_price": high_price,
+            "low_price": low_price,
+            "close_price": close_price,
+            "volume": volume,
+            "data_provider": "nasdaq",
+            "provider_symbol": ticker.upper(),
+            "provider_endpoint": "api/quote/{ticker}/historical",
+            "provider_priority": "fallback",
+            "price_adjustment": "unadjusted",
+            "adjusted_close_price": None,
+            "has_adjusted_close": False,
+            "corporate_action_adjusted": False,
+            "adjustment_context": "raw_ohlcv_only",
+            "split_dividend_adjustment": "not_available",
+            "currency": _metadata_value(
+                stock_metadata,
+                "currency",
+                DEFAULT_MARKET_DATA_CURRENCY,
+            ),
+            "exchange": _metadata_value(stock_metadata, "exchange"),
+            "fetch_period": "nasdaq_recent",
+            **_fetch_window("compact"),
+        }
+
+    except (ValueError, TypeError) as e:
+        logger.warning(
+            "nasdaq_parse_failed",
+            ticker=ticker,
+            values=values,
+            error=str(e),
+        )
+        return None
+
+
+def _strip_market_value(value: Any) -> str:
+    return str(value or "").replace("$", "").replace(",", "").strip()
+
+
 def _fetch_stooq_with_retry(
     ticker: str,
     stock_metadata: dict[str, Any] | None = None,
@@ -1079,6 +1277,10 @@ def _parse_stooq_csv(
     try:
         import csv
         from io import StringIO
+
+        if "<html" in csv_text.lower() or "requires javascript" in csv_text.lower():
+            logger.warning("stooq_challenge_page_returned", ticker=ticker)
+            return None
 
         rows = list(csv.DictReader(StringIO(csv_text.strip())))
         if not rows:

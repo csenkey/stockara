@@ -32,7 +32,10 @@ from backend.src.collectors.stock_collector import (
     _store_records,
     _alpha_vantage_fallback,
     _fetch_alpha_vantage_with_retry,
+    _fetch_nasdaq_with_retry,
     _fetch_stooq_with_retry,
+    _nasdaq_fallback_with_details,
+    _parse_nasdaq_response,
     _parse_stooq_csv,
     _stooq_fallback_with_details,
     _stooq_symbol,
@@ -775,14 +778,111 @@ class TestFetchAlphaVantageWithRetry:
         mock_sleep.assert_called_once_with(2)
 
 
-# --- Tests for Stooq fallback ---
+# --- Tests for no-key market data fallbacks ---
 
-class TestStooqFallback:
-    """Tests for no-key Stooq market data fallback."""
+class TestNoKeyMarketDataFallbacks:
+    """Tests for no-key market data fallback providers."""
+
+    def test_parse_nasdaq_response_returns_recent_rows_with_provenance(self):
+        payload = {
+            "data": {
+                "tradesTable": {
+                    "rows": [
+                        {
+                            "date": "06/16/2026",
+                            "close": "$299.24",
+                            "volume": "39,874,400",
+                            "open": "$295.245",
+                            "high": "$300.48",
+                            "low": "$293.97",
+                        },
+                        {
+                            "date": "06/15/2026",
+                            "close": "$296.42",
+                            "volume": "45,732,570",
+                            "open": "$294.12",
+                            "high": "$297.78",
+                            "low": "$291.70",
+                        },
+                    ]
+                }
+            }
+        }
+
+        result = _parse_nasdaq_response(
+            "AAPL",
+            payload,
+            stock_metadata={"exchange": "NASDAQ", "currency": "USD"},
+        )
+
+        assert result is not None
+        assert len(result) == 2
+        assert result[0]["trading_date"] == date(2026, 6, 16)
+        assert result[0]["close_price"] == Decimal("299.24")
+        assert result[0]["volume"] == 39874400
+        assert result[0]["data_provider"] == "nasdaq"
+        assert result[0]["provider_symbol"] == "AAPL"
+        assert result[0]["provider_priority"] == "fallback"
+        assert result[0]["exchange"] == "NASDAQ"
+        assert result[0]["currency"] == "USD"
+        assert result[0]["fetch_period"] == "nasdaq_recent"
+
+    @patch("backend.src.collectors.stock_collector.time.sleep")
+    @patch("backend.src.collectors.stock_collector.requests.get")
+    def test_fetch_nasdaq_with_retry_success(self, mock_get, mock_sleep):
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "data": {
+                "tradesTable": {
+                    "rows": [
+                        {
+                            "date": "06/16/2026",
+                            "close": "$299.24",
+                            "volume": "39,874,400",
+                            "open": "$295.245",
+                            "high": "$300.48",
+                            "low": "$293.97",
+                        }
+                    ]
+                }
+            }
+        }
+        mock_response.raise_for_status = MagicMock()
+        mock_get.return_value = mock_response
+
+        result = _fetch_nasdaq_with_retry("AAPL", {"exchange": "NASDAQ"})
+
+        assert result is not None
+        assert result[0]["ticker"] == "AAPL"
+        assert result[0]["data_provider"] == "nasdaq"
+        mock_get.assert_called_once()
+        assert mock_get.call_args.kwargs["params"]["assetclass"] == "stocks"
+        assert mock_get.call_args.kwargs["headers"]["Accept"] == "application/json"
+        mock_sleep.assert_not_called()
+
+    @patch("backend.src.collectors.stock_collector._store_records")
+    @patch("backend.src.collectors.stock_collector._fetch_nasdaq_with_retry")
+    def test_nasdaq_fallback_returns_successful_tickers(self, mock_fetch, mock_store):
+        mock_fetch.side_effect = [[{"ticker": "AAPL"}], None]
+        mock_store.return_value = StoreResult(inserted_records=2)
+
+        result, succeeded = _nasdaq_fallback_with_details(["AAPL", "MSFT"])
+
+        assert result.inserted_records == 2
+        assert succeeded == {"AAPL"}
 
     def test_stooq_symbol_uses_us_suffix_for_us_exchanges(self):
         assert _stooq_symbol("AAPL", {"exchange": "NASDAQ"}) == "aapl.us"
         assert _stooq_symbol("BRK.B", {"exchange": "NYSE"}) == "brk-b.us"
+
+    def test_parse_stooq_csv_rejects_challenge_page(self):
+        result = _parse_stooq_csv(
+            "AAPL",
+            "aapl.us",
+            "<html><body>This site requires JavaScript to verify your browser.</body></html>",
+        )
+
+        assert result is None
 
     def test_parse_stooq_csv_returns_recent_window_with_provenance(self):
         csv_text = (

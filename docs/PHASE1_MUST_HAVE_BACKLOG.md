@@ -102,7 +102,7 @@ The items below are must-have gaps to close before treating Phase 1 recommendati
 - Provider fallback records are distinguishable from primary-provider records.
 - Tests verify stored provenance for yfinance and fallback providers.
 
-**Implemented policy:** Stored OHLCV records include `data_provider`, `provider_symbol`, `provider_endpoint`, `provider_priority`, `price_adjustment`, adjusted-close availability, corporate-action adjustment context, split/dividend adjustment context, exchange, currency, fetch period, and fetch window. Yfinance records are marked as primary unadjusted OHLCV with adjusted close retained when available. Alpha Vantage and Stooq records are marked as fallback unadjusted OHLCV without adjusted close. Stooq provides a no-key daily CSV fallback and stores a bounded recent history window for first-run analysis coverage. Analysis prefers `adjusted_close_price` when available and otherwise uses raw `close_price`.
+**Implemented policy:** Stored OHLCV records include `data_provider`, `provider_symbol`, `provider_endpoint`, `provider_priority`, `price_adjustment`, adjusted-close availability, corporate-action adjustment context, split/dividend adjustment context, exchange, currency, fetch period, and fetch window. Yfinance records are marked as primary unadjusted OHLCV with adjusted close retained when available. Alpha Vantage, Nasdaq, and Stooq records are marked as fallback unadjusted OHLCV without adjusted close. Nasdaq provides the first no-key recent-history fallback for first-run analysis coverage; Stooq remains an opportunistic CSV fallback and challenge pages are rejected. Analysis prefers `adjusted_close_price` when available and otherwise uses raw `close_price`.
 
 **References:**
 

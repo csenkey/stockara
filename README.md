@@ -119,6 +119,7 @@ Published artifacts:
 | `NEWSAPI_KEY` | Optional NewsAPI key |
 | `FINNHUB_KEY` | Optional Finnhub key |
 | `ALPHA_VANTAGE_API_KEY` | Optional Alpha Vantage fallback key |
+| `NASDAQ_MAX_RECORDS_PER_TICKER` | Optional Nasdaq fallback history cap, default `90` |
 | `STOOQ_MAX_RECORDS_PER_TICKER` | Optional Stooq fallback history cap, default `90` |
 | `AWS_REGION` | AWS deployment region |
 
