@@ -32,6 +32,10 @@ from backend.src.collectors.stock_collector import (
     _store_records,
     _alpha_vantage_fallback,
     _fetch_alpha_vantage_with_retry,
+    _fetch_stooq_with_retry,
+    _parse_stooq_csv,
+    _stooq_fallback_with_details,
+    _stooq_symbol,
 )
 
 
@@ -769,6 +773,73 @@ class TestFetchAlphaVantageWithRetry:
         result = _fetch_alpha_vantage_with_retry("AAPL")
         assert result is not None
         mock_sleep.assert_called_once_with(2)
+
+
+# --- Tests for Stooq fallback ---
+
+class TestStooqFallback:
+    """Tests for no-key Stooq market data fallback."""
+
+    def test_stooq_symbol_uses_us_suffix_for_us_exchanges(self):
+        assert _stooq_symbol("AAPL", {"exchange": "NASDAQ"}) == "aapl.us"
+        assert _stooq_symbol("BRK.B", {"exchange": "NYSE"}) == "brk-b.us"
+
+    def test_parse_stooq_csv_returns_recent_window_with_provenance(self):
+        csv_text = (
+            "Date,Open,High,Low,Close,Volume\n"
+            "2025-01-13,148.0,152.0,147.0,151.0,900000\n"
+            "2025-01-14,151.0,154.0,150.0,152.0,950000\n"
+            "2025-01-15,150.0,155.0,149.0,153.0,1000000\n"
+        )
+
+        result = _parse_stooq_csv(
+            "AAPL",
+            "aapl.us",
+            csv_text,
+            stock_metadata={"exchange": "NASDAQ", "currency": "USD"},
+        )
+
+        assert result is not None
+        assert len(result) == 3
+        assert result[0]["trading_date"] == date(2025, 1, 15)
+        assert result[0]["close_price"] == Decimal("153.0")
+        assert result[0]["data_provider"] == "stooq"
+        assert result[0]["provider_symbol"] == "aapl.us"
+        assert result[0]["provider_priority"] == "fallback"
+        assert result[0]["exchange"] == "NASDAQ"
+        assert result[0]["currency"] == "USD"
+        assert result[0]["fetch_period"] == "stooq_daily"
+
+    @patch("backend.src.collectors.stock_collector.time.sleep")
+    @patch("backend.src.collectors.stock_collector.requests.get")
+    def test_fetch_stooq_with_retry_success(self, mock_get, mock_sleep):
+        mock_response = MagicMock()
+        mock_response.text = (
+            "Date,Open,High,Low,Close,Volume\n"
+            "2025-01-15,150.0,155.0,149.0,153.0,1000000\n"
+        )
+        mock_response.raise_for_status = MagicMock()
+        mock_get.return_value = mock_response
+
+        result = _fetch_stooq_with_retry("AAPL", {"exchange": "NASDAQ"})
+
+        assert result is not None
+        assert result[0]["ticker"] == "AAPL"
+        assert result[0]["data_provider"] == "stooq"
+        mock_get.assert_called_once()
+        assert mock_get.call_args.kwargs["params"] == {"s": "aapl.us", "i": "d"}
+        mock_sleep.assert_not_called()
+
+    @patch("backend.src.collectors.stock_collector._store_records")
+    @patch("backend.src.collectors.stock_collector._fetch_stooq_with_retry")
+    def test_stooq_fallback_returns_successful_tickers(self, mock_fetch, mock_store):
+        mock_fetch.side_effect = [[{"ticker": "AAPL"}], None]
+        mock_store.return_value = StoreResult(inserted_records=2)
+
+        result, succeeded = _stooq_fallback_with_details(["AAPL", "MSFT"])
+
+        assert result.inserted_records == 2
+        assert succeeded == {"AAPL"}
 
 
 # --- Tests for handler ---

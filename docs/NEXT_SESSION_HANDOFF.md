@@ -2,7 +2,16 @@
 
 Date: 2026-06-16
 
-Update 2026-06-17: This handoff is historical. The worktree was later verified clean on branch `codex/phase1-static-metadata`; do not assume the "Current Local Changes" section below still describes uncommitted files. The verified open Phase 1 blocker is still seed metadata completeness: `data/watchlist_seed.csv` has 100 rows with required metadata gaps. Provider provenance for market data has since been implemented and documented in `docs/PHASE1_MUST_HAVE_BACKLOG.md`.
+Update 2026-06-17: This handoff is historical. The worktree was later verified clean on branch `codex/phase1-static-metadata`; do not assume the "Current Local Changes" section below still describes uncommitted files. The verified open Phase 1 blocker is still seed metadata completeness: `data/watchlist_seed.csv` has 100 rows with required metadata gaps. Provider provenance for market data and collection completeness tracking have since been implemented and documented in `docs/PHASE1_MUST_HAVE_BACKLOG.md`.
+
+Operational update 2026-06-17:
+
+- The manual GitHub Actions workflow **Run Phase 1 Pipeline Now** exists and should be preferred over AWS Console Lambda test events for normal production backfill/diagnostics.
+- The workflow invokes the deployed stock, news, earnings, dividend, and optionally publisher Lambdas in order and prints Lambda tail logs.
+- A production diagnostic run proved invocation worked, but stock collection produced no data because yfinance/Yahoo returned empty JSON/429-style provider failures and Alpha Vantage was not configured.
+- The same run exposed a DynamoDB write bug: collection summaries containing Python floats failed with `Float types are not supported. Use Decimal types instead.`
+- The collector now preserves summary numerics as DynamoDB-safe `Decimal` values and includes a keyless Stooq daily CSV fallback that stores a bounded recent history window per ticker.
+- If top picks are still empty after deployment, run **Run Phase 1 Pipeline Now** with `stock_max_tickers=25` and inspect the stock collector tail logs first. AWS Console test events are still useful for isolated Lambda debugging, but they should not be the default runbook path.
 
 ## Context
 
@@ -79,7 +88,7 @@ Collector logic now:
 - Fetches never-collected tickers with `period=5y`.
 - Fetches previously collected tickers with `period=10d`.
 - Uses small yfinance batches with `threads=False`, retry/backoff, and a pause between batches.
-- Uses Alpha Vantage as a fallback only for failed tickers.
+- Uses Alpha Vantage as a configured fallback and Stooq as a no-key daily CSV fallback for failed tickers.
 
 The EventBridge stock collector schedule was changed to every 15 minutes with `{"max_tickers": 25}`. At that pace, the first 1000-ticker historical fill should complete in roughly 40 runs, about 10 hours, without one giant Lambda invocation.
 
@@ -190,7 +199,7 @@ Useful alternatives discussed:
 - Financial Modeling Prep: free Basic around 250 calls/day; Starter around $22/month annually and includes 5 years of historical data.
 - Finnhub: has free and paid market-data APIs.
 
-Recommended direction: keep yfinance as opportunistic primary for now, add Stooq or FMP as daily EOD fallback, and use Alpha Vantage only as a narrow fallback unless paid.
+Recommended direction: keep yfinance as opportunistic primary for now, use Stooq as the no-key daily EOD fallback, and use Alpha Vantage only as a narrow fallback unless paid.
 
 ## Important Caveats
 

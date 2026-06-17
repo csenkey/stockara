@@ -25,6 +25,8 @@ logger = structlog.get_logger(__name__)
 # Configuration
 ALPHA_VANTAGE_API_KEY = os.environ.get("ALPHA_VANTAGE_API_KEY", "")
 ALPHA_VANTAGE_BASE_URL = "https://www.alphavantage.co/query"
+STOOQ_BASE_URL = os.environ.get("STOOQ_BASE_URL", "https://stooq.com/q/d/l/")
+STOOQ_MAX_RECORDS_PER_TICKER = int(os.environ.get("STOOQ_MAX_RECORDS_PER_TICKER", "90"))
 DEFAULT_MARKET_DATA_CURRENCY = os.environ.get("STOCK_DATA_DEFAULT_CURRENCY", "USD")
 BATCH_SIZE = int(os.environ.get("STOCK_COLLECTOR_BATCH_SIZE", "5"))
 MAX_TICKERS_PER_RUN = int(os.environ.get("STOCK_COLLECTOR_MAX_TICKERS", "25"))
@@ -146,9 +148,9 @@ def handler(event: dict, context: Any) -> dict:
                 if YFINANCE_BATCH_PAUSE_SECONDS > 0:
                     time.sleep(YFINANCE_BATCH_PAUSE_SECONDS)
 
-        # Attempt Alpha Vantage fallback for failed tickers
+        # Attempt fallback providers for failed tickers
         if failed_tickers:
-            log.info("alpha_vantage_fallback_starting", failed_count=len(failed_tickers))
+            log.info("market_data_fallback_starting", failed_count=len(failed_tickers))
             fallback_result, fallback_succeeded = _alpha_vantage_fallback_with_details(
                 failed_tickers,
                 stock_metadata_by_ticker=stock_metadata_by_ticker,
@@ -156,6 +158,18 @@ def handler(event: dict, context: Any) -> dict:
             collected_count += fallback_result.inserted_records
             duplicate_count += fallback_result.duplicate_records
             collected_tickers.update(fallback_succeeded)
+            remaining_tickers = sorted(set(failed_tickers) - fallback_succeeded)
+
+            if remaining_tickers:
+                stooq_result, stooq_succeeded = _stooq_fallback_with_details(
+                    remaining_tickers,
+                    stock_metadata_by_ticker=stock_metadata_by_ticker,
+                )
+                collected_count += stooq_result.inserted_records
+                duplicate_count += stooq_result.duplicate_records
+                fallback_succeeded.update(stooq_succeeded)
+                collected_tickers.update(stooq_succeeded)
+
             remaining_failures = len(set(failed_tickers) - fallback_succeeded)
 
             if remaining_failures > 0:
@@ -900,6 +914,30 @@ def _alpha_vantage_fallback_with_details(
     return result, successful_tickers
 
 
+def _stooq_fallback_with_details(
+    tickers: list[str],
+    stock_metadata_by_ticker: dict[str, dict[str, Any]] | None = None,
+) -> tuple[StoreResult, set[str]]:
+    """Attempt no-key Stooq fallback and return collected records plus successful tickers."""
+    result = StoreResult()
+    successful_tickers: set[str] = set()
+
+    for ticker in tickers:
+        records = _fetch_stooq_with_retry(
+            ticker,
+            stock_metadata=(stock_metadata_by_ticker or {}).get(ticker),
+        )
+        if records:
+            stored = _store_records(records)
+            result.inserted_records += stored.inserted_records
+            result.duplicate_records += stored.duplicate_records
+            result.failed_records += stored.failed_records
+            if stored.inserted_records > 0 or stored.duplicate_records > 0:
+                successful_tickers.add(ticker)
+
+    return result, successful_tickers
+
+
 def _fetch_alpha_vantage_with_retry(
     ticker: str,
     stock_metadata: dict[str, Any] | None = None,
@@ -970,6 +1008,174 @@ def _fetch_alpha_vantage_with_retry(
 
     logger.error("alpha_vantage_all_retries_exhausted", ticker=ticker)
     return None
+
+
+def _fetch_stooq_with_retry(
+    ticker: str,
+    stock_metadata: dict[str, Any] | None = None,
+) -> list[dict] | None:
+    """Fetch the most recent daily OHLCV record from Stooq without an API key."""
+    backoff = INITIAL_BACKOFF_SECONDS
+    provider_symbol = _stooq_symbol(ticker, stock_metadata)
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            log = logger.bind(
+                ticker=ticker,
+                provider_symbol=provider_symbol,
+                attempt=attempt,
+                provider="stooq",
+            )
+            log.info("stooq_fetch_attempt")
+
+            response = requests.get(
+                STOOQ_BASE_URL,
+                params={"s": provider_symbol, "i": "d"},
+                timeout=30,
+            )
+            response.raise_for_status()
+            records = _parse_stooq_csv(
+                ticker,
+                provider_symbol,
+                response.text,
+                stock_metadata=stock_metadata,
+            )
+            if records:
+                log.info("stooq_fetch_success")
+                return records
+            log.warning("stooq_no_data")
+
+        except requests.exceptions.RequestException as e:
+            logger.warning(
+                "stooq_request_failed",
+                ticker=ticker,
+                attempt=attempt,
+                error=str(e),
+            )
+
+        if attempt < MAX_RETRIES:
+            logger.info("stooq_retry_backoff", wait_seconds=backoff)
+            time.sleep(backoff)
+            backoff *= 2
+
+    logger.error("stooq_all_retries_exhausted", ticker=ticker)
+    return None
+
+
+def _stooq_symbol(ticker: str, stock_metadata: dict[str, Any] | None = None) -> str:
+    exchange = _metadata_value(stock_metadata, "exchange", "").upper()
+    normalized = ticker.lower().replace(".", "-")
+    if exchange in {"NYSE", "NASDAQ", "NYSEARCA", "NYSEAMERICAN", "AMEX", ""}:
+        return f"{normalized}.us"
+    return normalized
+
+
+def _parse_stooq_csv(
+    ticker: str,
+    provider_symbol: str,
+    csv_text: str,
+    stock_metadata: dict[str, Any] | None = None,
+) -> list[dict] | None:
+    try:
+        import csv
+        from io import StringIO
+
+        rows = list(csv.DictReader(StringIO(csv_text.strip())))
+        if not rows:
+            return None
+
+        records: list[dict] = []
+        for row in reversed(rows):
+            record = _parse_stooq_record(
+                ticker,
+                provider_symbol,
+                row,
+                stock_metadata=stock_metadata,
+            )
+            if record:
+                records.append(record)
+            if len(records) >= STOOQ_MAX_RECORDS_PER_TICKER:
+                break
+        return records or None
+    except csv.Error as e:
+        logger.warning("stooq_csv_parse_failed", ticker=ticker, error=str(e))
+        return None
+
+
+def _parse_stooq_record(
+    ticker: str,
+    provider_symbol: str,
+    values: dict[str, Any],
+    stock_metadata: dict[str, Any] | None = None,
+) -> dict | None:
+    try:
+        record_date = date.fromisoformat(str(values.get("Date", ""))[:10])
+        open_price = _to_decimal(values.get("Open"))
+        high_price = _to_decimal(values.get("High"))
+        low_price = _to_decimal(values.get("Low"))
+        close_price = _to_decimal(values.get("Close"))
+        volume = int(values.get("Volume") or 0)
+
+        if any(p is None for p in [open_price, high_price, low_price, close_price]):
+            logger.warning(
+                "stooq_malformed_record",
+                ticker=ticker,
+                trading_date=str(values.get("Date")),
+            )
+            return None
+
+        if any(p <= 0 for p in [open_price, high_price, low_price, close_price]):
+            logger.warning(
+                "stooq_invalid_prices",
+                ticker=ticker,
+                trading_date=str(values.get("Date")),
+            )
+            return None
+
+        if volume < 0:
+            logger.warning(
+                "stooq_invalid_volume",
+                ticker=ticker,
+                trading_date=str(values.get("Date")),
+            )
+            return None
+
+        return {
+            "ticker": ticker,
+            "trading_date": record_date,
+            "open_price": open_price,
+            "high_price": high_price,
+            "low_price": low_price,
+            "close_price": close_price,
+            "volume": volume,
+            "data_provider": "stooq",
+            "provider_symbol": provider_symbol,
+            "provider_endpoint": "q/d/l",
+            "provider_priority": "fallback",
+            "price_adjustment": "unadjusted",
+            "adjusted_close_price": None,
+            "has_adjusted_close": False,
+            "corporate_action_adjusted": False,
+            "adjustment_context": "raw_ohlcv_only",
+            "split_dividend_adjustment": "not_available",
+            "currency": _metadata_value(
+                stock_metadata,
+                "currency",
+                DEFAULT_MARKET_DATA_CURRENCY,
+            ),
+            "exchange": _metadata_value(stock_metadata, "exchange"),
+            "fetch_period": "stooq_daily",
+            **_fetch_window("compact"),
+        }
+
+    except (ValueError, TypeError) as e:
+        logger.warning(
+            "stooq_parse_failed",
+            ticker=ticker,
+            values=values,
+            error=str(e),
+        )
+        return None
 
 
 def _parse_alpha_vantage_record(

@@ -74,6 +74,18 @@ def _to_jsonable(value: Any) -> Any:
     return value
 
 
+def _to_dynamodb_value(value: Any) -> Any:
+    if isinstance(value, float):
+        return Decimal(str(value))
+    if isinstance(value, Decimal):
+        return value
+    if isinstance(value, list):
+        return [_to_dynamodb_value(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _to_dynamodb_value(v) for k, v in value.items()}
+    return value
+
+
 class DatabasePool:
     """Small compatibility facade around the DynamoDB table resource."""
 
@@ -756,7 +768,7 @@ class DynamoStore:
                 "entity": "collection_summary",
                 "component": component,
                 "run_at": timestamp,
-                "summary": _to_jsonable(summary),
+                "summary": _to_dynamodb_value(summary),
             }
         )
         self._put_system_status(component, timestamp, summary=summary)
@@ -796,7 +808,7 @@ class DynamoStore:
             "updated_at": _now(),
         }
         if summary is not None:
-            item["last_summary"] = _to_jsonable(summary)
+            item["last_summary"] = _to_dynamodb_value(summary)
         self.table.put_item(Item=item)
 
     def _get_system_status_timestamp(self, component: str) -> str | None:

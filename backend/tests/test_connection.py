@@ -422,6 +422,8 @@ def test_put_collection_summary_writes_history_and_latest_status():
             "records_collected": 72,
             "duplicate_record_count": 3,
             "failed_ticker_count": 2,
+            "completeness_ratio": 0.92,
+            "nested": {"threshold": 0.9},
         },
     )
 
@@ -430,4 +432,6 @@ def test_put_collection_summary_writes_history_and_latest_status():
     assert item["SK"].startswith("RUN#")
     assert item["GSI1PK"] == "COLLECTION_SUMMARY"
     assert item["summary"]["duplicate_record_count"] == 3
+    assert item["summary"]["completeness_ratio"] == Decimal("0.92")
+    assert item["summary"]["nested"]["threshold"] == Decimal("0.9")
     store._put_system_status.assert_called_once()

@@ -88,7 +88,17 @@ STOCKARA_SELL_ALERT_TICKERS=AAPL,MSFT,NVDA \
 python -m scripts.seed_watchlist
 ```
 
-Then run the collectors and analyzer/publisher once manually for the first static artifacts, or wait for the daily schedules.
+Then run the GitHub Actions workflow **Run Phase 1 Pipeline Now** for the first static artifacts, or wait for the schedules. Prefer the workflow over manual Lambda console tests because it invokes the production Lambdas in the expected order, captures tail logs, and can optionally publish after collection.
+
+Useful first-run inputs:
+
+```text
+deployment_stage=prod
+stock_max_tickers=25
+earnings_max_tickers=50
+dividend_max_tickers=50
+publish_after_collection=true
+```
 
 Published artifacts:
 
@@ -109,11 +119,14 @@ Published artifacts:
 | `NEWSAPI_KEY` | Optional NewsAPI key |
 | `FINNHUB_KEY` | Optional Finnhub key |
 | `ALPHA_VANTAGE_API_KEY` | Optional Alpha Vantage fallback key |
+| `STOOQ_MAX_RECORDS_PER_TICKER` | Optional Stooq fallback history cap, default `90` |
 | `AWS_REGION` | AWS deployment region |
 
 ## GitHub Actions
 
 Pushes to `main`, `feature/**`, or `codex/**` run tests, frontend build, CDK synth/deploy, and a `/api/health` smoke test.
+
+The manual **Run Phase 1 Pipeline Now** workflow invokes stock, news, earnings, dividend, and optionally publisher Lambdas for an already deployed stage. Use it to backfill or diagnose production data before reaching for AWS Console test events.
 
 ## License
 
