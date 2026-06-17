@@ -1,0 +1,151 @@
+name: Run Phase 1 Pipeline Now
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_stage:
+        description: "Deployment stage to run"
+        required: true
+        default: "prod"
+        type: choice
+        options:
+          - prod
+      stock_max_tickers:
+        description: "Maximum stock tickers to collect in this run"
+        required: true
+        default: "25"
+      earnings_max_tickers:
+        description: "Maximum earnings tickers to collect in this run"
+        required: true
+        default: "50"
+      dividend_max_tickers:
+        description: "Maximum dividend tickers to collect in this run"
+        required: true
+        default: "50"
+      publish_after_collection:
+        description: "Run analyzer/publisher after collectors finish"
+        required: true
+        default: true
+        type: boolean
+
+concurrency:
+  group: run-phase1-now-${{ inputs.deployment_stage }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+jobs:
+  run:
+    name: Invoke deployed Phase 1 Lambdas
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Validate inputs
+        shell: bash
+        run: |
+          for value in "${{ inputs.stock_max_tickers }}" "${{ inputs.earnings_max_tickers }}" "${{ inputs.dividend_max_tickers }}"; do
+            if ! [[ "$value" =~ ^[0-9]+$ ]] || [[ "$value" -lt 1 ]]; then
+              echo "Ticker limits must be positive integers."
+              exit 1
+            fi
+          done
+
+      - name: Check AWS OIDC role configuration
+        run: |
+          if [[ -z "${{ secrets.AWS_ROLE_TO_ASSUME }}" ]]; then
+            echo "Missing GitHub secret AWS_ROLE_TO_ASSUME."
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: stockara-run-phase1-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve function names
+        shell: bash
+        run: |
+          stage="${{ inputs.deployment_stage }}"
+          if [[ "$stage" == "prod" ]]; then
+            echo "STOCK_COLLECTOR_FN=stockara-stock-collector" >> "$GITHUB_ENV"
+            echo "NEWS_COLLECTOR_FN=stockara-news-collector" >> "$GITHUB_ENV"
+            echo "EARNINGS_COLLECTOR_FN=stockara-earnings-collector" >> "$GITHUB_ENV"
+            echo "DIVIDEND_COLLECTOR_FN=stockara-dividend-collector" >> "$GITHUB_ENV"
+            echo "PUBLISHER_FN=stockara-phase1-analyzer-publisher" >> "$GITHUB_ENV"
+          else
+            echo "Unsupported deployment stage: $stage"
+            exit 1
+          fi
+
+      - name: Invoke stock collector
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws lambda invoke \
+            --function-name "$STOCK_COLLECTOR_FN" \
+            --payload '{"max_tickers":${{ inputs.stock_max_tickers }}}' \
+            --cli-binary-format raw-in-base64-out \
+            stock-response.json > stock-invoke.json
+          python -c "import json, sys; meta=json.load(open('stock-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
+          cat stock-response.json
+          python -m json.tool stock-response.json
+
+      - name: Invoke news collector
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws lambda invoke \
+            --function-name "$NEWS_COLLECTOR_FN" \
+            --payload '{}' \
+            --cli-binary-format raw-in-base64-out \
+            news-response.json > news-invoke.json
+          python -c "import json, sys; meta=json.load(open('news-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
+          cat news-response.json
+          python -m json.tool news-response.json
+
+      - name: Invoke earnings collector
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws lambda invoke \
+            --function-name "$EARNINGS_COLLECTOR_FN" \
+            --payload '{"max_tickers":${{ inputs.earnings_max_tickers }}}' \
+            --cli-binary-format raw-in-base64-out \
+            earnings-response.json > earnings-invoke.json
+          python -c "import json, sys; meta=json.load(open('earnings-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
+          cat earnings-response.json
+          python -m json.tool earnings-response.json
+
+      - name: Invoke dividend collector
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws lambda invoke \
+            --function-name "$DIVIDEND_COLLECTOR_FN" \
+            --payload '{"max_tickers":${{ inputs.dividend_max_tickers }}}' \
+            --cli-binary-format raw-in-base64-out \
+            dividend-response.json > dividend-invoke.json
+          python -c "import json, sys; meta=json.load(open('dividend-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
+          cat dividend-response.json
+          python -m json.tool dividend-response.json
+
+      - name: Invoke analyzer and publisher
+        if: ${{ inputs.publish_after_collection }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws lambda invoke \
+            --function-name "$PUBLISHER_FN" \
+            --payload '{}' \
+            --cli-binary-format raw-in-base64-out \
+            publisher-response.json > publisher-invoke.json
+          python -c "import json, sys; meta=json.load(open('publisher-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
+          cat publisher-response.json
+          python -m json.tool publisher-response.json
