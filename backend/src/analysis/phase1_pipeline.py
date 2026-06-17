@@ -330,8 +330,7 @@ def analyze_shortlist(
     shortlist: list[dict[str, Any]], stocks: list[dict[str, Any]], run_date: date
 ) -> list[dict[str, Any]]:
     stock_map = {stock["ticker"]: stock for stock in stocks}
-    openai_api_key = get_openai_api_key()
-    client = OpenAI(api_key=openai_api_key) if openai_api_key else None
+    client = _build_openai_client()
     analyses = []
     for score in shortlist:
         stock = stock_map[score["ticker"]]
@@ -348,6 +347,18 @@ def analyze_shortlist(
         store.put_candidate_analysis(analysis)
         analyses.append(analysis)
     return analyses
+
+
+def _build_openai_client() -> OpenAI | None:
+    openai_api_key = get_openai_api_key()
+    if not openai_api_key:
+        return None
+    try:
+        return OpenAI(api_key=openai_api_key)
+    except Exception as exc:
+        logger.warning("openai_client_initialization_failed", error=str(exc))
+        _emit_metric("openai_client_initialization_failures", 1)
+        return None
 
 
 def build_publication_payload(

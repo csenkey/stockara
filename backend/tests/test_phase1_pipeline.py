@@ -12,6 +12,7 @@ from src.analysis.phase1_pipeline import (
     _dividend_signals,
     _event_signals,
     _price_volume_signals,
+    analyze_shortlist,
     build_publication_payload,
     evaluate_data_freshness,
     publish_payload,
@@ -354,6 +355,23 @@ def test_fallback_analysis_labels_openai_errors_and_caps_confidence():
     assert analysis["confidence_score"] <= FALLBACK_CONFIDENCE_CAP
     assert analysis["recommendation"] == "SELL"
     assert analysis["publication_allowed"] is False
+
+
+def test_analyze_shortlist_falls_back_when_openai_client_init_fails():
+    stock = {"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology"}
+    score = _candidate_score("NVDA", opportunity_score=200, negative_score=0)
+
+    with (
+        patch("src.analysis.phase1_pipeline.get_openai_api_key", return_value="test-key"),
+        patch("src.analysis.phase1_pipeline.OpenAI", side_effect=TypeError("bad httpx")),
+        patch("src.analysis.phase1_pipeline._emit_metric"),
+        patch("src.analysis.phase1_pipeline.store.put_candidate_analysis") as put_analysis,
+    ):
+        analyses = analyze_shortlist([score], [stock], date(2026, 6, 17))
+
+    assert analyses[0]["analysis_method"] == "fallback_heuristic"
+    assert analyses[0]["fallback_reason"] == "openai_client_unavailable"
+    put_analysis.assert_called_once()
 
 
 def test_build_publication_payload_suppresses_fallback_buy_and_sell_by_default():
