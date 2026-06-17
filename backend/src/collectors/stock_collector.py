@@ -1113,11 +1113,8 @@ def _parse_nasdaq_response(
     data: dict[str, Any],
     stock_metadata: dict[str, Any] | None = None,
 ) -> list[dict] | None:
-    rows = (
-        data.get("data", {})
-        .get("tradesTable", {})
-        .get("rows", [])
-    )
+    payload = data.get("data") or {}
+    rows = payload.get("tradesTable", {}).get("rows", [])
     if not rows:
         return None
 

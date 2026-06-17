@@ -827,6 +827,9 @@ class TestNoKeyMarketDataFallbacks:
         assert result[0]["currency"] == "USD"
         assert result[0]["fetch_period"] == "nasdaq_recent"
 
+    def test_parse_nasdaq_response_handles_null_data_payload(self):
+        assert _parse_nasdaq_response("ACLX", {"data": None}) is None
+
     @patch("backend.src.collectors.stock_collector.time.sleep")
     @patch("backend.src.collectors.stock_collector.requests.get")
     def test_fetch_nasdaq_with_retry_success(self, mock_get, mock_sleep):
