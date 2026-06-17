@@ -4,6 +4,10 @@
 
 This document describes the architecture and technology choices for the Stock Monitoring and Analysis System. The design prioritizes minimal hosting cost for low user volume (10-100 users), serverless-first approach, and simplicity of deployment.
 
+## Product North Star
+
+Phase 1 must be accurate and reliable enough to support real business and investment decisions. It is the first production version of the stock analyzer, not a disposable MVP or demo. Later phases should add portfolio-management features around a trustworthy analysis core, not postpone data quality, provider resilience, or recommendation integrity.
+
 ## Technology Stack
 
 ### Backend: Python (FastAPI)

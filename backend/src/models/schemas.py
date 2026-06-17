@@ -26,6 +26,12 @@ class RiskLevel(str, Enum):
     HIGH = "HIGH"
 
 
+class AnalysisMethod(str, Enum):
+    AI = "ai"
+    FALLBACK_HEURISTIC = "fallback_heuristic"
+    SUPPRESSED = "suppressed"
+
+
 class SignalDirection(str, Enum):
     POSITIVE = "positive"
     NEGATIVE = "negative"
@@ -77,8 +83,27 @@ class Stock(BaseModel):
     ticker: str = Field(..., max_length=10)
     company_name: str = Field(..., min_length=1, max_length=255)
     sector: str
+    industry: Optional[str] = Field(default=None, max_length=255)
     company_size: CompanySize
     source: str = "seed"
+    metadata_source: Optional[str] = Field(default=None, max_length=100)
+    metadata_source_url: Optional[str] = Field(default=None, max_length=500)
+    metadata_as_of: Optional[date] = None
+    business_description: Optional[str] = Field(default=None, max_length=2000)
+    flagship_products: list[str] = Field(default_factory=list)
+    revenue_segments: list[str] = Field(default_factory=list)
+    primary_customers: list[str] = Field(default_factory=list)
+    geographic_exposure: list[str] = Field(default_factory=list)
+    competitive_position: Optional[str] = Field(default=None, max_length=1000)
+    key_static_risks: list[str] = Field(default_factory=list)
+    exchange: Optional[str] = Field(default=None, max_length=50)
+    currency: Optional[str] = Field(default=None, max_length=10)
+    country: Optional[str] = Field(default=None, max_length=100)
+    website: Optional[str] = Field(default=None, max_length=500)
+    founded_year: Optional[int] = Field(default=None, ge=1600, le=2200)
+    headquarters: Optional[str] = Field(default=None, max_length=255)
+    ipo_year: Optional[int] = Field(default=None, ge=1600, le=2200)
+    market_cap: Optional[str] = Field(default=None, max_length=50)
     added_at: Optional[datetime] = None
     is_active: bool = True
     is_sell_alert_watch: bool = False
@@ -104,6 +129,21 @@ class StockData(BaseModel):
     low_price: Decimal
     close_price: Decimal
     volume: int = Field(..., ge=0)
+    data_provider: Optional[str] = None
+    provider_symbol: Optional[str] = None
+    provider_endpoint: Optional[str] = None
+    provider_priority: Optional[str] = None
+    price_adjustment: Optional[str] = None
+    adjusted_close_price: Optional[Decimal] = None
+    has_adjusted_close: bool = False
+    corporate_action_adjusted: Optional[bool] = None
+    adjustment_context: Optional[str] = None
+    split_dividend_adjustment: Optional[str] = None
+    exchange: Optional[str] = None
+    currency: Optional[str] = None
+    fetch_period: Optional[str] = None
+    fetch_window_start: Optional[date] = None
+    fetch_window_end: Optional[date] = None
     collected_at: Optional[datetime] = None
 
     @field_validator("ticker")
@@ -125,6 +165,49 @@ class NewsSummary(BaseModel):
     @classmethod
     def validate_tickers(cls, value: list[str]) -> list[str]:
         return [validate_ticker(t) for t in value]
+
+
+class EarningsEvent(BaseModel):
+    ticker: str
+    event_date: date
+    company_name: Optional[str] = None
+    eps_estimate: Optional[Decimal] = None
+    reported_eps: Optional[Decimal] = None
+    surprise_percent: Optional[Decimal] = None
+    time_of_day: Optional[str] = None
+    is_upcoming: bool
+    price_before: Optional[Decimal] = None
+    price_after: Optional[Decimal] = None
+    post_earnings_price_move_percent: Optional[Decimal] = None
+    provider: str = "yfinance"
+    source_url: Optional[str] = None
+    collected_at: Optional[datetime] = None
+
+    @field_validator("ticker")
+    @classmethod
+    def validate_ticker_field(cls, value: str) -> str:
+        return validate_ticker(value)
+
+
+class DividendEvent(BaseModel):
+    ticker: str
+    ex_dividend_date: date
+    company_name: Optional[str] = None
+    pay_date: Optional[date] = None
+    dividend_amount: Optional[Decimal] = None
+    dividend_yield: Optional[Decimal] = None
+    is_upcoming: bool
+    price_before: Optional[Decimal] = None
+    price_after: Optional[Decimal] = None
+    post_ex_dividend_price_move_percent: Optional[Decimal] = None
+    provider: str = "yfinance"
+    source_url: Optional[str] = None
+    collected_at: Optional[datetime] = None
+
+    @field_validator("ticker")
+    @classmethod
+    def validate_ticker_field(cls, value: str) -> str:
+        return validate_ticker(value)
 
 
 class SignalSource(BaseModel):
@@ -166,6 +249,8 @@ class CandidateScore(BaseModel):
 class CandidateAnalysis(BaseModel):
     ticker: str
     analysis_date: date
+    analysis_method: AnalysisMethod = AnalysisMethod.AI
+    publication_allowed: bool = True
     recommendation: Recommendation
     risk_level: RiskLevel
     confidence_score: int = Field(..., ge=0, le=100)
@@ -189,6 +274,7 @@ class TopPick(BaseModel):
     ticker: str
     company_name: str
     sector: str
+    analysis_method: AnalysisMethod = AnalysisMethod.AI
     recommendation: Recommendation
     risk_level: RiskLevel
     confidence_score: int
@@ -205,6 +291,7 @@ class SellAlert(BaseModel):
     ticker: str
     company_name: str
     sector: str
+    analysis_method: AnalysisMethod = AnalysisMethod.AI
     severity: str
     risk_level: RiskLevel
     confidence_score: int

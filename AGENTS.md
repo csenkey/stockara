@@ -6,6 +6,10 @@ This document initializes coding-agent sessions for Stockara. It is distilled fr
 
 Stockara is a low-cost, serverless stock monitoring and analysis system. It tracks 1000+ stocks, collects OHLCV market data and news, generates AI BUY/HOLD/SELL recommendations, manages encrypted user portfolios, and exposes personalized suggestions through a React dashboard.
 
+Phase 1 is an accurate, reliable stock analyzer intended to support real business and investment decisions. It is not a throwaway MVP, demo, or proof of concept. Later phases add portfolio-management features around a trustworthy analysis core; they do not defer data correctness, provider resilience, or recommendation quality.
+
+Phase 1 should publish promising, evidence-backed opportunities among tickers whose own data is fresh and reliable enough for decision-grade analysis. It does not need to claim the absolute top 5 or top 10 stocks across the whole watchlist when universe coverage is partial, but it must make partial coverage explicit and suppress stale or under-supported tickers.
+
 The project also includes a public demo-trading feature: 100 superhero-named simulated accounts start with $10,000, trade daily from AI recommendations, pay 1% commission on every transaction, and publish leaderboard/detail pages without authentication.
 
 ## Stack

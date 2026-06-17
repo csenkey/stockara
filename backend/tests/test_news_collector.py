@@ -12,7 +12,9 @@ from unittest.mock import MagicMock, patch
 
 
 from backend.src.collectors.news_collector import (
+    build_news_collection_summary,
     compute_title_source_hash,
+    emit_news_collection_summary_metrics,
     fetch_newsapi_articles,
     fetch_finnhub_articles,
     get_existing_hashes,
@@ -451,6 +453,64 @@ class TestStoreArticle:
         )
 
 
+class TestNewsCollectionSummary:
+    """Tests news completeness/failure summary shape."""
+
+    def test_success_summary(self):
+        summary = build_news_collection_summary(
+            status="success",
+            articles_processed=3,
+            sources_available=2,
+            total_fetched=5,
+            duplicates_skipped=2,
+        )
+
+        assert summary["status"] == "success"
+        assert summary["sources_total"] == 2
+        assert summary["sources_failed"] == 0
+        assert summary["completeness_ratio"] == 1.0
+
+    def test_partial_summary_names_failed_sources(self):
+        summary = build_news_collection_summary(
+            status="partial",
+            articles_processed=1,
+            sources_available=1,
+            total_fetched=1,
+            failed_sources=["finnhub"],
+            article_failures=1,
+        )
+
+        assert summary["status"] == "partial"
+        assert summary["sources_failed"] == 1
+        assert summary["failed_sources"] == ["finnhub"]
+        assert summary["article_failures"] == 1
+        assert summary["completeness_ratio"] == 0.5
+
+    @patch("backend.src.collectors.news_collector.cloudwatch")
+    def test_summary_metrics_are_emitted(self, mock_cloudwatch):
+        summary = build_news_collection_summary(
+            status="partial",
+            articles_processed=1,
+            sources_available=1,
+            total_fetched=1,
+            failed_sources=["finnhub"],
+            article_failures=1,
+        )
+
+        emit_news_collection_summary_metrics(summary)
+
+        metric_data = mock_cloudwatch.put_metric_data.call_args.kwargs["MetricData"]
+        metric_names = {metric["MetricName"] for metric in metric_data}
+        assert "news_collection_completeness_percent" in metric_names
+        assert "news_sources_failed" in metric_names
+        assert "news_article_failures" in metric_names
+        assert any(
+            metric["MetricName"] == "news_collection_partial_runs"
+            and metric["Value"] == 1
+            for metric in metric_data
+        )
+
+
 # --- Tests for collect_news (Requirements 2.4, 2.5, 2.6) ---
 
 
@@ -577,6 +637,20 @@ class TestCollectNews:
 
 class TestHandler:
     """Tests for the Lambda handler function."""
+
+    @patch("backend.src.collectors.news_collector.DatabasePool")
+    @patch("backend.src.collectors.news_collector.collect_news")
+    def test_invocation_logs_event_payload_without_structlog_conflict(self, mock_collect, mock_db_pool):
+        """Regression: structlog reserves the keyword argument name 'event'."""
+        mock_collect.return_value = {
+            "status": "success",
+            "articles_processed": 0,
+        }
+
+        result = handler({"source": "aws.events"}, None)
+
+        assert result["statusCode"] == 200
+        mock_db_pool.close.assert_called_once()
 
     @patch("backend.src.collectors.news_collector.logger")
     @patch("backend.src.collectors.news_collector.DatabasePool")

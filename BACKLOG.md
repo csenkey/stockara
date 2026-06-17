@@ -71,14 +71,14 @@ Data sources and signal coverage:
 Execution tasks:
 
 - [ ] Define Phase 1 output schemas for `TopPick`, `SellAlert`, `CandidateSignal`, `SignalSource`, and `PublishedTopPicks`.
-- [ ] Define static artifact paths, including `/top-picks/latest.json`, `/top-picks/history/{date}.json`, `/sell-alerts/latest.json`, and `/sell-alerts/history/{date}.json`.
-- [ ] Add DynamoDB or repository models for signal snapshots, candidate scores, AI candidate analysis, top-pick publication records, and sell-alert publication records.
-- [ ] Add configuration storage for the tracked universe and urgent sell-alert watchlist.
-- [ ] Add a seed/bootstrap script for the initial tracked universe with ticker, company name, sector, company size, and active flag.
-- [ ] Wire provider secrets into deployed Lambdas through environment variables or Secrets Manager-backed configuration.
-- [ ] Implement earnings-calendar collection.
-- [ ] Implement dividend-calendar collection.
-- [ ] Extend OHLCV collection to compute daily price/volume movement signals.
+- [x] Define static artifact paths, including `/top-picks/latest.json`, `/top-picks/history/{date}.json`, `/sell-alerts/latest.json`, and `/sell-alerts/history/{date}.json`.
+- [x] Add DynamoDB or repository models for signal snapshots, candidate scores, AI candidate analysis, top-pick publication records, and sell-alert publication records.
+- [x] Add configuration storage for the tracked universe and urgent sell-alert watchlist.
+- [x] Add a seed/bootstrap script for the initial tracked universe with ticker, company name, sector, company size, and active flag.
+- [x] Wire provider secrets into deployed Lambdas through environment variables or Secrets Manager-backed configuration.
+- [x] Implement earnings-calendar collection.
+- [x] Implement dividend-calendar collection.
+- [x] Extend OHLCV collection to compute daily price/volume movement signals.
 - [ ] Extend news collection to compute ticker-level news volume, sentiment direction, and interesting-news indicators.
 - [ ] Implement options activity signal collection with provider fallback behavior.
 - [ ] Implement analyst rating-change signal collection with provider fallback behavior.
@@ -87,23 +87,28 @@ Execution tasks:
 - [ ] Implement social/news momentum signal collection with provider fallback behavior.
 - [ ] Implement sector ETF movement collection and ticker-to-sector-ETF mapping.
 - [ ] Implement candidate scoring with configurable weights for earnings, dividends, price move, volume move, news, options, analyst, insider, institutional, social/news momentum, and sector-relative movement.
+  - Current implementation has an initial scoring pipeline; remaining work is to add/configure the full provider signal set and weights.
 - [ ] Implement negative-signal scoring for urgent sell alerts with severity thresholds.
-- [ ] Select the daily AI candidate shortlist from the highest-scoring opportunity candidates plus any high-severity negative candidates.
+  - Current implementation has initial negative-score handling; remaining work is stronger threshold configuration and provider-backed negative signals.
+- [x] Select the daily AI candidate shortlist from the highest-scoring opportunity candidates plus any high-severity negative candidates.
 - [ ] Update the AI prompt to include catalyst signals, upcoming events, news evidence, technical indicators, sector-relative movement, and invalidation criteria.
-- [ ] Store AI analysis only for shortlisted candidates and include candidate score/source details for traceability.
-- [ ] Rank AI-analyzed candidates into top 5-10 picks using recommendation, confidence, catalyst strength, risk, and timeframe.
-- [ ] Rank urgent sell alerts separately using severity, confidence, negative catalyst type, and recency.
-- [ ] Implement a static publisher Lambda or scheduled job that writes latest and historical JSON artifacts to S3.
+  - Current prompt includes catalyst/risk framing; remaining work is adding upcoming-event, richer technical, and sector-relative context.
+- [x] Store AI analysis only for shortlisted candidates and include candidate score/source details for traceability.
+- [x] Rank AI-analyzed candidates into top 5-10 picks using recommendation, confidence, catalyst strength, risk, and timeframe.
+- [x] Rank urgent sell alerts separately using severity, confidence, negative catalyst type, and recency.
+- [x] Implement a static publisher Lambda or scheduled job that writes latest and historical JSON artifacts to S3.
 - [ ] Optionally generate static HTML pages for top picks and sell alerts after the JSON publisher is stable.
 - [ ] Update the frontend to render top picks and sell alerts from static JSON artifacts.
 - [ ] Keep existing authenticated portfolio views separate from Phase 1 global picks.
 - [ ] Add unit tests for candidate scoring, negative-signal thresholds, ranking, and static artifact generation.
-- [ ] Add integration-style tests with mocked providers for the daily scan-to-publish flow.
+  - Candidate scoring, ranking, publication gating, artifact generation, and fallback behavior have unit coverage; remaining work is expanded tests for future provider-backed signal weights and negative thresholds.
+- [x] Add integration-style tests with mocked providers for the daily scan-to-publish flow.
 - [ ] Add frontend tests or build checks for rendering empty, loading, successful, and stale-artifact states.
 - [ ] Update GitHub Actions deployment smoke test to verify `/api/health` plus public readability of `top-picks/latest.json` and `sell-alerts/latest.json` when artifacts exist.
 - [ ] Add a manual bootstrap/runbook for first deployment: seed universe, run collectors, run scanner/analyzer, publish static artifacts, verify CloudFront URLs.
 - [ ] Add CloudWatch metrics for signals collected, candidates scored, AI candidates analyzed, top picks published, sell alerts published, provider failures, and artifact publish failures.
-- [ ] Add alarms for failed daily publication, missing fresh top-picks artifact, missing fresh sell-alert artifact, and repeated provider failures.
+  - Implemented collection completeness, candidate/publisher funnel, publication, provider/source failure, and artifact failure metrics; remaining work is signal-specific metrics as new provider collectors land.
+- [x] Add alarms for failed daily publication, missing fresh top-picks artifact, missing fresh sell-alert artifact, and repeated provider failures.
 
 Acceptance criteria:
 

@@ -2,7 +2,7 @@
 
 import json
 import os
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -12,15 +12,28 @@ import structlog
 import yfinance as yf
 
 from src.db.connection import DatabasePool, store
+from src.services.secrets import get_openai_api_key
 
 logger = structlog.get_logger(__name__)
 
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 ARTIFACT_BUCKET = os.environ.get("STOCKARA_ARTIFACT_BUCKET", "")
 SHORTLIST_SIZE = int(os.environ.get("PHASE1_SHORTLIST_SIZE", "50"))
 TOP_PICK_COUNT = int(os.environ.get("PHASE1_TOP_PICK_COUNT", "10"))
+STOCK_FRESHNESS_MAX_AGE_DAYS = int(os.environ.get("PHASE1_STOCK_FRESHNESS_MAX_AGE_DAYS", "3"))
+MIN_HISTORY_CALENDAR_DAYS = int(os.environ.get("PHASE1_MIN_HISTORY_CALENDAR_DAYS", "30"))
+MIN_HISTORY_ROWS = int(os.environ.get("PHASE1_MIN_HISTORY_ROWS", "20"))
+NEWS_FRESHNESS_MAX_HOURS = int(os.environ.get("PHASE1_NEWS_FRESHNESS_MAX_HOURS", "26"))
+EARNINGS_LOOKAHEAD_DAYS = int(os.environ.get("PHASE1_EARNINGS_LOOKAHEAD_DAYS", "45"))
+EARNINGS_HISTORY_DAYS = int(os.environ.get("PHASE1_EARNINGS_HISTORY_DAYS", "730"))
+DIVIDEND_LOOKAHEAD_DAYS = int(os.environ.get("PHASE1_DIVIDEND_LOOKAHEAD_DAYS", "60"))
+DIVIDEND_HISTORY_DAYS = int(os.environ.get("PHASE1_DIVIDEND_HISTORY_DAYS", "730"))
 CLOUDWATCH_NAMESPACE = "StockaraPhase1"
+FALLBACK_CONFIDENCE_CAP = int(os.environ.get("PHASE1_FALLBACK_CONFIDENCE_CAP", "55"))
+ALLOW_FALLBACK_ACTIONABLE_RECOMMENDATIONS = (
+    os.environ.get("PHASE1_ALLOW_FALLBACK_ACTIONABLE_RECOMMENDATIONS", "false").lower()
+    == "true"
+)
 
 SECTOR_ETFS = {
     "Technology": "XLK",
@@ -75,10 +88,40 @@ def run_phase1_pipeline(event: dict | None = None) -> dict[str, Any]:
             logger.warning("phase1_no_active_stocks")
             return {"statusCode": 200, "body": "No active stocks configured"}
 
-        scores = score_candidates(stocks, run_date)
+        freshness = evaluate_data_freshness(stocks, run_date)
+        _emit_metric("eligible_tickers", freshness["eligible_ticker_count"])
+        _emit_metric("excluded_tickers", freshness["excluded_ticker_count"])
+        if freshness["active_ticker_count"]:
+            _emit_metric(
+                "eligible_ticker_coverage_percent",
+                freshness["eligible_ticker_count"] / freshness["active_ticker_count"] * 100,
+            )
+
+        eligible_stocks = freshness["eligible_stocks"]
+        if not eligible_stocks:
+            logger.warning(
+                "phase1_publication_suppressed_no_eligible_tickers",
+                active_ticker_count=freshness["active_ticker_count"],
+                excluded_ticker_count=freshness["excluded_ticker_count"],
+            )
+            _emit_metric("publication_suppressed", 1)
+            return {
+                "statusCode": 200,
+                "body": "Publication suppressed: no eligible tickers passed data freshness gates",
+            }
+
+        scores = score_candidates(eligible_stocks, run_date)
         shortlist = select_shortlist(scores)
-        analyses = analyze_shortlist(shortlist, stocks, run_date)
-        payload = build_publication_payload(analyses, scores, stocks, run_date)
+        analyses = analyze_shortlist(shortlist, eligible_stocks, run_date)
+        payload = build_publication_payload(
+            analyses,
+            scores,
+            eligible_stocks,
+            run_date,
+            data_quality=publication_data_quality(freshness),
+            upcoming_earnings=upcoming_earnings_summary(run_date),
+            upcoming_dividends=upcoming_dividends_summary(run_date),
+        )
         publish_payload(payload, run_date)
 
         _emit_metric("candidates_scored", len(scores))
@@ -126,6 +169,150 @@ def score_candidates(stocks: list[dict[str, Any]], run_date: date) -> list[dict[
     return scores
 
 
+def evaluate_data_freshness(
+    stocks: list[dict[str, Any]], run_date: date
+) -> dict[str, Any]:
+    """Evaluate ticker-level data freshness before scoring or publication.
+
+    Phase 1 may publish from a partial universe, but each published ticker must
+    have fresh stock data and enough historical context for decision-grade use.
+    """
+    eligible_stocks: list[dict[str, Any]] = []
+    excluded_tickers: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    freshness_cutoff = run_date - timedelta(days=STOCK_FRESHNESS_MAX_AGE_DAYS)
+    history_cutoff = run_date - timedelta(days=MIN_HISTORY_CALENDAR_DAYS)
+
+    for stock in stocks:
+        ticker = stock["ticker"]
+        reasons: list[str] = []
+        rows: list[dict[str, Any]] = []
+        latest_data_date = _parse_date(stock.get("latest_stock_data_date"))
+        history_start_date: date | None = None
+
+        try:
+            rows = store.get_stock_data(
+                ticker,
+                run_date - timedelta(days=max(MIN_HISTORY_CALENDAR_DAYS + 15, 45)),
+                run_date,
+            )
+        except Exception as exc:
+            reasons.append("stock_data_lookup_failed")
+            logger.warning("stock_freshness_lookup_failed", ticker=ticker, error=str(exc))
+
+        row_dates = [
+            parsed
+            for parsed in (_parse_date(row.get("trading_date")) for row in rows)
+            if parsed is not None
+        ]
+        latest_row: dict[str, Any] | None = None
+        if row_dates:
+            latest_data_date = max(latest_data_date or row_dates[-1], max(row_dates))
+            history_start_date = min(row_dates)
+            latest_row = max(
+                rows,
+                key=lambda row: _parse_date(row.get("trading_date")) or date.min,
+            )
+
+        if latest_data_date is None:
+            reasons.append("missing_stock_data")
+        elif latest_data_date < freshness_cutoff:
+            reasons.append("stale_stock_data")
+
+        if not row_dates:
+            reasons.append("missing_stock_history")
+        else:
+            if latest_row and not _has_market_data_provenance(latest_row):
+                reasons.append("missing_market_data_provenance")
+            if len(row_dates) < MIN_HISTORY_ROWS:
+                reasons.append("insufficient_stock_history_rows")
+            if history_start_date is None or history_start_date > history_cutoff:
+                reasons.append("insufficient_stock_history_span")
+
+        if reasons:
+            excluded_tickers.append(
+                {
+                    "ticker": ticker,
+                    "reasons": sorted(set(reasons)),
+                    "latest_stock_data_date": latest_data_date.isoformat()
+                    if latest_data_date
+                    else None,
+                    "history_start_date": history_start_date.isoformat()
+                    if history_start_date
+                    else None,
+                    "history_row_count": len(row_dates),
+                }
+            )
+        else:
+            enriched = {
+                **stock,
+                "latest_stock_data_date": latest_data_date.isoformat(),
+                "stock_history_start_date": history_start_date.isoformat()
+                if history_start_date
+                else None,
+                "stock_history_row_count": len(row_dates),
+            }
+            eligible_stocks.append(enriched)
+
+    last_news_collection = store.last_news_collection()
+    news_collected_at = _parse_datetime(last_news_collection)
+    news_stale = False
+    if news_collected_at is None:
+        warnings.append("News freshness is unknown; no collection timestamp is available.")
+        news_stale = True
+    else:
+        run_datetime = datetime.combine(run_date, datetime.min.time(), tzinfo=timezone.utc)
+        max_age = timedelta(hours=NEWS_FRESHNESS_MAX_HOURS)
+        if news_collected_at < run_datetime - max_age:
+            warnings.append("News collection is stale for the publication window.")
+            news_stale = True
+
+    coverage_status = "complete"
+    if excluded_tickers:
+        coverage_status = "partial"
+    if not eligible_stocks:
+        coverage_status = "none"
+
+    if excluded_tickers:
+        warnings.append(
+            f"{len(excluded_tickers)} active ticker(s) were excluded by data freshness gates."
+        )
+
+    return {
+        "run_date": run_date.isoformat(),
+        "coverage_status": coverage_status,
+        "active_ticker_count": len(stocks),
+        "eligible_ticker_count": len(eligible_stocks),
+        "excluded_ticker_count": len(excluded_tickers),
+        "eligible_stocks": eligible_stocks,
+        "excluded_tickers": excluded_tickers,
+        "stock_freshness_max_age_days": STOCK_FRESHNESS_MAX_AGE_DAYS,
+        "min_history_calendar_days": MIN_HISTORY_CALENDAR_DAYS,
+        "min_history_rows": MIN_HISTORY_ROWS,
+        "last_news_collection": last_news_collection,
+        "news_stale": news_stale,
+        "warnings": warnings,
+    }
+
+
+def publication_data_quality(freshness: dict[str, Any]) -> dict[str, Any]:
+    """Return the public data-quality subset for publication artifacts."""
+    excluded = freshness["excluded_tickers"]
+    return {
+        "coverage_status": freshness["coverage_status"],
+        "active_ticker_count": freshness["active_ticker_count"],
+        "eligible_ticker_count": freshness["eligible_ticker_count"],
+        "excluded_ticker_count": freshness["excluded_ticker_count"],
+        "excluded_ticker_examples": excluded[:20],
+        "stock_freshness_max_age_days": freshness["stock_freshness_max_age_days"],
+        "min_history_calendar_days": freshness["min_history_calendar_days"],
+        "min_history_rows": freshness["min_history_rows"],
+        "last_news_collection": freshness["last_news_collection"],
+        "news_stale": freshness["news_stale"],
+        "warnings": freshness["warnings"],
+    }
+
+
 def select_shortlist(scores: list[dict[str, Any]]) -> list[dict[str, Any]]:
     sell_alert_tickers = set(store.sell_alert_tickers())
     ranked = sorted(
@@ -143,11 +330,21 @@ def analyze_shortlist(
     shortlist: list[dict[str, Any]], stocks: list[dict[str, Any]], run_date: date
 ) -> list[dict[str, Any]]:
     stock_map = {stock["ticker"]: stock for stock in stocks}
-    client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+    openai_api_key = get_openai_api_key()
+    client = OpenAI(api_key=openai_api_key) if openai_api_key else None
     analyses = []
     for score in shortlist:
         stock = stock_map[score["ticker"]]
         analysis = _analyze_candidate(client, stock, score, run_date)
+        if analysis["analysis_method"] == "fallback_heuristic":
+            _emit_metric("fallback_analyses", 1)
+            logger.warning(
+                "candidate_fallback_analysis_used",
+                ticker=stock["ticker"],
+                recommendation=analysis["recommendation"],
+                confidence_score=analysis["confidence_score"],
+                publication_allowed=analysis["publication_allowed"],
+            )
         store.put_candidate_analysis(analysis)
         analyses.append(analysis)
     return analyses
@@ -158,6 +355,9 @@ def build_publication_payload(
     scores: list[dict[str, Any]],
     stocks: list[dict[str, Any]],
     run_date: date,
+    data_quality: dict[str, Any] | None = None,
+    upcoming_earnings: list[dict[str, Any]] | None = None,
+    upcoming_dividends: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     stock_map = {stock["ticker"]: stock for stock in stocks}
     sell_watch = set(store.sell_alert_tickers())
@@ -166,6 +366,7 @@ def build_publication_payload(
         row
         for row in analyses
         if row["recommendation"] == "BUY" and row["opportunity_score"] > 0
+        and _is_publication_allowed(row)
     ]
     buy_candidates.sort(
         key=lambda row: (
@@ -185,6 +386,7 @@ def build_publication_payload(
                 "ticker": row["ticker"],
                 "company_name": stock["company_name"],
                 "sector": stock["sector"],
+                "analysis_method": row.get("analysis_method", "ai"),
                 "recommendation": row["recommendation"],
                 "risk_level": row["risk_level"],
                 "confidence_score": row["confidence_score"],
@@ -202,6 +404,7 @@ def build_publication_payload(
         for row in analyses
         if row["negative_score"] >= 40
         and (row["ticker"] in sell_watch or row["recommendation"] == "SELL")
+        and _is_publication_allowed(row)
     ]
     sell_candidates.sort(
         key=lambda row: (row["negative_score"], row["confidence_score"]), reverse=True
@@ -216,6 +419,7 @@ def build_publication_payload(
                 "ticker": row["ticker"],
                 "company_name": stock["company_name"],
                 "sector": stock["sector"],
+                "analysis_method": row.get("analysis_method", "ai"),
                 "severity": "critical" if row["negative_score"] >= 80 else "high",
                 "risk_level": row["risk_level"],
                 "confidence_score": row["confidence_score"],
@@ -227,13 +431,35 @@ def build_publication_payload(
         )
 
     data_warnings = _source_warnings(scores)
+    if data_quality:
+        data_warnings.extend(data_quality.get("warnings", []))
+    fallback_policy = _fallback_policy_summary(analyses)
+    if fallback_policy["fallback_analysis_count"]:
+        data_warnings.append(
+            f"{fallback_policy['fallback_analysis_count']} candidate analysis result(s) used "
+            "heuristic fallback because AI analysis was unavailable."
+        )
+    if fallback_policy["suppressed_fallback_count"]:
+        data_warnings.append(
+            f"{fallback_policy['suppressed_fallback_count']} fallback-generated actionable "
+            "recommendation(s) were withheld from public publication."
+        )
+        _emit_metric(
+            "fallback_publication_suppressed",
+            fallback_policy["suppressed_fallback_count"],
+        )
     return {
         "publication_date": run_date.isoformat(),
         "generated_at": datetime.utcnow().isoformat(),
+        "publication_scope": "top_opportunities_among_eligible_tickers",
+        "fallback_policy": fallback_policy,
         "top_picks": top_picks,
         "sell_alerts": sell_alerts,
+        "upcoming_earnings": upcoming_earnings or [],
+        "upcoming_dividends": upcoming_dividends or [],
         "candidate_count": len(scores),
         "analyzed_count": len(analyses),
+        "data_quality": data_quality or {},
         "data_warnings": data_warnings,
     }
 
@@ -241,7 +467,8 @@ def build_publication_payload(
 def publish_payload(payload: dict[str, Any], run_date: date) -> None:
     if not ARTIFACT_BUCKET:
         logger.warning("artifact_bucket_not_configured")
-        return
+        _emit_metric("artifact_publish_failures", 1)
+        raise RuntimeError("Artifact bucket is not configured")
 
     s3 = boto3.client("s3")
     body = json.dumps(payload, indent=2, default=str).encode("utf-8")
@@ -254,6 +481,9 @@ def publish_payload(payload: dict[str, Any], run_date: date) -> None:
             "publication_date": payload["publication_date"],
             "generated_at": payload["generated_at"],
             "sell_alerts": payload["sell_alerts"],
+            "upcoming_earnings": payload.get("upcoming_earnings", []),
+            "upcoming_dividends": payload.get("upcoming_dividends", []),
+            "data_quality": payload["data_quality"],
             "data_warnings": payload["data_warnings"],
         },
         indent=2,
@@ -264,22 +494,28 @@ def publish_payload(payload: dict[str, Any], run_date: date) -> None:
         f"sell-alerts/history/{run_date.isoformat()}.json",
     ]
 
-    for key in keys:
-        s3.put_object(
-            Bucket=ARTIFACT_BUCKET,
-            Key=key,
-            Body=body,
-            ContentType="application/json",
-            CacheControl="public, max-age=300",
-        )
-    for key in sell_keys:
-        s3.put_object(
-            Bucket=ARTIFACT_BUCKET,
-            Key=key,
-            Body=sell_body,
-            ContentType="application/json",
-            CacheControl="public, max-age=300",
-        )
+    try:
+        for key in keys:
+            s3.put_object(
+                Bucket=ARTIFACT_BUCKET,
+                Key=key,
+                Body=body,
+                ContentType="application/json",
+                CacheControl="public, max-age=300",
+            )
+        for key in sell_keys:
+            s3.put_object(
+                Bucket=ARTIFACT_BUCKET,
+                Key=key,
+                Body=sell_body,
+                ContentType="application/json",
+                CacheControl="public, max-age=300",
+            )
+    except Exception as exc:
+        logger.error("artifact_publish_failed", bucket=ARTIFACT_BUCKET, error=str(exc))
+        _emit_metric("artifact_publish_failures", 1)
+        raise
+    _emit_metric("artifact_publish_failures", 0)
     store.put_publication_record(run_date, payload)
 
 
@@ -287,7 +523,8 @@ def _analyze_candidate(
     client: OpenAI | None, stock: dict[str, Any], score: dict[str, Any], run_date: date
 ) -> dict[str, Any]:
     if client is None:
-        return _fallback_analysis(stock, score, run_date)
+        logger.warning("candidate_ai_analysis_unavailable", ticker=stock["ticker"])
+        return _fallback_analysis(stock, score, run_date, "openai_client_unavailable")
 
     prompt = _build_prompt(stock, score)
     try:
@@ -312,11 +549,11 @@ def _analyze_candidate(
         return _normalize_ai_analysis(stock, score, parsed, run_date)
     except Exception as exc:
         logger.warning("candidate_ai_analysis_failed", ticker=stock["ticker"], error=str(exc))
-        return _fallback_analysis(stock, score, run_date)
+        return _fallback_analysis(stock, score, run_date, "openai_error")
 
 
 def _fallback_analysis(
-    stock: dict[str, Any], score: dict[str, Any], run_date: date
+    stock: dict[str, Any], score: dict[str, Any], run_date: date, fallback_reason: str
 ) -> dict[str, Any]:
     recommendation = "HOLD"
     if score["negative_score"] >= 60:
@@ -329,10 +566,19 @@ def _fallback_analysis(
         risk_level = "LOW"
 
     catalyst = _primary_signal(score["signals"])
-    confidence = min(95, max(35, 45 + max(score["opportunity_score"], score["negative_score"]) // 2))
+    confidence = min(
+        FALLBACK_CONFIDENCE_CAP,
+        max(25, 40 + max(score["opportunity_score"], score["negative_score"]) // 4),
+    )
+    publication_allowed = (
+        ALLOW_FALLBACK_ACTIONABLE_RECOMMENDATIONS or recommendation == "HOLD"
+    )
     return {
         "ticker": stock["ticker"],
         "analysis_date": run_date.isoformat(),
+        "analysis_method": "fallback_heuristic",
+        "fallback_reason": fallback_reason,
+        "publication_allowed": publication_allowed,
         "recommendation": recommendation,
         "risk_level": risk_level,
         "confidence_score": confidence,
@@ -357,13 +603,21 @@ def _normalize_ai_analysis(
     if risk_level not in {"LOW", "MEDIUM", "HIGH"}:
         risk_level = "MEDIUM"
     confidence = int(parsed.get("confidence_score", 50))
+    primary_signal = _primary_signal(score["signals"])
     return {
         "ticker": stock["ticker"],
         "analysis_date": run_date.isoformat(),
+        "analysis_method": "ai",
+        "publication_allowed": True,
         "recommendation": recommendation,
         "risk_level": risk_level,
         "confidence_score": max(0, min(100, confidence)),
-        "catalyst": str(parsed.get("catalyst", _primary_signal(score["signals"])["title"])),
+        "catalyst": str(
+            parsed.get(
+                "catalyst",
+                primary_signal["title"] if primary_signal else "No dominant catalyst",
+            )
+        ),
         "expected_timeframe": str(parsed.get("expected_timeframe", "1-30 days")),
         "reasoning": str(parsed.get("reasoning", ""))[:1000],
         "invalidation_criteria": str(parsed.get("invalidation_criteria", ""))[:500],
@@ -399,13 +653,17 @@ invalidation_criteria: concise condition that would invalidate the thesis
 
 
 def _price_volume_signals(ticker: str, run_date: date) -> list[dict[str, Any]]:
+    stored_signals = _stored_market_signals(ticker, run_date)
+    if stored_signals:
+        return stored_signals
+
     rows = store.get_stock_data(ticker, run_date - timedelta(days=45), run_date)
     if len(rows) < 2:
         return []
     latest = rows[-1]
     previous = rows[-2]
-    close = Decimal(str(latest["close_price"]))
-    prev_close = Decimal(str(previous["close_price"]))
+    close = _analysis_close_price(latest)
+    prev_close = _analysis_close_price(previous)
     if prev_close <= 0:
         return []
     price_change = float((close - prev_close) / prev_close * 100)
@@ -435,6 +693,46 @@ def _price_volume_signals(ticker: str, run_date: date) -> list[dict[str, Any]]:
                 "Unusual volume",
                 f"{ticker} traded at {volume_ratio:.1f}x its recent average volume.",
                 "yfinance",
+            )
+        )
+    return signals
+
+
+def _stored_market_signals(ticker: str, run_date: date) -> list[dict[str, Any]]:
+    try:
+        rows = store.market_signals_for_ticker(
+            ticker,
+            run_date - timedelta(days=3),
+            run_date,
+        )
+    except AttributeError:
+        return []
+    except Exception as exc:
+        logger.warning("market_signal_lookup_failed", ticker=ticker, error=str(exc))
+        return []
+
+    signals = []
+    for row in rows:
+        if row.get("signal_type") not in {"price_move", "volume_move"}:
+            continue
+        signals.append(
+            _signal(
+                ticker,
+                row["signal_type"],
+                row["direction"],
+                int(row["score"]),
+                row["title"],
+                row["summary"],
+                "stock_collector",
+                {
+                    "signal_date": row.get("signal_date"),
+                    "price_change_percent": _jsonable_value(row.get("price_change_percent")),
+                    "volume_ratio": _jsonable_value(row.get("volume_ratio")),
+                    "close_price": _jsonable_value(row.get("close_price")),
+                    "previous_close_price": _jsonable_value(row.get("previous_close_price")),
+                    "volume": row.get("volume"),
+                    "average_volume": _jsonable_value(row.get("average_volume")),
+                },
             )
         )
     return signals
@@ -474,41 +772,258 @@ def _news_signals(ticker: str, run_date: date) -> list[dict[str, Any]]:
 
 
 def _event_signals(ticker: str, run_date: date) -> list[dict[str, Any]]:
-    signals = []
-    try:
-        info = yf.Ticker(ticker)
-        calendar = getattr(info, "calendar", None)
-        if calendar is not None and not getattr(calendar, "empty", True):
-            text = str(calendar)
-            signals.append(
-                _signal(
-                    ticker,
-                    "earnings",
-                    "positive",
-                    20,
-                    "Upcoming earnings calendar signal",
-                    f"Earnings/calendar data is available for {ticker}.",
-                    "yfinance",
-                    {"calendar": text[:500]},
-                )
-            )
-        dividends = getattr(info, "dividends", None)
-        if dividends is not None and len(dividends) > 0:
-            last_dividend = dividends.tail(1)
-            signals.append(
-                _signal(
-                    ticker,
-                    "dividend",
-                    "positive",
-                    10,
-                    "Dividend history signal",
-                    f"{ticker} has dividend data available; latest record {last_dividend.to_dict()}.",
-                    "yfinance",
-                )
-            )
-    except Exception as exc:
-        logger.info("event_signal_provider_unavailable", ticker=ticker, error=str(exc))
+    signals = _earnings_signals(ticker, run_date)
+    signals.extend(_dividend_signals(ticker, run_date))
     return signals
+
+
+def _earnings_signals(ticker: str, run_date: date) -> list[dict[str, Any]]:
+    upcoming = store.earnings_events_for_ticker(
+        ticker,
+        run_date,
+        run_date + timedelta(days=EARNINGS_LOOKAHEAD_DAYS),
+    )
+    upcoming = [event for event in upcoming if event.get("is_upcoming")]
+    if not upcoming:
+        return []
+
+    next_event = sorted(upcoming, key=lambda event: event["event_date"])[0]
+    past_events = store.earnings_events_for_ticker(
+        ticker,
+        run_date - timedelta(days=EARNINGS_HISTORY_DAYS),
+        run_date - timedelta(days=1),
+    )
+    past_events = [
+        event
+        for event in past_events
+        if event.get("post_earnings_price_move_percent") is not None
+    ][-10:]
+    recent_news = store.news_for_ticker(ticker, run_date - timedelta(days=14), run_date)
+    prediction = _earnings_prediction(next_event, past_events, recent_news)
+    days_until = (
+        _parse_date(next_event.get("event_date")) or run_date
+    ) - run_date
+    title = "Upcoming earnings event"
+    summary = (
+        f"{ticker} reports earnings in {days_until.days} day(s). "
+        f"{prediction['summary']}"
+    )
+    return [
+        _signal(
+            ticker,
+            "earnings",
+            prediction["direction"],
+            prediction["score"],
+            title,
+            summary,
+            "earnings_calendar",
+            {
+                "next_event": _jsonable_earnings_event(next_event),
+                "historical_event_count": len(past_events),
+                "average_post_earnings_move_percent": prediction[
+                    "average_post_earnings_move_percent"
+                ],
+                "news_article_count": len(recent_news),
+                "prediction": prediction,
+            },
+        )
+    ]
+
+
+def upcoming_earnings_summary(run_date: date, limit: int = 20) -> list[dict[str, Any]]:
+    events = store.upcoming_earnings(
+        run_date,
+        run_date + timedelta(days=EARNINGS_LOOKAHEAD_DAYS),
+        limit=limit,
+    )
+    return [_jsonable_earnings_event(event) for event in events]
+
+
+def _dividend_signals(ticker: str, run_date: date) -> list[dict[str, Any]]:
+    upcoming = store.dividend_events_for_ticker(
+        ticker,
+        run_date,
+        run_date + timedelta(days=DIVIDEND_LOOKAHEAD_DAYS),
+    )
+    upcoming = [event for event in upcoming if event.get("is_upcoming")]
+    if not upcoming:
+        return []
+
+    next_event = sorted(upcoming, key=lambda event: event["ex_dividend_date"])[0]
+    past_events = store.dividend_events_for_ticker(
+        ticker,
+        run_date - timedelta(days=DIVIDEND_HISTORY_DAYS),
+        run_date - timedelta(days=1),
+    )
+    past_events = [
+        event
+        for event in past_events
+        if event.get("post_ex_dividend_price_move_percent") is not None
+    ][-10:]
+    prediction = _dividend_prediction(next_event, past_events)
+    days_until = (
+        _parse_date(next_event.get("ex_dividend_date")) or run_date
+    ) - run_date
+    return [
+        _signal(
+            ticker,
+            "dividend",
+            prediction["direction"],
+            prediction["score"],
+            "Upcoming dividend event",
+            (
+                f"{ticker} goes ex-dividend in {days_until.days} day(s). "
+                f"{prediction['summary']}"
+            ),
+            "dividend_calendar",
+            {
+                "next_event": _jsonable_dividend_event(next_event),
+                "historical_event_count": len(past_events),
+                "average_post_ex_dividend_move_percent": prediction[
+                    "average_post_ex_dividend_move_percent"
+                ],
+                "prediction": prediction,
+            },
+        )
+    ]
+
+
+def upcoming_dividends_summary(run_date: date, limit: int = 20) -> list[dict[str, Any]]:
+    events = store.upcoming_dividends(
+        run_date,
+        run_date + timedelta(days=DIVIDEND_LOOKAHEAD_DAYS),
+        limit=limit,
+    )
+    return [_jsonable_dividend_event(event) for event in events]
+
+
+def _dividend_prediction(
+    next_event: dict[str, Any],
+    past_events: list[dict[str, Any]],
+) -> dict[str, Any]:
+    moves = [
+        float(event["post_ex_dividend_price_move_percent"])
+        for event in past_events
+        if event.get("post_ex_dividend_price_move_percent") is not None
+    ]
+    avg_move = sum(moves) / len(moves) if moves else 0.0
+    avg_abs_move = sum(abs(move) for move in moves) / len(moves) if moves else 0.0
+    dividend_yield = float(next_event.get("dividend_yield") or 0)
+    score = int(max(-40, min(40, avg_move * 5 + min(dividend_yield, 8) * 2)))
+    direction = "positive" if score > 6 else "negative" if score < -6 else "neutral"
+    amount = next_event.get("dividend_amount")
+    amount_text = f" Dividend amount is {amount}." if amount is not None else ""
+    yield_text = f" Forward dividend yield is {dividend_yield:.2f}%." if dividend_yield else ""
+    if moves:
+        history = (
+            f"Past {len(moves)} ex-dividend event(s) averaged {avg_move:.2f}% "
+            f"next-session price move with {avg_abs_move:.2f}% average absolute volatility."
+        )
+    else:
+        history = "No stored ex-dividend price reaction history is available yet."
+    return {
+        "direction": direction,
+        "score": score,
+        "summary": f"{history}{amount_text}{yield_text}",
+        "average_post_ex_dividend_move_percent": round(avg_move, 2),
+        "average_abs_post_ex_dividend_move_percent": round(avg_abs_move, 2),
+        "dividend_yield": round(dividend_yield, 2),
+    }
+
+
+def _earnings_prediction(
+    next_event: dict[str, Any],
+    past_events: list[dict[str, Any]],
+    recent_news: list[dict[str, Any]],
+) -> dict[str, Any]:
+    moves = [
+        float(event["post_earnings_price_move_percent"])
+        for event in past_events
+        if event.get("post_earnings_price_move_percent") is not None
+    ]
+    avg_move = sum(moves) / len(moves) if moves else 0.0
+    avg_abs_move = sum(abs(move) for move in moves) / len(moves) if moves else 0.0
+    surprises = [
+        float(event["surprise_percent"])
+        for event in past_events
+        if event.get("surprise_percent") is not None
+    ]
+    avg_surprise = sum(surprises) / len(surprises) if surprises else 0.0
+    news_text = " ".join(
+        f"{article.get('title', '')} {article.get('summary', '')}".lower()
+        for article in recent_news
+    )
+    positive_hits = sum(1 for keyword in POSITIVE_KEYWORDS if keyword in news_text)
+    negative_hits = sum(1 for keyword in NEGATIVE_KEYWORDS if keyword in news_text)
+    score = int(max(-60, min(60, avg_move * 6 + avg_surprise * 0.25)))
+    if positive_hits > negative_hits:
+        score += min(20, positive_hits * 5)
+    elif negative_hits > positive_hits:
+        score -= min(25, negative_hits * 7)
+    score = int(max(-75, min(75, score)))
+    direction = "positive" if score > 8 else "negative" if score < -8 else "neutral"
+    if moves:
+        history = (
+            f"Past {len(moves)} event(s) averaged {avg_move:.2f}% post-earnings "
+            f"price move with {avg_abs_move:.2f}% average absolute volatility."
+        )
+    else:
+        history = "No stored post-earnings price reaction history is available yet."
+    news = (
+        f"Recent news tone has {positive_hits} positive and {negative_hits} negative "
+        "earnings-relevant keyword hit(s)."
+        if recent_news
+        else "No recent ticker news is available for earnings context."
+    )
+    estimate = next_event.get("eps_estimate")
+    estimate_text = f" Consensus EPS estimate is {estimate}." if estimate is not None else ""
+    return {
+        "direction": direction,
+        "score": score,
+        "summary": f"{history} {news}{estimate_text}",
+        "average_post_earnings_move_percent": round(avg_move, 2),
+        "average_abs_post_earnings_move_percent": round(avg_abs_move, 2),
+        "average_surprise_percent": round(avg_surprise, 2),
+        "positive_news_hits": positive_hits,
+        "negative_news_hits": negative_hits,
+    }
+
+
+def _jsonable_earnings_event(event: dict[str, Any]) -> dict[str, Any]:
+    fields = (
+        "ticker",
+        "company_name",
+        "event_date",
+        "eps_estimate",
+        "reported_eps",
+        "surprise_percent",
+        "time_of_day",
+        "is_upcoming",
+        "price_before",
+        "price_after",
+        "post_earnings_price_move_percent",
+        "provider",
+        "source_url",
+    )
+    return {field: _jsonable_value(event[field]) for field in fields if field in event}
+
+
+def _jsonable_dividend_event(event: dict[str, Any]) -> dict[str, Any]:
+    fields = (
+        "ticker",
+        "company_name",
+        "ex_dividend_date",
+        "pay_date",
+        "dividend_amount",
+        "dividend_yield",
+        "is_upcoming",
+        "price_before",
+        "price_after",
+        "post_ex_dividend_price_move_percent",
+        "provider",
+        "source_url",
+    )
+    return {field: _jsonable_value(event[field]) for field in fields if field in event}
 
 
 def _options_signals(ticker: str) -> list[dict[str, Any]]:
@@ -605,7 +1120,10 @@ def _sector_relative_signals(stock: dict[str, Any], run_date: date) -> list[dict
         etf = yf.download(sector_etf, period="5d", progress=False, timeout=10)
         if etf is None or etf.empty:
             return []
-        stock_move = _pct_move(stock_rows[-2]["close_price"], stock_rows[-1]["close_price"])
+        stock_move = _pct_move(
+            _analysis_close_price(stock_rows[-2]),
+            _analysis_close_price(stock_rows[-1]),
+        )
         etf_close = etf["Close"]
         etf_move = _pct_move(etf_close.iloc[-2], etf_close.iloc[-1])
         relative = stock_move - etf_move
@@ -661,6 +1179,23 @@ def _pct_move(previous: Any, current: Any) -> float:
     return float((current_dec - previous_dec) / previous_dec * 100)
 
 
+def _analysis_close_price(row: dict[str, Any]) -> Decimal:
+    """Return the close value preferred for analysis.
+
+    Adjusted close is preferred when a provider supplies it, because it better
+    preserves comparability around splits and dividends. The raw close remains
+    the backward-compatible storage field and fallback.
+    """
+    adjusted = row.get("adjusted_close_price")
+    if adjusted is not None:
+        return Decimal(str(adjusted))
+    return Decimal(str(row["close_price"]))
+
+
+def _has_market_data_provenance(row: dict[str, Any]) -> bool:
+    return bool(row.get("data_provider")) and bool(row.get("price_adjustment"))
+
+
 def _primary_signal(signals: list[dict[str, Any]]) -> dict[str, Any] | None:
     if not signals:
         return None
@@ -679,6 +1214,74 @@ def _source_warnings(scores: list[dict[str, Any]]) -> list[str]:
     if not any(signal["signal_type"] == "earnings" for score in scores for signal in score["signals"]):
         return ["No earnings-calendar signals were available from configured providers."]
     return []
+
+
+def _is_publication_allowed(analysis: dict[str, Any]) -> bool:
+    if analysis.get("analysis_method", "ai") == "fallback_heuristic":
+        return bool(analysis.get("publication_allowed", False))
+    return bool(analysis.get("publication_allowed", True))
+
+
+def _fallback_policy_summary(analyses: list[dict[str, Any]]) -> dict[str, Any]:
+    fallback_analyses = [
+        analysis
+        for analysis in analyses
+        if analysis.get("analysis_method") == "fallback_heuristic"
+    ]
+    suppressed = [
+        analysis
+        for analysis in fallback_analyses
+        if analysis.get("recommendation") in {"BUY", "SELL"}
+        and not _is_publication_allowed(analysis)
+    ]
+    return {
+        "fallback_actionable_recommendations_allowed": (
+            ALLOW_FALLBACK_ACTIONABLE_RECOMMENDATIONS
+        ),
+        "fallback_confidence_cap": FALLBACK_CONFIDENCE_CAP,
+        "fallback_analysis_count": len(fallback_analyses),
+        "suppressed_fallback_count": len(suppressed),
+        "fallback_tickers": [analysis["ticker"] for analysis in fallback_analyses],
+        "suppressed_fallback_tickers": [analysis["ticker"] for analysis in suppressed],
+    }
+
+
+def _parse_date(value: Any) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        parsed = value
+    elif not value:
+        return None
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _jsonable_value(value: Any) -> Any:
+    if isinstance(value, Decimal):
+        if value == value.to_integral_value():
+            return int(value)
+        return float(value)
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    return value
 
 
 def _emit_metric(metric_name: str, value: float) -> None:

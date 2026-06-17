@@ -1,6 +1,6 @@
 """FastAPI router for health check endpoint."""
 
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -31,6 +31,8 @@ class HealthResponse(BaseModel):
     components: ComponentStatus
     last_stock_collection: Optional[str] = None
     last_news_collection: Optional[str] = None
+    last_stock_collection_summary: Optional[dict[str, Any]] = None
+    last_news_collection_summary: Optional[dict[str, Any]] = None
     last_analysis: Optional[str] = None
     last_publication: Optional[str] = None
 
@@ -45,6 +47,8 @@ async def health_check():
     db_status = "ok"
     last_stock_collection: Optional[str] = None
     last_news_collection: Optional[str] = None
+    last_stock_collection_summary: dict[str, Any] | None = None
+    last_news_collection_summary: dict[str, Any] | None = None
     last_analysis: Optional[str] = None
     last_publication: Optional[str] = None
 
@@ -52,6 +56,8 @@ async def health_check():
         store.ping()
         last_stock_collection = _optional_string(store.last_stock_collection())
         last_news_collection = _optional_string(store.last_news_collection())
+        last_stock_collection_summary = store.last_stock_collection_summary()
+        last_news_collection_summary = store.last_news_collection_summary()
         last_analysis = _optional_string(store.last_analysis())
         last_publication = _optional_string(store.last_publication())
 
@@ -66,6 +72,8 @@ async def health_check():
         components=ComponentStatus(database=db_status),
         last_stock_collection=last_stock_collection,
         last_news_collection=last_news_collection,
+        last_stock_collection_summary=last_stock_collection_summary,
+        last_news_collection_summary=last_news_collection_summary,
         last_analysis=last_analysis,
         last_publication=last_publication,
     )

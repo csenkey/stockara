@@ -1,0 +1,80 @@
+"""Tests for the MonitoringStack CDK stack."""
+
+import aws_cdk as cdk
+import aws_cdk.assertions as assertions
+
+from stacks.monitoring_stack import MonitoringStack
+
+
+def test_collector_completeness_alarms_are_created():
+    app = cdk.App()
+    stack = MonitoringStack(app, "TestMonitoring", deployment_stage="codex-test")
+    template = assertions.Template.from_stack(stack)
+
+    for metric_name in [
+        "stock_collection_partial_runs",
+        "stock_collection_failed_runs",
+        "stock_collection_completeness_percent",
+        "news_collection_partial_runs",
+        "news_collection_failed_runs",
+        "news_collection_completeness_percent",
+    ]:
+        template.has_resource_properties(
+            "AWS::CloudWatch::Alarm",
+            {
+                "Namespace": "StockMonitoring",
+                "MetricName": metric_name,
+            },
+        )
+
+
+def test_missing_collector_metric_alarms_breach_on_missing_data():
+    app = cdk.App()
+    stack = MonitoringStack(app, "TestMissingMetricMonitoring", deployment_stage="codex-test")
+    template = assertions.Template.from_stack(stack)
+
+    for metric_name in [
+        "stock_collection_completeness_percent",
+        "news_collection_completeness_percent",
+    ]:
+        template.has_resource_properties(
+            "AWS::CloudWatch::Alarm",
+            {
+                "Namespace": "StockMonitoring",
+                "MetricName": metric_name,
+                "Statistic": "SampleCount",
+                "ComparisonOperator": "LessThanThreshold",
+                "Threshold": 1,
+                "TreatMissingData": "breaching",
+            },
+        )
+
+
+def test_publication_artifact_alarms_are_created():
+    app = cdk.App()
+    stack = MonitoringStack(app, "TestPublicationMonitoring", deployment_stage="codex-test")
+    template = assertions.Template.from_stack(stack)
+
+    template.has_resource_properties(
+        "AWS::CloudWatch::Alarm",
+        {
+            "Namespace": "StockaraPhase1",
+            "MetricName": "artifact_publish_failures",
+            "Statistic": "Sum",
+            "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+            "Threshold": 1,
+        },
+    )
+
+    for metric_name in ["top_picks_published", "sell_alerts_published"]:
+        template.has_resource_properties(
+            "AWS::CloudWatch::Alarm",
+            {
+                "Namespace": "StockaraPhase1",
+                "MetricName": metric_name,
+                "Statistic": "SampleCount",
+                "ComparisonOperator": "LessThanThreshold",
+                "Threshold": 1,
+                "TreatMissingData": "breaching",
+            },
+        )

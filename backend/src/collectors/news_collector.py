@@ -16,13 +16,13 @@ import structlog
 from openai import OpenAI
 
 from src.db.connection import DatabasePool, store
+from src.services.secrets import get_openai_api_key
 
 logger = structlog.get_logger(__name__)
 
 # Configuration from environment variables
 NEWSAPI_KEY = os.environ.get("NEWSAPI_KEY", "")
 FINNHUB_KEY = os.environ.get("FINNHUB_KEY", "")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 POLL_INTERVAL_MINUTES = int(os.environ.get("NEWS_POLL_INTERVAL_MINUTES", "15"))
 
 # CloudWatch metrics client
@@ -181,7 +181,7 @@ def generate_summary(client: OpenAI | None, title: str, content: str) -> dict[st
 
     try:
         if client is None:
-            raise RuntimeError("OPENAI_API_KEY is not configured")
+            raise RuntimeError("OpenAI API key is not configured")
 
         response = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -279,6 +279,74 @@ def raise_all_sources_failed_alert() -> None:
         logger.error("Failed to raise all-sources-failed alert", error=str(e))
 
 
+def build_news_collection_summary(
+    status: str,
+    articles_processed: int,
+    sources_available: int,
+    total_fetched: int,
+    duplicates_skipped: int = 0,
+    failed_sources: list[str] | None = None,
+    article_failures: int = 0,
+) -> dict[str, Any]:
+    sources_total = 2
+    return {
+        "status": status,
+        "sources_total": sources_total,
+        "sources_available": sources_available,
+        "sources_failed": sources_total - sources_available,
+        "failed_sources": failed_sources or [],
+        "articles_fetched": total_fetched,
+        "articles_processed": articles_processed,
+        "duplicates_skipped": duplicates_skipped,
+        "article_failures": article_failures,
+        "completeness_ratio": round(sources_available / sources_total, 4),
+    }
+
+
+def record_news_collection_summary(summary: dict[str, Any]) -> None:
+    try:
+        store.put_collection_summary("NEWS_COLLECTION", summary)
+    except Exception as e:
+        logger.warning("news_collection_summary_write_failed", error=str(e))
+
+
+def emit_news_collection_summary_metrics(summary: dict[str, Any]) -> None:
+    status = str(summary.get("status", "unknown"))
+    try:
+        cloudwatch.put_metric_data(
+            Namespace="StockMonitoring",
+            MetricData=[
+                {
+                    "MetricName": "news_collection_completeness_percent",
+                    "Value": float(summary.get("completeness_ratio", 0)) * 100,
+                    "Unit": "Percent",
+                },
+                {
+                    "MetricName": "news_sources_failed",
+                    "Value": int(summary.get("sources_failed", 0)),
+                    "Unit": "Count",
+                },
+                {
+                    "MetricName": "news_article_failures",
+                    "Value": int(summary.get("article_failures", 0)),
+                    "Unit": "Count",
+                },
+                {
+                    "MetricName": "news_collection_partial_runs",
+                    "Value": 1 if status == "partial" else 0,
+                    "Unit": "Count",
+                },
+                {
+                    "MetricName": "news_collection_failed_runs",
+                    "Value": 1 if status == "failed" else 0,
+                    "Unit": "Count",
+                },
+            ],
+        )
+    except Exception as e:
+        logger.warning("news_collection_summary_metrics_failed", error=str(e))
+
+
 def collect_news() -> dict[str, Any]:
     """Main news collection logic.
 
@@ -299,16 +367,31 @@ def collect_news() -> dict[str, Any]:
         sources_available += 1
     if finnhub_articles:
         sources_available += 1
+    failed_sources = []
+    if not newsapi_articles:
+        failed_sources.append("newsapi")
+    if not finnhub_articles:
+        failed_sources.append("finnhub")
 
     # Check if all sources failed
     if sources_available == 0:
         raise_all_sources_failed_alert()
         emit_metrics(articles_processed=0, sources_available=0, sources_total=2)
+        summary = build_news_collection_summary(
+            status="failed",
+            articles_processed=0,
+            sources_available=0,
+            total_fetched=0,
+            failed_sources=failed_sources,
+        )
+        record_news_collection_summary(summary)
+        emit_news_collection_summary_metrics(summary)
         return {
             "status": "error",
             "message": "All news sources unavailable",
             "articles_processed": 0,
             "sources_available": 0,
+            "collection_summary": summary,
         }
 
     # Combine all articles
@@ -338,8 +421,10 @@ def collect_news() -> dict[str, Any]:
 
         # Generate summaries and store. If no OpenAI key is configured, the
         # summary function falls back to title-based summaries and ticker matching.
-        openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+        openai_api_key = get_openai_api_key()
+        openai_client = OpenAI(api_key=openai_api_key) if openai_api_key else None
         articles_stored = 0
+        article_failures = 0
 
         for article in new_articles:
             try:
@@ -356,6 +441,7 @@ def collect_news() -> dict[str, Any]:
                     error=str(e),
                     title=article["title"],
                 )
+                article_failures += 1
                 continue
 
         logger.info("News collection complete", articles_stored=articles_stored)
@@ -370,12 +456,28 @@ def collect_news() -> dict[str, Any]:
         sources_total=2,
     )
 
+    status = "success"
+    if failed_sources or article_failures:
+        status = "partial"
+    summary = build_news_collection_summary(
+        status=status,
+        articles_processed=articles_stored,
+        sources_available=sources_available,
+        total_fetched=len(all_articles),
+        duplicates_skipped=len(all_articles) - len(new_articles),
+        failed_sources=failed_sources,
+        article_failures=article_failures,
+    )
+    record_news_collection_summary(summary)
+    emit_news_collection_summary_metrics(summary)
+
     return {
         "status": "success",
         "articles_processed": articles_stored,
         "sources_available": sources_available,
         "total_fetched": len(all_articles),
         "duplicates_skipped": len(all_articles) - len(new_articles),
+        "collection_summary": summary,
     }
 
 
@@ -391,7 +493,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     Returns:
         Dict with execution results.
     """
-    logger.info("News collector Lambda invoked", event=event)
+    logger.info("News collector Lambda invoked", lambda_event=event)
 
     try:
         result = collect_news()

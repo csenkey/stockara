@@ -4,6 +4,12 @@
 
 The Stock Monitoring and Analysis System is a cloud-hosted web application that collects stock market data and news, applies AI-driven analysis to generate buy/hold/sell recommendations, and provides personalized portfolio suggestions to users. The system monitors approximately 1000+ stocks, categorized by sector and company size, and delivers daily actionable insights through a web GUI. The system is designed for low user volume (10-100 users) with a focus on minimal hosting costs.
 
+## Product Vision and Phase 1 Motto
+
+Phase 1 is an accurate, reliable stock analysis product that can support real business and investment decisions. It is not a throwaway MVP, demo, or proof of concept. Later phases add portfolio-management depth and workflow features; they do not defer core data correctness, analysis reliability, or recommendation trustworthiness.
+
+Phase 1 recommendations are a list of promising, evidence-backed opportunities among tickers whose own data is fresh and reliable enough to analyze. The product does not need to claim the absolute top 5 or top 10 opportunities across the entire watchlist when universe coverage is partial, but partial coverage must be explicit and stale or under-supported tickers must be suppressed.
+
 ## Glossary
 
 - **Stock_Data_Collector**: The component responsible for fetching and storing daily stock market data from external data providers
@@ -64,6 +70,7 @@ The Stock Monitoring and Analysis System is a cloud-hosted web application that 
 5. IF a stock is added without a sector label or without a company size classification, THEN THE Stock_Monitor SHALL reject the addition and display an error message indicating which required field is missing
 6. THE Stock_Monitor SHALL provide an interface to add, remove, and update stocks in the watchlist, where each operation completes within 2 seconds
 7. IF the operator attempts to remove or update a stock that does not exist in the watchlist, THEN THE Stock_Monitor SHALL display an error message indicating the stock was not found and leave the watchlist unchanged
+8. WHEN the initial watchlist is seeded for Phase 1, THE Stock_Monitor SHALL use explicit, source-backed sector metadata for every seeded stock rather than relying on broad placeholder defaults
 
 ### Requirement 4: AI-Driven Daily Analysis
 

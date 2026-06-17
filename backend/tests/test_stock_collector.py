@@ -17,8 +17,18 @@ from backend.src.collectors.stock_collector import (
     handler,
     _fetch_yfinance_with_retry,
     _process_batch,
+    _select_due_stocks,
+    _group_stocks_by_period,
+    _build_collection_summary,
+    _emit_collection_summary_metrics,
+    _record_failed_ticker_state,
+    _movement_signals_from_rows,
     _extract_ticker_data,
+    BatchResult,
+    ExtractResult,
+    StoreResult,
     _validate_record,
+    _fetch_window,
     _store_records,
     _alpha_vantage_fallback,
     _fetch_alpha_vantage_with_retry,
@@ -47,12 +57,12 @@ def sample_yfinance_dataframe():
     idx = pd.DatetimeIndex([datetime(2025, 1, 15)])
     columns = pd.MultiIndex.from_tuples([
         ("AAPL", "Open"), ("AAPL", "High"), ("AAPL", "Low"),
-        ("AAPL", "Close"), ("AAPL", "Volume"),
+        ("AAPL", "Close"), ("AAPL", "Adj Close"), ("AAPL", "Volume"),
         ("MSFT", "Open"), ("MSFT", "High"), ("MSFT", "Low"),
-        ("MSFT", "Close"), ("MSFT", "Volume"),
+        ("MSFT", "Close"), ("MSFT", "Adj Close"), ("MSFT", "Volume"),
     ])
-    data = [[150.0, 155.0, 149.0, 153.0, 1000000,
-             400.0, 410.0, 395.0, 405.0, 500000]]
+    data = [[150.0, 155.0, 149.0, 153.0, 152.5, 1000000,
+             400.0, 410.0, 395.0, 405.0, 404.5, 500000]]
     return pd.DataFrame(data, index=idx, columns=columns)
 
 
@@ -61,7 +71,7 @@ def sample_single_ticker_dataframe():
     """Create a sample single-ticker yfinance DataFrame."""
     idx = pd.DatetimeIndex([datetime(2025, 1, 15)])
     data = {"Open": [150.0], "High": [155.0], "Low": [149.0],
-            "Close": [153.0], "Volume": [1000000]}
+            "Close": [153.0], "Adj Close": [152.5], "Volume": [1000000]}
     return pd.DataFrame(data, index=idx)
 
 
@@ -79,6 +89,33 @@ class TestValidateRecord:
         assert result["ticker"] == "AAPL"
         assert result["open_price"] == Decimal("150.0")
         assert result["volume"] == 1000000
+        assert result["data_provider"] == "yfinance"
+        assert result["provider_priority"] == "primary"
+        assert result["price_adjustment"] == "unadjusted"
+        assert result["corporate_action_adjusted"] is False
+        assert result["fetch_period"] == "1d"
+
+    def test_valid_record_includes_adjusted_close_when_available(self):
+        """Yfinance records preserve adjusted close for analysis."""
+        row = pd.Series({"Open": 150.0, "High": 155.0, "Low": 149.0,
+                         "Close": 153.0, "Adj Close": 152.5, "Volume": 1000000})
+        result = _validate_record(
+            "AAPL",
+            datetime(2025, 1, 15),
+            row,
+            period="5y",
+            stock_metadata={"exchange": "NASDAQ", "currency": "USD"},
+        )
+        assert result is not None
+        assert result["adjusted_close_price"] == Decimal("152.5")
+        assert result["has_adjusted_close"] is True
+        assert result["fetch_period"] == "5y"
+        assert result["exchange"] == "NASDAQ"
+        assert result["currency"] == "USD"
+        assert result["adjustment_context"] == "raw_ohlcv_with_adjusted_close"
+        assert result["split_dividend_adjustment"] == "adjusted_close_available"
+        assert result["fetch_window_start"] is not None
+        assert result["fetch_window_end"] is not None
 
     def test_missing_open_price(self):
         """Record with None open price is discarded."""
@@ -185,6 +222,26 @@ class TestFetchYfinanceWithRetry:
         mock_sleep.assert_called_once_with(2)
 
 
+class TestProviderProvenance:
+    """Tests market data provenance helpers."""
+
+    def test_fetch_window_for_year_period(self):
+        window = _fetch_window("5y", today=date(2026, 6, 17))
+
+        assert window == {
+            "fetch_window_start": "2021-06-17",
+            "fetch_window_end": "2026-06-17",
+        }
+
+    def test_fetch_window_for_alpha_vantage_compact_output(self):
+        window = _fetch_window("compact", today=date(2026, 6, 17))
+
+        assert window == {
+            "fetch_window_start": "2026-03-09",
+            "fetch_window_end": "2026-06-17",
+        }
+
+
 # --- Tests for _extract_ticker_data ---
 
 class TestExtractTickerData:
@@ -197,6 +254,8 @@ class TestExtractTickerData:
         assert len(records) == 1
         assert records[0]["ticker"] == "AAPL"
         assert records[0]["close_price"] == Decimal("153.0")
+        assert records[0]["adjusted_close_price"] == Decimal("152.5")
+        assert records[0]["data_provider"] == "yfinance"
 
     def test_extract_single_ticker(self, sample_single_ticker_dataframe):
         """Extracts data from single-ticker response."""
@@ -228,42 +287,243 @@ class TestProcessBatch:
     """Tests for batch processing logic."""
 
     @patch("backend.src.collectors.stock_collector._store_records")
-    @patch("backend.src.collectors.stock_collector._extract_ticker_data")
+    @patch("backend.src.collectors.stock_collector._extract_ticker_data_result")
     @patch("backend.src.collectors.stock_collector._fetch_yfinance_with_retry")
     def test_successful_batch(self, mock_fetch, mock_extract, mock_store):
         """All tickers in batch processed successfully."""
         mock_fetch.return_value = MagicMock()
-        mock_extract.return_value = [{"ticker": "AAPL"}]
-        mock_store.return_value = 1
+        mock_extract.return_value = ExtractResult(records=[{"ticker": "AAPL"}])
+        mock_store.return_value = StoreResult(inserted_records=1)
 
-        collected, failed = _process_batch(["AAPL", "MSFT"])
-        assert collected == 2
-        assert failed == []
+        result = _process_batch(["AAPL", "MSFT"])
+        assert result.records_inserted == 2
+        assert result.failed_tickers == []
+        assert result.collected_tickers == {"AAPL", "MSFT"}
 
     @patch("backend.src.collectors.stock_collector._store_records")
-    @patch("backend.src.collectors.stock_collector._extract_ticker_data")
+    @patch("backend.src.collectors.stock_collector._extract_ticker_data_result")
     @patch("backend.src.collectors.stock_collector._fetch_yfinance_with_retry")
     def test_partial_failure(self, mock_fetch, mock_extract, mock_store):
         """Some tickers fail extraction, returned in failed list."""
         mock_fetch.return_value = MagicMock()
         mock_extract.side_effect = [
-            [{"ticker": "AAPL"}],  # AAPL succeeds
-            None,                   # MSFT fails
+            ExtractResult(records=[{"ticker": "AAPL"}]),
+            ExtractResult(failure_reason="malformed"),
         ]
-        mock_store.return_value = 1
+        mock_store.return_value = StoreResult(inserted_records=1)
 
-        collected, failed = _process_batch(["AAPL", "MSFT"])
-        assert collected == 1
-        assert failed == ["MSFT"]
+        result = _process_batch(["AAPL", "MSFT"])
+        assert result.records_inserted == 1
+        assert result.failed_tickers == ["MSFT"]
+        assert result.malformed_tickers == ["MSFT"]
+        assert result.collected_tickers == {"AAPL"}
+
+    @patch("backend.src.collectors.stock_collector._store_records")
+    @patch("backend.src.collectors.stock_collector._extract_ticker_data_result")
+    @patch("backend.src.collectors.stock_collector._fetch_yfinance_with_retry")
+    def test_duplicate_records_count_as_ticker_success(
+        self, mock_fetch, mock_extract, mock_store
+    ):
+        """Duplicate rows still prove the ticker had provider coverage."""
+        mock_fetch.return_value = MagicMock()
+        mock_extract.return_value = ExtractResult(records=[{"ticker": "AAPL"}])
+        mock_store.return_value = StoreResult(duplicate_records=1)
+
+        result = _process_batch(["AAPL"])
+
+        assert result.records_inserted == 0
+        assert result.duplicate_records == 1
+        assert result.failed_tickers == []
+        assert result.collected_tickers == {"AAPL"}
 
     @patch("backend.src.collectors.stock_collector._fetch_yfinance_with_retry")
     def test_entire_batch_fails(self, mock_fetch):
         """When yfinance returns None, all tickers are failed."""
         mock_fetch.return_value = None
 
-        collected, failed = _process_batch(["AAPL", "MSFT", "GOOG"])
-        assert collected == 0
-        assert failed == ["AAPL", "MSFT", "GOOG"]
+        result = _process_batch(["AAPL", "MSFT", "GOOG"])
+        assert result.records_inserted == 0
+        assert result.failed_tickers == ["AAPL", "MSFT", "GOOG"]
+        assert result.no_data_tickers == ["AAPL", "MSFT", "GOOG"]
+        assert result.collected_tickers == set()
+
+
+class TestMovementSignals:
+    """Tests price/volume movement signal generation."""
+
+    def test_generates_price_and_volume_signals_from_latest_rows(self):
+        rows = [
+            {
+                "ticker": "NVDA",
+                "trading_date": date(2026, 6, 16),
+                "close_price": Decimal("100"),
+                "volume": 100,
+            },
+            {
+                "ticker": "NVDA",
+                "trading_date": date(2026, 6, 17),
+                "close_price": Decimal("106"),
+                "volume": 220,
+            },
+        ]
+
+        signals = _movement_signals_from_rows("NVDA", rows)
+
+        assert {signal["signal_type"] for signal in signals} == {
+            "price_move",
+            "volume_move",
+        }
+        assert signals[0]["signal_date"] == date(2026, 6, 17)
+        assert signals[0]["price_change_percent"] == Decimal("6.00")
+        assert signals[1]["volume_ratio"] == Decimal("2.2")
+
+
+class TestDueStockSelection:
+    """Tests bounded, stale-first collector selection."""
+
+    def test_select_due_stocks_prioritizes_never_collected_then_oldest(self):
+        stocks = [
+            {"ticker": "MSFT", "latest_stock_data_date": "2026-06-15"},
+            {"ticker": "AAPL"},
+            {"ticker": "NVDA", "latest_stock_data_date": "2026-06-14"},
+        ]
+
+        selected = _select_due_stocks(stocks, {"max_tickers": 2})
+
+        assert [stock["ticker"] for stock in selected] == ["AAPL", "NVDA"]
+
+    def test_select_due_stocks_honors_explicit_tickers(self):
+        stocks = [
+            {"ticker": "MSFT", "latest_stock_data_date": "2026-06-15"},
+            {"ticker": "AAPL"},
+        ]
+
+        selected = _select_due_stocks(stocks, {"tickers": ["msft"], "max_tickers": 25})
+
+        assert [stock["ticker"] for stock in selected] == ["MSFT"]
+
+    def test_group_stocks_by_period_uses_backfill_for_new_tickers(self):
+        grouped = _group_stocks_by_period([
+            {"ticker": "AAPL"},
+            {"ticker": "MSFT", "latest_stock_data_date": "2026-06-15"},
+        ])
+
+        assert [stock["ticker"] for stock in grouped["5y"]] == ["AAPL"]
+        assert [stock["ticker"] for stock in grouped["10d"]] == ["MSFT"]
+
+
+class TestCollectionSummary:
+    """Tests collection completeness/failure summaries."""
+
+    def test_complete_summary(self):
+        summary = _build_collection_summary(
+            active_ticker_count=100,
+            selected_ticker_count=25,
+            records_collected=75,
+            failed_tickers=[],
+        )
+
+        assert summary["status"] == "complete"
+        assert summary["successful_ticker_count"] == 25
+        assert summary["failed_ticker_count"] == 0
+        assert summary["completeness_ratio"] == 1.0
+
+    def test_partial_summary_includes_failures(self):
+        summary = _build_collection_summary(
+            active_ticker_count=100,
+            selected_ticker_count=25,
+            records_collected=72,
+            duplicate_records=3,
+            malformed_tickers=["MSFT"],
+            no_data_tickers=["NVDA"],
+            failed_tickers=["MSFT", "NVDA"],
+        )
+
+        assert summary["status"] == "partial"
+        assert summary["successful_ticker_count"] == 23
+        assert summary["failed_ticker_count"] == 2
+        assert summary["duplicate_record_count"] == 3
+        assert summary["malformed_ticker_count"] == 1
+        assert summary["no_data_ticker_count"] == 1
+        assert summary["completeness_ratio"] == 0.92
+        assert summary["minimum_completeness_ratio"] == 0.9
+        assert summary["completeness_threshold_met"] is True
+        assert summary["failed_tickers"] == ["MSFT", "NVDA"]
+
+    def test_degraded_summary_when_completeness_below_threshold(self):
+        summary = _build_collection_summary(
+            active_ticker_count=100,
+            selected_ticker_count=25,
+            records_collected=40,
+            failed_tickers=["T1", "T2", "T3"],
+        )
+
+        assert summary["status"] == "degraded"
+        assert summary["completeness_ratio"] == 0.88
+        assert summary["completeness_threshold_met"] is False
+
+    def test_no_active_tickers_summary(self):
+        summary = _build_collection_summary(
+            active_ticker_count=0,
+            selected_ticker_count=0,
+            records_collected=0,
+            failed_tickers=[],
+        )
+
+        assert summary["status"] == "no_active_tickers"
+        assert summary["completeness_ratio"] == 1.0
+
+    @patch("backend.src.collectors.stock_collector.boto3.client")
+    def test_summary_metrics_are_emitted(self, mock_client):
+        cloudwatch = MagicMock()
+        mock_client.return_value = cloudwatch
+        summary = _build_collection_summary(
+            active_ticker_count=100,
+            selected_ticker_count=25,
+            records_collected=72,
+            failed_tickers=["MSFT", "NVDA"],
+        )
+
+        _emit_collection_summary_metrics(summary)
+
+        metric_data = cloudwatch.put_metric_data.call_args.kwargs["MetricData"]
+        metric_names = {metric["MetricName"] for metric in metric_data}
+        assert "stock_collection_completeness_percent" in metric_names
+        assert "stock_collection_failed_tickers" in metric_names
+        assert "stock_collection_duplicate_records" in metric_names
+        assert "stock_collection_malformed_tickers" in metric_names
+        assert "stock_collection_no_data_tickers" in metric_names
+        assert "stock_collection_threshold_breaches" in metric_names
+        assert "stock_collection_partial_runs" in metric_names
+        assert any(
+            metric["MetricName"] == "stock_collection_partial_runs"
+            and metric["Value"] == 1
+            for metric in metric_data
+        )
+
+    @patch("backend.src.collectors.stock_collector.store")
+    def test_failed_ticker_state_is_persisted_with_reason(self, mock_store):
+        summary = _build_collection_summary(
+            active_ticker_count=100,
+            selected_ticker_count=2,
+            records_collected=0,
+            malformed_tickers=["MSFT"],
+            no_data_tickers=["NVDA"],
+            failed_tickers=["MSFT", "NVDA"],
+        )
+
+        _record_failed_ticker_state(summary)
+
+        mock_store.mark_stock_collection_failed.assert_any_call(
+            "MSFT",
+            reason="malformed",
+            retry_after_hours=6,
+        )
+        mock_store.mark_stock_collection_failed.assert_any_call(
+            "NVDA",
+            reason="no_data",
+            retry_after_hours=6,
+        )
 
 
 # --- Tests for _store_records (Duplicate Detection - Requirement 1.7) ---
@@ -286,7 +546,8 @@ class TestStoreRecords:
         }]
 
         result = _store_records(records)
-        assert result == 1
+        assert result.inserted_records == 1
+        assert result.duplicate_records == 0
         mock_store.put_stock_data.assert_called_once()
 
     @patch("backend.src.collectors.stock_collector.store")
@@ -304,12 +565,14 @@ class TestStoreRecords:
         }]
 
         result = _store_records(records)
-        assert result == 0  # No new inserts
+        assert result.inserted_records == 0
+        assert result.duplicate_records == 1
 
     def test_empty_records_list(self, mock_db_pool):
         """Empty records list returns 0 without DB call."""
         result = _store_records([])
-        assert result == 0
+        assert result.inserted_records == 0
+        assert result.duplicate_records == 0
 
     @patch("backend.src.collectors.stock_collector.store")
     def test_mixed_new_and_duplicate(self, mock_store, mock_db_pool):
@@ -331,7 +594,8 @@ class TestStoreRecords:
         ]
 
         result = _store_records(records)
-        assert result == 1  # Only one new record
+        assert result.inserted_records == 1
+        assert result.duplicate_records == 1
 
 
 # --- Tests for _alpha_vantage_fallback ---
@@ -345,7 +609,7 @@ class TestAlphaVantageFallback:
     def test_fallback_success(self, mock_fetch_av, mock_store):
         """Fallback collects data for failed tickers."""
         mock_fetch_av.return_value = [{"ticker": "AAPL"}]
-        mock_store.return_value = 1
+        mock_store.return_value = StoreResult(inserted_records=1)
 
         result = _alpha_vantage_fallback(["AAPL", "MSFT"])
         assert result == 2
@@ -368,7 +632,7 @@ class TestAlphaVantageFallback:
             [{"ticker": "AAPL"}],  # AAPL succeeds
             None,                   # MSFT fails
         ]
-        mock_store.return_value = 1
+        mock_store.return_value = StoreResult(inserted_records=1)
 
         result = _alpha_vantage_fallback(["AAPL", "MSFT"])
         assert result == 1
@@ -402,6 +666,44 @@ class TestFetchAlphaVantageWithRetry:
         assert len(result) == 1
         assert result[0]["ticker"] == "AAPL"
         assert result[0]["close_price"] == Decimal("153.0")
+        assert result[0]["data_provider"] == "alpha_vantage"
+        assert result[0]["provider_priority"] == "fallback"
+        assert result[0]["price_adjustment"] == "unadjusted"
+        assert result[0]["fetch_period"] == "compact"
+        assert result[0]["adjustment_context"] == "raw_ohlcv_only"
+        assert result[0]["split_dividend_adjustment"] == "not_available"
+        assert result[0]["fetch_window_start"] is not None
+        assert result[0]["fetch_window_end"] is not None
+        mock_sleep.assert_not_called()
+
+    @patch("backend.src.collectors.stock_collector.time.sleep")
+    @patch("backend.src.collectors.stock_collector.requests.get")
+    @patch("backend.src.collectors.stock_collector.ALPHA_VANTAGE_API_KEY", "test-key")
+    def test_alpha_vantage_records_include_metadata_exchange_currency(
+        self, mock_get, mock_sleep
+    ):
+        """Fallback records carry static exchange/currency provenance when available."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "Time Series (Daily)": {
+                "2025-01-15": {
+                    "1. open": "150.0", "2. high": "155.0",
+                    "3. low": "149.0", "4. close": "153.0",
+                    "5. volume": "1000000",
+                }
+            }
+        }
+        mock_response.raise_for_status = MagicMock()
+        mock_get.return_value = mock_response
+
+        result = _fetch_alpha_vantage_with_retry(
+            "AAPL",
+            stock_metadata={"exchange": "NASDAQ", "currency": "USD"},
+        )
+
+        assert result is not None
+        assert result[0]["exchange"] == "NASDAQ"
+        assert result[0]["currency"] == "USD"
         mock_sleep.assert_not_called()
 
     @patch("backend.src.collectors.stock_collector.time.sleep")
@@ -475,25 +777,38 @@ class TestHandler:
     """Tests for the main Lambda handler."""
 
     @patch("backend.src.collectors.stock_collector._emit_metric")
-    @patch("backend.src.collectors.stock_collector._alpha_vantage_fallback")
+    @patch("backend.src.collectors.stock_collector._compute_and_store_movement_signals")
+    @patch("backend.src.collectors.stock_collector._record_failed_ticker_state")
+    @patch("backend.src.collectors.stock_collector._record_collection_summary")
+    @patch("backend.src.collectors.stock_collector._alpha_vantage_fallback_with_details")
     @patch("backend.src.collectors.stock_collector._process_batch")
     @patch("backend.src.collectors.stock_collector._fetch_watchlist")
     @patch("backend.src.collectors.stock_collector.DatabasePool")
     def test_handler_success(self, mock_pool, mock_watchlist,
-                             mock_batch, mock_fallback, mock_metric):
+                             mock_batch, mock_fallback, mock_summary,
+                             mock_failure_state, mock_movement, mock_metric):
         """Handler processes all batches and returns success."""
-        mock_watchlist.return_value = ["AAPL", "MSFT"]
-        mock_batch.return_value = (2, [])
+        mock_watchlist.return_value = [{"ticker": "AAPL"}, {"ticker": "MSFT"}]
+        mock_batch.return_value = BatchResult(
+            records_inserted=2,
+            collected_tickers={"AAPL", "MSFT"},
+        )
+        mock_movement.return_value = 2
 
         result = handler({}, None)
         assert result["statusCode"] == 200
         assert "2" in result["body"]
-        mock_metric.assert_called_with("stocks_collected", 2)
+        mock_metric.assert_any_call("stocks_collected", 2)
+        mock_metric.assert_any_call("market_movement_signals_collected", 2)
+        mock_movement.assert_called_once_with({"AAPL", "MSFT"})
+        mock_summary.assert_called_once()
+        mock_failure_state.assert_called_once()
 
+    @patch("backend.src.collectors.stock_collector._record_collection_summary")
     @patch("backend.src.collectors.stock_collector._emit_metric")
     @patch("backend.src.collectors.stock_collector._fetch_watchlist")
     @patch("backend.src.collectors.stock_collector.DatabasePool")
-    def test_handler_empty_watchlist(self, mock_pool, mock_watchlist, mock_metric):
+    def test_handler_empty_watchlist(self, mock_pool, mock_watchlist, mock_metric, mock_summary):
         """Handler returns early when no active tickers found."""
         mock_watchlist.return_value = []
 
@@ -501,22 +816,40 @@ class TestHandler:
         assert result["statusCode"] == 200
         assert "No active tickers" in result["body"]
         mock_metric.assert_not_called()
+        mock_summary.assert_called_once()
 
     @patch("backend.src.collectors.stock_collector._emit_metric")
-    @patch("backend.src.collectors.stock_collector._alpha_vantage_fallback")
+    @patch("backend.src.collectors.stock_collector._compute_and_store_movement_signals")
+    @patch("backend.src.collectors.stock_collector._record_failed_ticker_state")
+    @patch("backend.src.collectors.stock_collector._record_collection_summary")
+    @patch("backend.src.collectors.stock_collector._alpha_vantage_fallback_with_details")
     @patch("backend.src.collectors.stock_collector._process_batch")
     @patch("backend.src.collectors.stock_collector._fetch_watchlist")
     @patch("backend.src.collectors.stock_collector.DatabasePool")
     def test_handler_with_fallback(self, mock_pool, mock_watchlist,
-                                   mock_batch, mock_fallback, mock_metric):
+                                   mock_batch, mock_fallback, mock_summary,
+                                   mock_failure_state, mock_movement, mock_metric):
         """Handler triggers Alpha Vantage fallback for failed tickers."""
-        mock_watchlist.return_value = ["AAPL", "MSFT"]
-        mock_batch.return_value = (1, ["MSFT"])
-        mock_fallback.return_value = 1
+        mock_watchlist.return_value = [{"ticker": "AAPL"}, {"ticker": "MSFT"}]
+        mock_batch.return_value = BatchResult(
+            records_inserted=1,
+            failed_tickers=["MSFT"],
+            no_data_tickers=["MSFT"],
+            collected_tickers={"AAPL"},
+        )
+        mock_fallback.return_value = (StoreResult(inserted_records=1), {"MSFT"})
+        mock_movement.return_value = 2
 
         result = handler({}, None)
         assert result["statusCode"] == 200
-        mock_fallback.assert_called_once_with(["MSFT"])
+        mock_fallback.assert_called_once_with(
+            ["MSFT"],
+            stock_metadata_by_ticker={
+                "AAPL": {"ticker": "AAPL"},
+                "MSFT": {"ticker": "MSFT"},
+            },
+        )
+        mock_movement.assert_called_once_with({"AAPL", "MSFT"})
 
     @patch("backend.src.collectors.stock_collector._emit_metric")
     @patch("backend.src.collectors.stock_collector._fetch_watchlist")
@@ -531,21 +864,29 @@ class TestHandler:
         mock_metric.assert_called_with("stocks_collected", 0)
 
     @patch("backend.src.collectors.stock_collector._emit_metric")
-    @patch("backend.src.collectors.stock_collector._alpha_vantage_fallback")
+    @patch("backend.src.collectors.stock_collector._compute_and_store_movement_signals")
+    @patch("backend.src.collectors.stock_collector._record_failed_ticker_state")
+    @patch("backend.src.collectors.stock_collector._record_collection_summary")
+    @patch("backend.src.collectors.stock_collector._alpha_vantage_fallback_with_details")
     @patch("backend.src.collectors.stock_collector._process_batch")
     @patch("backend.src.collectors.stock_collector._fetch_watchlist")
     @patch("backend.src.collectors.stock_collector.DatabasePool")
     def test_handler_batches_large_watchlist(self, mock_pool, mock_watchlist,
                                              mock_batch, mock_fallback,
-                                             mock_metric):
-        """Handler splits 250 tickers into 3 batches of 100."""
-        mock_watchlist.return_value = [f"T{i}" for i in range(250)]
-        mock_batch.return_value = (100, [])
+                                             mock_summary, mock_failure_state,
+                                             mock_movement, mock_metric):
+        """Handler processes the bounded due slice in small batches."""
+        mock_watchlist.return_value = [{"ticker": f"T{i}"} for i in range(250)]
+        mock_batch.return_value = BatchResult(
+            records_inserted=5,
+            collected_tickers={"T0", "T1", "T2", "T3", "T4"},
+        )
+        mock_movement.return_value = 5
 
         handler({}, None)
-        assert mock_batch.call_count == 3
+        assert mock_batch.call_count == 5
         # Verify batch sizes
         calls = mock_batch.call_args_list
-        assert len(calls[0][0][0]) == 100
-        assert len(calls[1][0][0]) == 100
-        assert len(calls[2][0][0]) == 50
+        assert len(calls[0][0][0]) == 5
+        assert len(calls[1][0][0]) == 5
+        assert len(calls[2][0][0]) == 5

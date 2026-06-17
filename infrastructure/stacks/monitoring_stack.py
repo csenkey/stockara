@@ -39,6 +39,12 @@ class MonitoringStack(Stack):
             "news_collector": resource_name(
                 deployment_stage, "stockara-news-collector", "news-collector"
             ),
+            "earnings_collector": resource_name(
+                deployment_stage, "stockara-earnings-collector", "earnings-collector"
+            ),
+            "dividend_collector": resource_name(
+                deployment_stage, "stockara-dividend-collector", "dividend-collector"
+            ),
             "publisher": resource_name(
                 deployment_stage,
                 "stockara-phase1-analyzer-publisher",
@@ -79,6 +85,175 @@ class MonitoringStack(Stack):
             )
             alarm.add_alarm_action(cw_actions.SnsAction(self.alerts_topic))
 
+        threshold_alarms = [
+            (
+                "ArtifactPublishFailuresAlarm",
+                "stockara-artifact-publish-failures",
+                "artifact-publish-failures",
+                "artifact_publish_failures",
+                1,
+                cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                "Static artifact publishing failed",
+            ),
+            (
+                "StockCollectionPartialRunsAlarm",
+                "stockara-stock-collection-partial",
+                "stock-collection-partial",
+                "stock_collection_partial_runs",
+                1,
+                cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                "Stock collection completed with partial ticker coverage",
+            ),
+            (
+                "StockCollectionFailedRunsAlarm",
+                "stockara-stock-collection-failed",
+                "stock-collection-failed",
+                "stock_collection_failed_runs",
+                1,
+                cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                "Stock collection failed for every selected ticker",
+            ),
+            (
+                "StockCollectionLowCompletenessAlarm",
+                "stockara-stock-collection-low-completeness",
+                "stock-collection-low-completeness",
+                "stock_collection_completeness_percent",
+                90,
+                cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+                "Stock collection completeness dropped below 90%",
+            ),
+            (
+                "NewsCollectionPartialRunsAlarm",
+                "stockara-news-collection-partial",
+                "news-collection-partial",
+                "news_collection_partial_runs",
+                1,
+                cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                "News collection completed with failed sources or article failures",
+            ),
+            (
+                "NewsCollectionFailedRunsAlarm",
+                "stockara-news-collection-failed",
+                "news-collection-failed",
+                "news_collection_failed_runs",
+                1,
+                cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                "News collection failed because all configured sources were unavailable",
+            ),
+            (
+                "NewsCollectionLowCompletenessAlarm",
+                "stockara-news-collection-low-completeness",
+                "news-collection-low-completeness",
+                "news_collection_completeness_percent",
+                100,
+                cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+                "News collection did not receive data from every configured source",
+            ),
+        ]
+
+        for (
+            construct_id,
+            prod_alarm_name,
+            staged_alarm_name,
+            metric_name,
+            threshold,
+            comparison_operator,
+            description,
+        ) in threshold_alarms:
+            alarm = cloudwatch.Alarm(
+                self,
+                construct_id,
+                alarm_name=resource_name(
+                    deployment_stage, prod_alarm_name, staged_alarm_name
+                ),
+                alarm_description=description,
+                metric=cloudwatch.Metric(
+                    namespace=(
+                        "StockaraPhase1"
+                        if metric_name == "artifact_publish_failures"
+                        else "StockMonitoring"
+                    ),
+                    metric_name=metric_name,
+                    statistic=(
+                        "Minimum" if metric_name.endswith("_percent") else "Sum"
+                    ),
+                    period=Duration.hours(1),
+                ),
+                threshold=threshold,
+                evaluation_periods=1,
+                comparison_operator=comparison_operator,
+                treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+            )
+            alarm.add_alarm_action(cw_actions.SnsAction(self.alerts_topic))
+
+        missing_metric_alarms = [
+            (
+                "TopPicksMissingMetricAlarm",
+                "stockara-top-picks-missing-metric",
+                "top-picks-missing-metric",
+                "top_picks_published",
+                "StockaraPhase1",
+                Duration.hours(26),
+                "No top-picks publication metric has arrived in the expected window",
+            ),
+            (
+                "SellAlertsMissingMetricAlarm",
+                "stockara-sell-alerts-missing-metric",
+                "sell-alerts-missing-metric",
+                "sell_alerts_published",
+                "StockaraPhase1",
+                Duration.hours(26),
+                "No sell-alert publication metric has arrived in the expected window",
+            ),
+            (
+                "StockCollectionMissingMetricAlarm",
+                "stockara-stock-collection-missing-metric",
+                "stock-collection-missing-metric",
+                "stock_collection_completeness_percent",
+                "StockMonitoring",
+                Duration.hours(2),
+                "No stock collection completeness metric has arrived in the expected window",
+            ),
+            (
+                "NewsCollectionMissingMetricAlarm",
+                "stockara-news-collection-missing-metric",
+                "news-collection-missing-metric",
+                "news_collection_completeness_percent",
+                "StockMonitoring",
+                Duration.hours(26),
+                "No news collection completeness metric has arrived in the expected window",
+            ),
+        ]
+
+        for (
+            construct_id,
+            prod_alarm_name,
+            staged_alarm_name,
+            metric_name,
+            namespace,
+            period,
+            description,
+        ) in missing_metric_alarms:
+            alarm = cloudwatch.Alarm(
+                self,
+                construct_id,
+                alarm_name=resource_name(
+                    deployment_stage, prod_alarm_name, staged_alarm_name
+                ),
+                alarm_description=description,
+                metric=cloudwatch.Metric(
+                    namespace=namespace,
+                    metric_name=metric_name,
+                    statistic="SampleCount",
+                    period=period,
+                ),
+                threshold=1,
+                evaluation_periods=1,
+                comparison_operator=cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+                treat_missing_data=cloudwatch.TreatMissingData.BREACHING,
+            )
+            alarm.add_alarm_action(cw_actions.SnsAction(self.alerts_topic))
+
         self.dashboard = cloudwatch.Dashboard(
             self,
             "Phase1Dashboard",
@@ -99,6 +274,46 @@ class MonitoringStack(Stack):
                     cloudwatch.Metric(
                         namespace="StockaraPhase1",
                         metric_name="sell_alerts_published",
+                        statistic="Sum",
+                        period=Duration.hours(1),
+                    ),
+                ],
+            ),
+            cloudwatch.GraphWidget(
+                title="Collector completeness",
+                left=[
+                    cloudwatch.Metric(
+                        namespace="StockMonitoring",
+                        metric_name="stock_collection_completeness_percent",
+                        statistic="Minimum",
+                        period=Duration.hours(1),
+                    ),
+                    cloudwatch.Metric(
+                        namespace="StockMonitoring",
+                        metric_name="news_collection_completeness_percent",
+                        statistic="Minimum",
+                        period=Duration.hours(1),
+                    ),
+                ],
+            ),
+            cloudwatch.GraphWidget(
+                title="Collector failures",
+                left=[
+                    cloudwatch.Metric(
+                        namespace="StockMonitoring",
+                        metric_name="stock_collection_failed_tickers",
+                        statistic="Sum",
+                        period=Duration.hours(1),
+                    ),
+                    cloudwatch.Metric(
+                        namespace="StockMonitoring",
+                        metric_name="news_sources_failed",
+                        statistic="Sum",
+                        period=Duration.hours(1),
+                    ),
+                    cloudwatch.Metric(
+                        namespace="StockMonitoring",
+                        metric_name="news_article_failures",
                         statistic="Sum",
                         period=Duration.hours(1),
                     ),

@@ -4,6 +4,10 @@
 
 Build a serverless stock monitoring system on AWS using Python (FastAPI) for the backend, React + TypeScript for the frontend, DynamoDB for data storage, and OpenAI GPT-4o-mini for AI analysis. The system collects daily stock data and news, generates buy/hold/sell recommendations, and provides personalized suggestions through a web dashboard.
 
+## Phase 1 Motto
+
+Phase 1 is a reliable stock analyzer for real business and investment decisions, not a throwaway MVP or demo. Later phases add portfolio-management capabilities around a trustworthy core.
+
 ## Tasks
 
 - [x] 1. Set up project structure and shared infrastructure
@@ -77,7 +81,8 @@ Build a serverless stock monitoring system on AWS using Python (FastAPI) for the
     - DELETE /api/stocks/{ticker} — remove stock
     - PUT /api/stocks/{ticker} — update stock metadata
     - Load seed watchlist from `data/watchlist_seed.csv` via migration or init script
-    - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7_
+    - Require explicit, source-backed sector metadata in seed data; do not use placeholder sector defaults for Phase 1 stocks
+    - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8_
 
   - [x] 5.2 Write unit tests for watchlist API
     - Test CRUD operations, validation errors, not-found handling
@@ -266,12 +271,12 @@ Build a serverless stock monitoring system on AWS using Python (FastAPI) for the
 
 ## Notes
 
-- Tasks marked with `*` are optional and can be skipped for faster MVP
+- Tasks marked with `*` are optional only when they do not weaken Phase 1 data correctness, analysis reliability, recommendation quality, security, or deployment observability
 - Each task references specific requirements for traceability
 - Checkpoints ensure incremental validation
 - The backend uses Python (FastAPI + Mangum for Lambda), frontend uses React + TypeScript
 - CDK DynamoDB table/index changes should be synthesized before testing dependent components
-- The seed watchlist at `data/watchlist_seed.csv` is preloaded during initial setup
+- The seed watchlist at `data/watchlist_seed.csv` is preloaded during initial setup and must include reliable stock metadata, including sector and company size
 - Unit tests mock external services (yfinance, OpenAI, Cognito, KMS) to run without credentials
 
 ## Task Dependency Graph
