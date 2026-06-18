@@ -93,6 +93,7 @@ Execution tasks:
 - [x] Select the daily AI candidate shortlist from the highest-scoring opportunity candidates plus any high-severity negative candidates.
 - [ ] Update the AI prompt to include catalyst signals, upcoming events, news evidence, technical indicators, sector-relative movement, and invalidation criteria.
   - Current prompt includes catalyst/risk framing; remaining work is adding upcoming-event, richer technical, and sector-relative context.
+  - 2026-06-18 production run note: the review model withheld many actionable calls because evidence was mostly single-day price/volume movement. Improve candidate evidence before AI analysis rather than loosening the review gate or publishing weak calls.
 - [x] Store AI analysis only for shortlisted candidates and include candidate score/source details for traceability.
 - [x] Rank AI-analyzed candidates into top 5-10 picks using recommendation, confidence, catalyst strength, risk, and timeframe.
 - [x] Rank urgent sell alerts separately using severity, confidence, negative catalyst type, and recency.

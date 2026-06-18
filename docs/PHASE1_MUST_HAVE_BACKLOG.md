@@ -158,7 +158,7 @@ The items below are must-have gaps to close before treating Phase 1 recommendati
 
 **Status:** Open.
 
-**Gap:** Several signals score because data exists, not because the underlying data is directionally meaningful.
+**Gap:** Several signals score because data exists, not because the underlying data is directionally meaningful. The 2026-06-18 sharded AI run confirmed that many shortlisted candidates were based mostly on single-day price moves or volume spikes; the review model correctly withheld those actionable BUY/SELL calls because the evidence did not establish catalyst durability, trend context, valuation/fundamental support, sector context, or risk/reward.
 
 **Why it matters:** Placeholder-like signals can inflate confidence and produce recommendations that look more evidence-based than they are.
 
@@ -167,6 +167,9 @@ The items below are must-have gaps to close before treating Phase 1 recommendati
 - Replace existence-based signals with directionally meaningful calculations.
 - Separate neutral context from scored evidence.
 - Require each published pick to include enough concrete evidence to support the recommendation.
+- Reduce one-day-move-only candidates by adding richer multi-day technical context, sector-relative context, event/news catalyst context, and provider-backed signal direction before OpenAI analysis.
+- Feed the model and review gate concrete evidence such as multi-day trend, relative strength versus sector ETF, volume persistence, catalyst source, upcoming event timing, valuation/fundamental context where available, and clear invalidation criteria.
+- Keep the review gate strict; do not loosen it merely to make the dashboard non-empty.
 - Tests cover scoring for analyst, options, insider, institutional, earnings, dividend, price, volume, news, and sector-relative signals.
 
 **References:**
