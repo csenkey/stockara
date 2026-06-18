@@ -503,6 +503,10 @@ class TestDueStockSelection:
                 "backend.src.collectors.stock_collector._history_archive_needs_update",
                 return_value=False,
             ),
+            patch(
+                "backend.src.collectors.stock_collector._history_archive_needs_backfill",
+                return_value=False,
+            ),
             patch("backend.src.collectors.stock_collector._fetch_historical_records") as fetch_history,
             patch("backend.src.collectors.stock_collector._store_records") as store_records,
             patch("backend.src.collectors.stock_collector._record_collection_summary"),
@@ -612,6 +616,10 @@ class TestDueStockSelection:
                 return_value=archived_records,
             ),
             patch(
+                "backend.src.collectors.stock_collector._history_archive_needs_backfill",
+                return_value=False,
+            ),
+            patch(
                 "backend.src.collectors.stock_collector._fetch_missing_historical_records",
                 return_value=missing_records,
             ) as fetch_missing,
@@ -641,6 +649,80 @@ class TestDueStockSelection:
         assert result["body"]["provider_fetches"] == 1
         fetch_missing.assert_called_once_with("AAPL", stocks[0], date(2026, 6, 16))
         store_records.assert_called_once_with(missing_records)
+
+    def test_historical_backfill_refills_current_but_shallow_archive(self):
+        stocks = [{
+            "ticker": "AAPL",
+            "latest_stock_data_date": "2026-06-17",
+            "stock_history_row_count": 84,
+        }]
+        archived_records = [
+            {
+                "ticker": "AAPL",
+                "trading_date": "2026-06-17",
+                "open_price": "100",
+                "high_price": "110",
+                "low_price": "99",
+                "close_price": "108",
+                "volume": 1000,
+            }
+        ]
+        historical_records = [
+            {
+                "ticker": "AAPL",
+                "trading_date": date(2021, 6, 18),
+                "open_price": Decimal("90"),
+                "high_price": Decimal("95"),
+                "low_price": Decimal("89"),
+                "close_price": Decimal("94"),
+                "volume": 900,
+            }
+        ]
+
+        with (
+            patch("backend.src.collectors.stock_collector.DatabasePool"),
+            patch(
+                "backend.src.collectors.stock_collector.store.active_stock_metadata",
+                return_value=stocks,
+            ),
+            patch(
+                "backend.src.collectors.stock_collector._load_history_archive",
+                return_value=archived_records,
+            ),
+            patch(
+                "backend.src.collectors.stock_collector._history_archive_needs_backfill",
+                return_value=True,
+            ),
+            patch(
+                "backend.src.collectors.stock_collector._fetch_historical_records",
+                return_value=historical_records,
+            ) as fetch_history,
+            patch("backend.src.collectors.stock_collector._store_records") as store_records,
+            patch("backend.src.collectors.stock_collector._record_collection_summary"),
+            patch("backend.src.collectors.stock_collector._record_failed_ticker_state"),
+            patch("backend.src.collectors.stock_collector._emit_metric"),
+            patch("backend.src.collectors.stock_collector._emit_collection_summary_metrics"),
+            patch(
+                "backend.src.collectors.stock_collector._compute_and_store_movement_signals",
+                return_value=0,
+            ),
+        ):
+            store_records.return_value = StoreResult(inserted_records=1)
+
+            result = handler(
+                {
+                    "mode": "historical_backfill",
+                    "max_tickers": 1,
+                    "scan_all": True,
+                },
+                None,
+            )
+
+        assert result["body"]["s3_archives_restored"] == 1
+        assert result["body"]["provider_fetches"] == 1
+        fetch_history.assert_called_once_with("AAPL", stocks[0])
+        stored_records = store_records.call_args.args[0]
+        assert len(stored_records) == 2
 
     def test_historical_backfill_treats_current_archive_as_processed(self):
         stocks = [{
@@ -672,6 +754,10 @@ class TestDueStockSelection:
             ),
             patch(
                 "backend.src.collectors.stock_collector._history_archive_needs_update",
+                return_value=False,
+            ),
+            patch(
+                "backend.src.collectors.stock_collector._history_archive_needs_backfill",
                 return_value=False,
             ),
             patch("backend.src.collectors.stock_collector._store_records") as store_records,

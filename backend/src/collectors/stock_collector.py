@@ -34,7 +34,13 @@ STOOQ_BASE_URL = os.environ.get("STOOQ_BASE_URL", "https://stooq.com/q/d/l/")
 NASDAQ_MAX_RECORDS_PER_TICKER = int(
     os.environ.get("NASDAQ_MAX_RECORDS_PER_TICKER", "90")
 )
+NASDAQ_HISTORICAL_MAX_RECORDS_PER_TICKER = int(
+    os.environ.get("NASDAQ_HISTORICAL_MAX_RECORDS_PER_TICKER", "1500")
+)
 STOOQ_MAX_RECORDS_PER_TICKER = int(os.environ.get("STOOQ_MAX_RECORDS_PER_TICKER", "90"))
+STOOQ_HISTORICAL_MAX_RECORDS_PER_TICKER = int(
+    os.environ.get("STOOQ_HISTORICAL_MAX_RECORDS_PER_TICKER", "1500")
+)
 DEFAULT_MARKET_DATA_CURRENCY = os.environ.get("STOCK_DATA_DEFAULT_CURRENCY", "USD")
 STOCK_HISTORY_BUCKET = os.environ.get(
     "STOCKARA_STOCK_HISTORY_BUCKET",
@@ -47,7 +53,7 @@ HISTORICAL_BACKFILL_TICKERS_PER_RUN = int(
     os.environ.get("STOCK_HISTORICAL_BACKFILL_TICKERS_PER_RUN", "1")
 )
 HISTORICAL_BACKFILL_MAX_CHAINED_INVOCATIONS = int(
-    os.environ.get("STOCK_HISTORICAL_BACKFILL_MAX_CHAINED_INVOCATIONS", "200")
+    os.environ.get("STOCK_HISTORICAL_BACKFILL_MAX_CHAINED_INVOCATIONS", "1500")
 )
 INITIAL_HISTORY_PERIOD = os.environ.get("STOCK_INITIAL_HISTORY_PERIOD", "5y")
 INCREMENTAL_PERIOD = os.environ.get("STOCK_INCREMENTAL_PERIOD", "10d")
@@ -296,6 +302,11 @@ def _run_historical_backfill(
 ) -> dict[str, Any]:
     max_tickers = int(event.get("max_tickers", HISTORICAL_BACKFILL_TICKERS_PER_RUN))
     selected = _select_historical_backfill_stocks(stocks, event, max_tickers)
+    run_id = str(
+        event.get("backfill_run_id")
+        or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    )
+    event["backfill_run_id"] = run_id
     processed_tickers = {
         str(ticker).upper()
         for ticker in event.get("processed_tickers", [])
@@ -332,8 +343,19 @@ def _run_historical_backfill(
         if archive_records:
             restored += 1
             needs_history_restore = _stock_metadata_needs_history_restore(stock)
+            earliest_archive_date = _earliest_history_record_date(archive_records)
             latest_archive_date = _latest_history_record_date(archive_records)
-            if _history_archive_needs_update(latest_archive_date):
+            if _history_archive_needs_backfill(earliest_archive_date):
+                fetched_missing_records = _fetch_historical_records(ticker, stock) or []
+                if fetched_missing_records:
+                    fetched += 1
+                    records_to_store = _merge_record_lists(
+                        archive_records,
+                        fetched_missing_records,
+                    )
+                elif needs_history_restore:
+                    records_to_store = archive_records
+            elif _history_archive_needs_update(latest_archive_date):
                 fetched_missing_records = _fetch_missing_historical_records(
                     ticker,
                     stock,
@@ -414,11 +436,32 @@ def _run_historical_backfill(
             processed_tickers,
         )
 
+    _record_historical_backfill_status(
+        run_id=run_id,
+        active_ticker_count=len(stocks),
+        selected_tickers=[stock["ticker"] for stock in selected],
+        processed_tickers=processed_tickers,
+        inserted_records=inserted_records,
+        duplicate_records=duplicate_records,
+        failed_records=failed_records,
+        failed_tickers=failed,
+        archived=archived,
+        restored=restored,
+        fetched=fetched,
+        invocation_count=invocation_count,
+        continue_queued=continue_queued,
+        complete=not continue_queued
+        and not _has_more_historical_backfill_work(stocks, event, selected),
+    )
+
     return {
         "statusCode": 200,
         "body": {
             "mode": "historical_backfill",
+            "backfill_run_id": run_id,
             "processed_tickers": [stock["ticker"] for stock in selected],
+            "processed_total": len(processed_tickers),
+            "active_ticker_count": len(stocks),
             "records_inserted": inserted_records,
             "duplicate_records": duplicate_records,
             "s3_archives_written": archived,
@@ -556,6 +599,75 @@ def _put_history_archive(ticker: str, records: list[dict[str, Any]]) -> None:
     )
 
 
+def _record_historical_backfill_status(
+    *,
+    run_id: str,
+    active_ticker_count: int,
+    selected_tickers: list[str],
+    processed_tickers: set[str],
+    inserted_records: int,
+    duplicate_records: int,
+    failed_records: int,
+    failed_tickers: list[str],
+    archived: int,
+    restored: int,
+    fetched: int,
+    invocation_count: int,
+    continue_queued: bool,
+    complete: bool,
+) -> None:
+    if not STOCK_HISTORY_BUCKET:
+        return
+    processed_count = len(processed_tickers)
+    body = json.dumps(
+        {
+            "mode": "historical_backfill",
+            "run_id": run_id,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "active_ticker_count": active_ticker_count,
+            "processed_count": processed_count,
+            "remaining_estimate": max(active_ticker_count - processed_count, 0),
+            "progress_percent": (
+                round((processed_count / active_ticker_count) * 100, 2)
+                if active_ticker_count
+                else 100.0
+            ),
+            "last_selected_tickers": selected_tickers,
+            "last_failed_tickers": failed_tickers,
+            "last_inserted_records": inserted_records,
+            "last_duplicate_records": duplicate_records,
+            "last_failed_records": failed_records,
+            "last_s3_archives_written": archived,
+            "last_s3_archives_restored": restored,
+            "last_provider_fetches": fetched,
+            "invocation_count": invocation_count,
+            "max_chained_invocations": HISTORICAL_BACKFILL_MAX_CHAINED_INVOCATIONS,
+            "continue_queued": continue_queued,
+            "complete": complete,
+            "processed_tickers_sample": sorted(processed_tickers)[-50:],
+        },
+        default=str,
+    ).encode("utf-8")
+    key = f"{STOCK_HISTORY_PREFIX}/_backfill/latest.json"
+    try:
+        boto3.client("s3").put_object(
+            Bucket=STOCK_HISTORY_BUCKET,
+            Key=key,
+            Body=body,
+            ContentType="application/json",
+            CacheControl="no-store",
+        )
+        logger.info(
+            "historical_backfill_status_written",
+            key=key,
+            processed_count=processed_count,
+            active_ticker_count=active_ticker_count,
+            continue_queued=continue_queued,
+        )
+    except Exception as exc:
+        logger.warning("historical_backfill_status_write_failed", error=str(exc))
+
+
 def _merge_history_archive(ticker: str, records: list[dict[str, Any]]) -> None:
     if not records:
         return
@@ -584,8 +696,27 @@ def _latest_history_record_date(records: list[dict[str, Any]]) -> date | None:
     return latest
 
 
+def _earliest_history_record_date(records: list[dict[str, Any]]) -> date | None:
+    earliest: date | None = None
+    for record in records:
+        try:
+            record_date = _record_date(record.get("trading_date"))
+        except Exception:
+            continue
+        if earliest is None or record_date < earliest:
+            earliest = record_date
+    return earliest
+
+
 def _history_archive_needs_update(latest_record_date: date | None) -> bool:
     return latest_record_date is None or latest_record_date < date.today()
+
+
+def _history_archive_needs_backfill(earliest_record_date: date | None) -> bool:
+    return (
+        earliest_record_date is None
+        or earliest_record_date > _history_backfill_start_date() + timedelta(days=7)
+    )
 
 
 def _stock_metadata_needs_history_restore(stock: dict[str, Any]) -> bool:
@@ -635,10 +766,22 @@ def _fetch_historical_records(
         )
         if extract.records:
             return extract.records
-    records = _fetch_nasdaq_with_retry(ticker, stock_metadata=stock_metadata)
+    records = _fetch_nasdaq_with_retry(
+        ticker,
+        stock_metadata=stock_metadata,
+        start_date=_history_backfill_start_date(),
+        end_date=date.today(),
+        max_records=NASDAQ_HISTORICAL_MAX_RECORDS_PER_TICKER,
+        fetch_period="nasdaq_historical",
+    )
     if records:
         return records
-    return _fetch_stooq_with_retry(ticker, stock_metadata=stock_metadata)
+    return _fetch_stooq_with_retry(
+        ticker,
+        stock_metadata=stock_metadata,
+        max_records=STOOQ_HISTORICAL_MAX_RECORDS_PER_TICKER,
+        fetch_period="stooq_historical",
+    )
 
 
 def _fetch_missing_historical_records(
@@ -676,8 +819,20 @@ def _fetch_missing_historical_records(
             ]
 
     fallback_records = (
-        _fetch_nasdaq_with_retry(ticker, stock_metadata=stock_metadata)
-        or _fetch_stooq_with_retry(ticker, stock_metadata=stock_metadata)
+        _fetch_nasdaq_with_retry(
+            ticker,
+            stock_metadata=stock_metadata,
+            start_date=start_date,
+            end_date=date.today(),
+            max_records=NASDAQ_HISTORICAL_MAX_RECORDS_PER_TICKER,
+            fetch_period="nasdaq_historical",
+        )
+        or _fetch_stooq_with_retry(
+            ticker,
+            stock_metadata=stock_metadata,
+            max_records=STOOQ_HISTORICAL_MAX_RECORDS_PER_TICKER,
+            fetch_period="stooq_historical",
+        )
         or []
     )
     return [
@@ -1572,11 +1727,16 @@ def _fetch_alpha_vantage_with_retry(
 def _fetch_nasdaq_with_retry(
     ticker: str,
     stock_metadata: dict[str, Any] | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    max_records: int | None = None,
+    fetch_period: str = "nasdaq_recent",
 ) -> list[dict] | None:
     """Fetch recent daily OHLCV records from Nasdaq's historical endpoint."""
     backoff = INITIAL_BACKOFF_SECONDS
-    today = date.today()
-    from_date = today - timedelta(days=120)
+    today = end_date or date.today()
+    from_date = start_date or (today - timedelta(days=120))
+    record_limit = max_records or NASDAQ_MAX_RECORDS_PER_TICKER
     url = NASDAQ_HISTORICAL_BASE_URL.format(ticker=ticker.upper())
 
     for attempt in range(1, MAX_RETRIES + 1):
@@ -1589,7 +1749,7 @@ def _fetch_nasdaq_with_retry(
                     "assetclass": "stocks",
                     "fromdate": from_date.isoformat(),
                     "todate": today.isoformat(),
-                    "limit": NASDAQ_MAX_RECORDS_PER_TICKER,
+                    "limit": record_limit,
                 },
                 headers={
                     "Accept": "application/json",
@@ -1602,6 +1762,10 @@ def _fetch_nasdaq_with_retry(
                 ticker,
                 response.json(),
                 stock_metadata=stock_metadata,
+                max_records=record_limit,
+                fetch_period=fetch_period,
+                fetch_window_start=from_date,
+                fetch_window_end=today,
             )
             if records:
                 log.info("nasdaq_fetch_success")
@@ -1629,6 +1793,10 @@ def _parse_nasdaq_response(
     ticker: str,
     data: dict[str, Any],
     stock_metadata: dict[str, Any] | None = None,
+    max_records: int = NASDAQ_MAX_RECORDS_PER_TICKER,
+    fetch_period: str = "nasdaq_recent",
+    fetch_window_start: date | None = None,
+    fetch_window_end: date | None = None,
 ) -> list[dict] | None:
     payload = data.get("data") or {}
     trades_table = payload.get("tradesTable") or {}
@@ -1637,8 +1805,15 @@ def _parse_nasdaq_response(
         return None
 
     records: list[dict] = []
-    for row in rows[:NASDAQ_MAX_RECORDS_PER_TICKER]:
-        record = _parse_nasdaq_record(ticker, row, stock_metadata=stock_metadata)
+    for row in rows[:max_records]:
+        record = _parse_nasdaq_record(
+            ticker,
+            row,
+            stock_metadata=stock_metadata,
+            fetch_period=fetch_period,
+            fetch_window_start=fetch_window_start,
+            fetch_window_end=fetch_window_end,
+        )
         if record:
             records.append(record)
     return records or None
@@ -1648,6 +1823,9 @@ def _parse_nasdaq_record(
     ticker: str,
     values: dict[str, Any],
     stock_metadata: dict[str, Any] | None = None,
+    fetch_period: str = "nasdaq_recent",
+    fetch_window_start: date | None = None,
+    fetch_window_end: date | None = None,
 ) -> dict | None:
     try:
         record_date = datetime.strptime(str(values.get("date", "")), "%m/%d/%Y").date()
@@ -1705,8 +1883,17 @@ def _parse_nasdaq_record(
                 DEFAULT_MARKET_DATA_CURRENCY,
             ),
             "exchange": _metadata_value(stock_metadata, "exchange"),
-            "fetch_period": "nasdaq_recent",
-            **_fetch_window("compact"),
+            "fetch_period": fetch_period,
+            "fetch_window_start": (
+                fetch_window_start.isoformat()
+                if fetch_window_start
+                else _fetch_window("compact")["fetch_window_start"]
+            ),
+            "fetch_window_end": (
+                fetch_window_end.isoformat()
+                if fetch_window_end
+                else _fetch_window("compact")["fetch_window_end"]
+            ),
         }
 
     except (ValueError, TypeError) as e:
@@ -1726,6 +1913,8 @@ def _strip_market_value(value: Any) -> str:
 def _fetch_stooq_with_retry(
     ticker: str,
     stock_metadata: dict[str, Any] | None = None,
+    max_records: int | None = None,
+    fetch_period: str = "stooq_daily",
 ) -> list[dict] | None:
     """Fetch the most recent daily OHLCV record from Stooq without an API key."""
     backoff = INITIAL_BACKOFF_SECONDS
@@ -1752,6 +1941,8 @@ def _fetch_stooq_with_retry(
                 provider_symbol,
                 response.text,
                 stock_metadata=stock_metadata,
+                max_records=max_records or STOOQ_MAX_RECORDS_PER_TICKER,
+                fetch_period=fetch_period,
             )
             if records:
                 log.info("stooq_fetch_success")
@@ -1788,6 +1979,8 @@ def _parse_stooq_csv(
     provider_symbol: str,
     csv_text: str,
     stock_metadata: dict[str, Any] | None = None,
+    max_records: int = STOOQ_MAX_RECORDS_PER_TICKER,
+    fetch_period: str = "stooq_daily",
 ) -> list[dict] | None:
     try:
         import csv
@@ -1808,10 +2001,11 @@ def _parse_stooq_csv(
                 provider_symbol,
                 row,
                 stock_metadata=stock_metadata,
+                fetch_period=fetch_period,
             )
             if record:
                 records.append(record)
-            if len(records) >= STOOQ_MAX_RECORDS_PER_TICKER:
+            if len(records) >= max_records:
                 break
         return records or None
     except csv.Error as e:
@@ -1824,6 +2018,7 @@ def _parse_stooq_record(
     provider_symbol: str,
     values: dict[str, Any],
     stock_metadata: dict[str, Any] | None = None,
+    fetch_period: str = "stooq_daily",
 ) -> dict | None:
     try:
         record_date = date.fromisoformat(str(values.get("Date", ""))[:10])
@@ -1881,8 +2076,8 @@ def _parse_stooq_record(
                 DEFAULT_MARKET_DATA_CURRENCY,
             ),
             "exchange": _metadata_value(stock_metadata, "exchange"),
-            "fetch_period": "stooq_daily",
-            **_fetch_window("compact"),
+            "fetch_period": fetch_period,
+            **_fetch_window(INITIAL_HISTORY_PERIOD if "historical" in fetch_period else "compact"),
         }
 
     except (ValueError, TypeError) as e:
