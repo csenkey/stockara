@@ -296,6 +296,10 @@ def _run_historical_backfill(
 ) -> dict[str, Any]:
     max_tickers = int(event.get("max_tickers", HISTORICAL_BACKFILL_TICKERS_PER_RUN))
     selected = _select_historical_backfill_stocks(stocks, event, max_tickers)
+    processed_tickers = {
+        str(ticker).upper()
+        for ticker in event.get("processed_tickers", [])
+    }
     if not selected:
         return {
             "statusCode": 200,
@@ -321,28 +325,56 @@ def _run_historical_backfill(
         if _should_stop_for_time(context):
             break
         ticker = stock["ticker"]
-        records = _load_history_archive(ticker)
-        restored_from_archive = bool(records)
-        if records:
+        archive_records = _load_history_archive(ticker) or []
+        records_to_store: list[dict[str, Any]] = []
+        fetched_missing_records: list[dict[str, Any]] = []
+        restored_from_archive = bool(archive_records)
+        if archive_records:
             restored += 1
+            needs_history_restore = _stock_metadata_needs_history_restore(stock)
+            latest_archive_date = _latest_history_record_date(archive_records)
+            if _history_archive_needs_update(latest_archive_date):
+                fetched_missing_records = _fetch_missing_historical_records(
+                    ticker,
+                    stock,
+                    latest_archive_date,
+                )
+                if fetched_missing_records:
+                    fetched += 1
+                    if _stock_metadata_needs_history_restore(stock):
+                        records_to_store = _merge_record_lists(
+                            archive_records,
+                            fetched_missing_records,
+                        )
+                    else:
+                        records_to_store = fetched_missing_records
+                elif needs_history_restore:
+                    records_to_store = archive_records
+            elif needs_history_restore:
+                records_to_store = archive_records
         else:
-            records = _fetch_historical_records(ticker, stock)
-            if records:
+            records_to_store = _fetch_historical_records(ticker, stock) or []
+            if records_to_store:
                 fetched += 1
-        if not records:
-            failed.append(ticker)
-            no_data.append(ticker)
+        if not records_to_store:
+            processed_tickers.add(ticker)
+            if archive_records:
+                collected_tickers.add(ticker)
+            else:
+                failed.append(ticker)
+                no_data.append(ticker)
             continue
-        stored = _store_records(records)
+        stored = _store_records(records_to_store)
         inserted_records += stored.inserted_records
         duplicate_records += stored.duplicate_records
         failed_records += stored.failed_records
         if stored.inserted_records > 0 or stored.duplicate_records > 0:
             collected_tickers.add(ticker)
-            if not restored_from_archive:
+            if not restored_from_archive or fetched_missing_records:
                 archived += 1
         else:
             failed.append(ticker)
+        processed_tickers.add(ticker)
 
     summary = _build_collection_summary(
         active_ticker_count=len(stocks),
@@ -374,9 +406,13 @@ def _run_historical_backfill(
     if (
         should_continue
         and invocation_count < HISTORICAL_BACKFILL_MAX_CHAINED_INVOCATIONS
-        and _has_more_historical_backfill_work(stocks, selected)
+        and _has_more_historical_backfill_work(stocks, event, selected)
     ):
-        continue_queued = _invoke_next_historical_backfill(event, invocation_count + 1)
+        continue_queued = _invoke_next_historical_backfill(
+            event,
+            invocation_count + 1,
+            processed_tickers,
+        )
 
     return {
         "statusCode": 200,
@@ -400,10 +436,16 @@ def _select_historical_backfill_stocks(
     requested = {ticker.upper() for ticker in event.get("tickers", [])}
     if requested:
         stocks = [stock for stock in stocks if stock["ticker"] in requested]
+    processed = {
+        str(ticker).upper()
+        for ticker in event.get("processed_tickers", [])
+    }
+    scan_all = bool(event.get("scan_all", False))
     due = [
         stock
         for stock in stocks
-        if _needs_historical_backfill(stock)
+        if stock["ticker"] not in processed
+        and (scan_all or _needs_historical_backfill(stock))
     ]
     due.sort(
         key=lambda stock: (
@@ -423,12 +465,19 @@ def _needs_historical_backfill(stock: dict[str, Any]) -> bool:
 
 
 def _has_more_historical_backfill_work(
-    stocks: list[dict[str, Any]], processed: list[dict[str, Any]]
+    stocks: list[dict[str, Any]],
+    event: dict[str, Any],
+    selected: list[dict[str, Any]],
 ) -> bool:
-    processed_tickers = {stock["ticker"] for stock in processed}
+    processed_tickers = {
+        str(ticker).upper()
+        for ticker in event.get("processed_tickers", [])
+    }
+    processed_tickers.update(stock["ticker"] for stock in selected)
+    scan_all = bool(event.get("scan_all", False))
     return any(
         stock["ticker"] not in processed_tickers
-        and _needs_historical_backfill(stock)
+        and (scan_all or _needs_historical_backfill(stock))
         for stock in stocks
     )
 
@@ -523,6 +572,44 @@ def _merge_history_archive(ticker: str, records: list[dict[str, Any]]) -> None:
     _put_history_archive(ticker, merged)
 
 
+def _latest_history_record_date(records: list[dict[str, Any]]) -> date | None:
+    latest: date | None = None
+    for record in records:
+        try:
+            record_date = _record_date(record.get("trading_date"))
+        except Exception:
+            continue
+        if latest is None or record_date > latest:
+            latest = record_date
+    return latest
+
+
+def _history_archive_needs_update(latest_record_date: date | None) -> bool:
+    return latest_record_date is None or latest_record_date < date.today()
+
+
+def _stock_metadata_needs_history_restore(stock: dict[str, Any]) -> bool:
+    if not stock.get("latest_stock_data_date"):
+        return True
+    row_count = stock.get("stock_history_row_count")
+    return row_count is not None and int(row_count or 0) < 20
+
+
+def _merge_record_lists(
+    existing_records: list[dict[str, Any]],
+    new_records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    by_date = {
+        str(record.get("trading_date"))[:10]: record
+        for record in existing_records
+        if record.get("trading_date")
+    }
+    for record in new_records:
+        if record.get("trading_date"):
+            by_date[str(record.get("trading_date"))[:10]] = record
+    return [by_date[key] for key in sorted(by_date)]
+
+
 def _jsonable_record(record: dict[str, Any]) -> dict[str, Any]:
     output: dict[str, Any] = {}
     for key, value in record.items():
@@ -554,8 +641,64 @@ def _fetch_historical_records(
     return _fetch_stooq_with_retry(ticker, stock_metadata=stock_metadata)
 
 
+def _fetch_missing_historical_records(
+    ticker: str,
+    stock_metadata: dict[str, Any] | None,
+    latest_record_date: date | None,
+) -> list[dict[str, Any]]:
+    start_date = (
+        latest_record_date + timedelta(days=1)
+        if latest_record_date
+        else _history_backfill_start_date()
+    )
+    end_date = date.today() + timedelta(days=1)
+    if start_date >= end_date:
+        return []
+
+    data = _fetch_yfinance_with_retry(
+        [ticker],
+        period="custom",
+        start=start_date,
+        end=end_date,
+    )
+    if data is not None:
+        extract = _extract_ticker_data_result(
+            data,
+            ticker,
+            period=f"{(end_date - start_date).days}d",
+            stock_metadata=stock_metadata,
+        )
+        if extract.records:
+            return [
+                record
+                for record in extract.records
+                if _record_date(record["trading_date"]) >= start_date
+            ]
+
+    fallback_records = (
+        _fetch_nasdaq_with_retry(ticker, stock_metadata=stock_metadata)
+        or _fetch_stooq_with_retry(ticker, stock_metadata=stock_metadata)
+        or []
+    )
+    return [
+        record
+        for record in fallback_records
+        if _record_date(record["trading_date"]) >= start_date
+    ]
+
+
+def _history_backfill_start_date(today: date | None = None) -> date:
+    window = _fetch_window(INITIAL_HISTORY_PERIOD, today=today)
+    start = window.get("fetch_window_start")
+    if start:
+        return date.fromisoformat(start)
+    return (today or date.today()) - timedelta(days=365 * 5)
+
+
 def _invoke_next_historical_backfill(
-    event: dict[str, Any], invocation_count: int
+    event: dict[str, Any],
+    invocation_count: int,
+    processed_tickers: set[str],
 ) -> bool:
     function_name = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "")
     if not function_name:
@@ -566,6 +709,7 @@ def _invoke_next_historical_backfill(
         "mode": "historical_backfill",
         "continue_backfill": True,
         "invocation_count": invocation_count,
+        "processed_tickers": sorted(processed_tickers),
     }
     boto3.client("lambda").invoke(
         FunctionName=function_name,
@@ -943,7 +1087,12 @@ def _record_date(value: Any) -> date:
     return date.fromisoformat(str(value)[:10])
 
 
-def _fetch_yfinance_with_retry(tickers: list[str], period: str = "1d") -> Any | None:
+def _fetch_yfinance_with_retry(
+    tickers: list[str],
+    period: str = "1d",
+    start: date | None = None,
+    end: date | None = None,
+) -> Any | None:
     """Fetch data from yfinance with exponential backoff retry.
 
     Retries up to MAX_RETRIES times with exponential backoff starting
@@ -954,18 +1103,31 @@ def _fetch_yfinance_with_retry(tickers: list[str], period: str = "1d") -> Any | 
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            log = logger.bind(attempt=attempt, ticker_count=len(tickers), period=period)
+            log = logger.bind(
+                attempt=attempt,
+                ticker_count=len(tickers),
+                period=period,
+                start=start.isoformat() if start else None,
+                end=end.isoformat() if end else None,
+            )
             log.info("yfinance_fetch_attempt")
 
-            data = yf.download(
-                ticker_str,
-                period=period,
-                group_by="ticker",
-                auto_adjust=False,
-                threads=False,
-                progress=False,
-                timeout=30,
-            )
+            download_kwargs: dict[str, Any] = {
+                "group_by": "ticker",
+                "auto_adjust": False,
+                "threads": False,
+                "progress": False,
+                "timeout": 30,
+            }
+            if start or end:
+                if start:
+                    download_kwargs["start"] = start.isoformat()
+                if end:
+                    download_kwargs["end"] = end.isoformat()
+            else:
+                download_kwargs["period"] = period
+
+            data = yf.download(ticker_str, **download_kwargs)
 
             if data is not None and not data.empty:
                 log.info("yfinance_fetch_success")

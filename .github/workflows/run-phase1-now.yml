@@ -138,7 +138,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          payload="$(printf '{"mode":"historical_backfill","max_tickers":%s,"continue_backfill":%s}' "${{ inputs.historical_backfill_max_tickers }}" "${{ inputs.historical_backfill_continue }}")"
+          payload="$(printf '{"mode":"historical_backfill","max_tickers":%s,"continue_backfill":%s,"scan_all":true}' "${{ inputs.historical_backfill_max_tickers }}" "${{ inputs.historical_backfill_continue }}")"
           aws lambda invoke \
             --function-name "$STOCK_COLLECTOR_FN" \
             --payload "$payload" \
