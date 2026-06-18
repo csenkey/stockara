@@ -120,7 +120,7 @@ class ApiStack(Stack):
                 **common_env,
                 "POWERTOOLS_SERVICE_NAME": "stock-collector",
                 "STOCK_COLLECTOR_BATCH_SIZE": "5",
-                "STOCK_COLLECTOR_MAX_TICKERS": "25",
+                "STOCK_COLLECTOR_MAX_TICKERS": "10",
                 "STOCK_INITIAL_HISTORY_PERIOD": "5y",
                 "STOCK_INCREMENTAL_PERIOD": "10d",
                 "YFINANCE_BATCH_PAUSE_SECONDS": "1",
@@ -325,7 +325,7 @@ class ApiStack(Stack):
             targets=[
                 targets.LambdaFunction(
                     self.stock_collector_fn,
-                    event=events.RuleTargetInput.from_object({"max_tickers": 25}),
+                    event=events.RuleTargetInput.from_object({"max_tickers": 10}),
                 )
             ],
         )

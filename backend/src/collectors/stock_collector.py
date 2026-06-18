@@ -46,6 +46,9 @@ STOCK_COLLECTION_MIN_COMPLETENESS = float(
 STOCK_FAILED_RETRY_AFTER_HOURS = int(
     os.environ.get("STOCK_FAILED_RETRY_AFTER_HOURS", "6")
 )
+STOCK_COLLECTOR_MIN_REMAINING_SECONDS = int(
+    os.environ.get("STOCK_COLLECTOR_MIN_REMAINING_SECONDS", "120")
+)
 MAX_RETRIES = 3
 INITIAL_BACKOFF_SECONDS = 2
 CLOUDWATCH_NAMESPACE = "StockMonitoring"
@@ -130,17 +133,29 @@ def handler(event: dict, context: Any) -> dict:
         stock_metadata_by_ticker = {
             stock["ticker"]: stock for stock in selected_stocks
         }
+        attempted_tickers: set[str] = set()
+        stopped_for_time = False
 
         for period, period_stocks in _group_stocks_by_period(selected_stocks).items():
             tickers = [stock["ticker"] for stock in period_stocks]
             batches = [tickers[i : i + BATCH_SIZE] for i in range(0, len(tickers), BATCH_SIZE)]
             for batch_idx, batch in enumerate(batches):
+                if _should_stop_for_time(context):
+                    stopped_for_time = True
+                    log.warning(
+                        "stock_collector_soft_deadline_reached",
+                        phase="primary",
+                        remaining_seconds=_remaining_seconds(context),
+                        deferred_ticker_count=len(selected_stocks) - len(attempted_tickers),
+                    )
+                    break
                 log.info(
                     "processing_batch",
                     batch_index=batch_idx,
                     batch_size=len(batch),
                     period=period,
                 )
+                attempted_tickers.update(batch)
                 batch_result = _process_batch(
                     batch,
                     period=period,
@@ -154,9 +169,11 @@ def handler(event: dict, context: Any) -> dict:
                 collected_tickers.update(batch_result.collected_tickers)
                 if YFINANCE_BATCH_PAUSE_SECONDS > 0:
                     time.sleep(YFINANCE_BATCH_PAUSE_SECONDS)
+            if stopped_for_time:
+                break
 
         # Attempt fallback providers for failed tickers
-        if failed_tickers:
+        if failed_tickers and not _should_stop_for_time(context):
             log.info("market_data_fallback_starting", failed_count=len(failed_tickers))
             fallback_result, fallback_succeeded = _alpha_vantage_fallback_with_details(
                 failed_tickers,
@@ -195,11 +212,21 @@ def handler(event: dict, context: Any) -> dict:
                     "tickers_failed_all_providers",
                     remaining_failures=remaining_failures,
                 )
+        elif failed_tickers:
+            stopped_for_time = True
+            log.warning(
+                "stock_collector_soft_deadline_reached",
+                phase="fallback",
+                remaining_seconds=_remaining_seconds(context),
+                fallback_deferred_ticker_count=len(set(failed_tickers)),
+            )
 
         remaining_failed_tickers = sorted(set(failed_tickers) - fallback_succeeded)
+        attempted_count = len(attempted_tickers)
+        deferred_count = len(selected_stocks) - attempted_count
         summary = _build_collection_summary(
             active_ticker_count=len(stocks),
-            selected_ticker_count=len(selected_stocks),
+            selected_ticker_count=attempted_count,
             records_collected=collected_count,
             duplicate_records=duplicate_count,
             malformed_tickers=malformed_tickers,
@@ -221,6 +248,9 @@ def handler(event: dict, context: Any) -> dict:
             collected=collected_count,
             failed=len(remaining_failed_tickers),
             selected=len(selected_stocks),
+            attempted=attempted_count,
+            deferred=deferred_count,
+            stopped_for_time=stopped_for_time,
             completeness_ratio=summary["completeness_ratio"],
         )
 
@@ -228,7 +258,8 @@ def handler(event: dict, context: Any) -> dict:
             "statusCode": 200,
             "body": (
                 f"Collected {collected_count} new records for "
-                f"{len(selected_stocks)} selected tickers"
+                f"{attempted_count} attempted ticker(s); "
+                f"{deferred_count} deferred for a later run"
             ),
         }
 
@@ -243,6 +274,21 @@ def handler(event: dict, context: Any) -> dict:
 def _fetch_watchlist() -> list[dict[str, Any]]:
     """Fetch active stock metadata from the stocks watchlist table."""
     return store.active_stock_metadata()
+
+
+def _remaining_seconds(context: Any) -> float | None:
+    remaining = getattr(context, "get_remaining_time_in_millis", None)
+    if not callable(remaining):
+        return None
+    return remaining() / 1000
+
+
+def _should_stop_for_time(context: Any) -> bool:
+    remaining = _remaining_seconds(context)
+    return (
+        remaining is not None
+        and remaining <= STOCK_COLLECTOR_MIN_REMAINING_SECONDS
+    )
 
 
 def _select_due_stocks(stocks: list[dict[str, Any]], event: dict[str, Any]) -> list[dict[str, Any]]:

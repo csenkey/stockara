@@ -24,6 +24,7 @@ from backend.src.collectors.stock_collector import (
     _record_failed_ticker_state,
     _movement_signals_from_rows,
     _extract_ticker_data,
+    _should_stop_for_time,
     BatchResult,
     ExtractResult,
     StoreResult,
@@ -40,6 +41,19 @@ from backend.src.collectors.stock_collector import (
     _stooq_fallback_with_details,
     _stooq_symbol,
 )
+
+
+class _RemainingTimeContext:
+    def __init__(self, remaining_values: list[int]):
+        self.remaining_values = remaining_values
+        self.index = 0
+
+    def get_remaining_time_in_millis(self) -> int:
+        if self.index >= len(self.remaining_values):
+            return self.remaining_values[-1]
+        value = self.remaining_values[self.index]
+        self.index += 1
+        return value
 
 
 # --- Fixtures ---
@@ -417,6 +431,47 @@ class TestDueStockSelection:
 
         assert [stock["ticker"] for stock in grouped["5y"]] == ["AAPL"]
         assert [stock["ticker"] for stock in grouped["10d"]] == ["MSFT"]
+
+    def test_should_stop_for_time_when_context_is_near_timeout(self):
+        context = MagicMock()
+        context.get_remaining_time_in_millis.return_value = 90_000
+
+        assert _should_stop_for_time(context) is True
+
+    def test_handler_defers_unattempted_batches_near_soft_deadline(self):
+        stocks = [{"ticker": f"T{index}"} for index in range(10)]
+        context = _RemainingTimeContext([300_000, 60_000])
+
+        with (
+            patch("backend.src.collectors.stock_collector.DatabasePool"),
+            patch(
+                "backend.src.collectors.stock_collector.store.active_stock_metadata",
+                return_value=stocks,
+            ),
+            patch("backend.src.collectors.stock_collector._process_batch") as process_batch,
+            patch("backend.src.collectors.stock_collector._record_collection_summary") as record_summary,
+            patch("backend.src.collectors.stock_collector._record_failed_ticker_state"),
+            patch("backend.src.collectors.stock_collector._emit_metric"),
+            patch("backend.src.collectors.stock_collector._emit_collection_summary_metrics"),
+            patch(
+                "backend.src.collectors.stock_collector._compute_and_store_movement_signals",
+                return_value=0,
+            ),
+            patch("backend.src.collectors.stock_collector.time.sleep"),
+        ):
+            process_batch.return_value = BatchResult(
+                records_inserted=5,
+                collected_tickers={f"T{index}" for index in range(5)},
+            )
+
+            result = handler({"max_tickers": 10}, context)
+
+        assert result["statusCode"] == 200
+        assert "5 deferred" in result["body"]
+        process_batch.assert_called_once()
+        summary = record_summary.call_args.args[0]
+        assert summary["selected_ticker_count"] == 5
+        assert summary["successful_ticker_count"] == 5
 
 
 class TestCollectionSummary:

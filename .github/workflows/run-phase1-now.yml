@@ -11,9 +11,13 @@ on:
         options:
           - prod
       stock_max_tickers:
-        description: "Maximum stock tickers to collect in this run"
+        description: "Maximum stock tickers per stock-collector invocation"
         required: true
-        default: "25"
+        default: "5"
+      stock_batch_count:
+        description: "Number of short stock-collector invocations to run"
+        required: true
+        default: "3"
       earnings_max_tickers:
         description: "Maximum earnings tickers to collect in this run"
         required: true
@@ -61,9 +65,9 @@ jobs:
       - name: Validate inputs
         shell: bash
         run: |
-          for value in "${{ inputs.stock_max_tickers }}" "${{ inputs.earnings_max_tickers }}" "${{ inputs.dividend_max_tickers }}" "${{ inputs.analysis_batch_size }}" "${{ inputs.analysis_batch_count }}"; do
+          for value in "${{ inputs.stock_max_tickers }}" "${{ inputs.stock_batch_count }}" "${{ inputs.earnings_max_tickers }}" "${{ inputs.dividend_max_tickers }}" "${{ inputs.analysis_batch_size }}" "${{ inputs.analysis_batch_count }}"; do
             if ! [[ "$value" =~ ^[0-9]+$ ]] || [[ "$value" -lt 1 ]]; then
-              echo "Ticker limits must be positive integers."
+              echo "Batch counts and ticker limits must be positive integers."
               exit 1
             fi
           done
@@ -119,17 +123,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          aws lambda invoke \
-            --function-name "$STOCK_COLLECTOR_FN" \
-            --payload '{"max_tickers":${{ inputs.stock_max_tickers }}}' \
-            --log-type Tail \
-            --cli-read-timeout 900 \
-            --cli-binary-format raw-in-base64-out \
-            stock-response.json > stock-invoke.json
-          python -c "import base64, json; meta=json.load(open('stock-invoke.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
-          python -c "import json, sys; meta=json.load(open('stock-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
-          cat stock-response.json
-          python -m json.tool stock-response.json
+          for batch_index in $(seq 0 $((${{ inputs.stock_batch_count }} - 1))); do
+            echo "Invoking stock collector batch ${batch_index}"
+            aws lambda invoke \
+              --function-name "$STOCK_COLLECTOR_FN" \
+              --payload '{"max_tickers":${{ inputs.stock_max_tickers }}}' \
+              --log-type Tail \
+              --cli-read-timeout 900 \
+              --cli-binary-format raw-in-base64-out \
+              "stock-response-${batch_index}.json" > "stock-invoke-${batch_index}.json"
+            python -c "import base64, json; meta=json.load(open('stock-invoke-${batch_index}.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
+            python -c "import json, sys; meta=json.load(open('stock-invoke-${batch_index}.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
+            cat "stock-response-${batch_index}.json"
+            python -m json.tool "stock-response-${batch_index}.json"
+          done
 
       - name: Invoke news collector
         shell: bash
