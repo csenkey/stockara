@@ -830,6 +830,9 @@ class TestNoKeyMarketDataFallbacks:
     def test_parse_nasdaq_response_handles_null_data_payload(self):
         assert _parse_nasdaq_response("ACLX", {"data": None}) is None
 
+    def test_parse_nasdaq_response_handles_null_trades_table(self):
+        assert _parse_nasdaq_response("BF.B", {"data": {"tradesTable": None}}) is None
+
     @patch("backend.src.collectors.stock_collector.time.sleep")
     @patch("backend.src.collectors.stock_collector.requests.get")
     def test_fetch_nasdaq_with_retry_success(self, mock_get, mock_sleep):
