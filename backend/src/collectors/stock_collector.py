@@ -711,17 +711,25 @@ def _invoke_next_historical_backfill(
         "invocation_count": invocation_count,
         "processed_tickers": sorted(processed_tickers),
     }
-    boto3.client("lambda").invoke(
-        FunctionName=function_name,
-        InvocationType="Event",
-        Payload=json.dumps(payload).encode("utf-8"),
-    )
-    logger.info(
-        "historical_backfill_continue_invoked",
-        invocation_count=invocation_count,
-        max_tickers=payload.get("max_tickers"),
-    )
-    return True
+    try:
+        boto3.client("lambda").invoke(
+            FunctionName=function_name,
+            InvocationType="Event",
+            Payload=json.dumps(payload).encode("utf-8"),
+        )
+        logger.info(
+            "historical_backfill_continue_invoked",
+            invocation_count=invocation_count,
+            max_tickers=payload.get("max_tickers"),
+        )
+        return True
+    except Exception as exc:
+        logger.warning(
+            "historical_backfill_continue_invoke_failed",
+            invocation_count=invocation_count,
+            error=str(exc),
+        )
+        return False
 
 
 def _select_due_stocks(stocks: list[dict[str, Any]], event: dict[str, Any]) -> list[dict[str, Any]]:

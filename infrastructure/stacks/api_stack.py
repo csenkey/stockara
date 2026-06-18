@@ -277,7 +277,7 @@ class ApiStack(Stack):
         data_table.grant_read_data(self.api_handler_fn)
         artifact_bucket.grant_read_write(self.stock_collector_fn)
         artifact_bucket.grant_put(self.ai_analyzer_fn)
-        self.stock_collector_fn.add_to_role_policy(
+        batch_role.add_to_policy(
             iam.PolicyStatement(
                 actions=["lambda:InvokeFunction"],
                 resources=[
@@ -285,7 +285,12 @@ class ApiStack(Stack):
                         service="lambda",
                         resource="function",
                         resource_name=stock_collector_function_name,
-                    )
+                    ),
+                    Stack.of(self).format_arn(
+                        service="lambda",
+                        resource="function",
+                        resource_name=f"{stock_collector_function_name}:*",
+                    ),
                 ],
             )
         )
