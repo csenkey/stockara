@@ -27,6 +27,7 @@ def test_extractor_streams_txt_members_to_s3_and_queues_continuation(
         [
             "data/daily/us/nasdaq stocks/1/aapl.us.txt",
             "data/daily/us/nasdaq stocks/1/msft.us.txt",
+            "__MACOSX/data/daily/us/nasdaq stocks/1/._aapl.us.txt",
             "data/daily/us/nasdaq stocks/1/readme.csv",
         ],
     )

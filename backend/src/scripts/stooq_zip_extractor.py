@@ -67,7 +67,7 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
         members = [
             info
             for info in archive.infolist()
-            if not info.is_dir() and info.filename.lower().endswith(".txt")
+            if _is_stooq_txt_member(info)
         ]
         members.sort(key=lambda info: info.filename)
 
@@ -152,6 +152,19 @@ def _safe_member_key(filename: str) -> str:
         if part not in {"", ".", ".."} and not part.startswith("/")
     ]
     return "/".join(safe_parts)
+
+
+def _is_stooq_txt_member(info: zipfile.ZipInfo) -> bool:
+    if info.is_dir():
+        return False
+    path = PurePosixPath(info.filename)
+    if not info.filename.lower().endswith(".txt"):
+        return False
+    if any(part == "__MACOSX" for part in path.parts):
+        return False
+    if any(part.startswith("._") for part in path.parts):
+        return False
+    return True
 
 
 def _prefix(value: str) -> str:
