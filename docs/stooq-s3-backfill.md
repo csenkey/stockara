@@ -15,6 +15,10 @@ Use the deployed `stockara-stooq-zip-extractor` Lambda to extract the zip inside
 AWS. It streams `.txt` members from the zip back to S3 and can start the stock
 collector backfill after extraction completes.
 
+If local AWS credentials are unavailable, dispatch the GitHub Actions workflow
+`Run Stooq Zip Extraction`. That workflow only invokes the Lambda; it does not
+download or upload the zip.
+
 ```bash
 aws lambda invoke \
   --function-name stockara-stooq-zip-extractor \
@@ -28,6 +32,17 @@ aws lambda invoke \
     "start_backfill_on_complete": true
   }' \
   /tmp/stooq-extract-response.json
+```
+
+Equivalent GitHub control-plane invocation:
+
+```bash
+gh workflow run "Run Stooq Zip Extraction" \
+  -f bucket="stockmonitoringfrontend-sitebucket397a1860-q0p14kssoh4b" \
+  -f zip_key="stooq/data.zip" \
+  -f output_prefix="stooq-extracted/" \
+  -f max_entries="1000" \
+  -f start_backfill_on_complete="true"
 ```
 
 ## Start Backfill

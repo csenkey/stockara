@@ -1,0 +1,76 @@
+name: Run Stooq Zip Extraction
+
+on:
+  workflow_dispatch:
+    inputs:
+      bucket:
+        description: S3 bucket containing stooq/data.zip
+        required: true
+        default: stockmonitoringfrontend-sitebucket397a1860-q0p14kssoh4b
+      zip_key:
+        description: S3 key for the uploaded zip file
+        required: true
+        default: stooq/data.zip
+      output_prefix:
+        description: S3 prefix for extracted txt files
+        required: true
+        default: stooq-extracted/
+      max_entries:
+        description: Zip txt entries to extract per Lambda invocation
+        required: true
+        default: "1000"
+      start_backfill_on_complete:
+        description: Start stock backfill after extraction completes
+        required: true
+        default: "true"
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+jobs:
+  invoke:
+    name: Invoke extractor Lambda
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check AWS OIDC role configuration
+        run: |
+          if [[ -z "${{ secrets.AWS_ROLE_TO_ASSUME }}" ]]; then
+            echo "Missing GitHub secret AWS_ROLE_TO_ASSUME."
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: stockara-stooq-extractor-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Invoke Stooq extractor
+        run: |
+          payload="$(jq -n \
+            --arg bucket "${{ inputs.bucket }}" \
+            --arg zipKey "${{ inputs.zip_key }}" \
+            --arg outputPrefix "${{ inputs.output_prefix }}" \
+            --argjson maxEntries "${{ inputs.max_entries }}" \
+            --argjson startBackfill "${{ inputs.start_backfill_on_complete }}" \
+            '{
+              bucket: $bucket,
+              zip_key: $zipKey,
+              output_prefix: $outputPrefix,
+              max_entries: $maxEntries,
+              continue_extraction: true,
+              start_backfill_on_complete: $startBackfill
+            }')"
+          echo "$payload"
+          aws lambda invoke \
+            --function-name stockara-stooq-zip-extractor \
+            --cli-binary-format raw-in-base64-out \
+            --payload "$payload" \
+            /tmp/stooq-extractor-response.json
+          cat /tmp/stooq-extractor-response.json
