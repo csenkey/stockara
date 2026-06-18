@@ -689,7 +689,7 @@ class DynamoStore:
             "score_date": score_date,
             "opportunity_score": int(score["opportunity_score"]),
             "negative_score": int(score["negative_score"]),
-            "signals": _to_jsonable(score.get("signals", [])),
+            "signals": _to_dynamodb_value(score.get("signals", [])),
             "created_at": score.get("created_at", _now()),
         }
         self.table.put_item(Item=item)
@@ -712,7 +712,7 @@ class DynamoStore:
             "GSI1SK": analysis_date,
             "entity": "candidate_analysis",
             "created_at": analysis.get("created_at", _now()),
-            **_to_jsonable(analysis),
+            **_to_dynamodb_value(analysis),
             "analysis_date": analysis_date,
         }
         self.table.put_item(Item=item)

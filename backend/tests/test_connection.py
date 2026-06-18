@@ -163,6 +163,63 @@ def test_candidate_date_reads_query_existing_gsi():
     store._scan.assert_not_called()
 
 
+def test_put_candidate_score_converts_nested_signal_floats_to_decimal():
+    table = MagicMock()
+    store = _TestableDynamoStore(table)
+
+    store.put_candidate_score(
+        {
+            "ticker": "NVDA",
+            "score_date": date(2026, 6, 18),
+            "opportunity_score": 42,
+            "negative_score": 3,
+            "signals": [
+                {
+                    "signal_type": "sector_relative",
+                    "score": 12,
+                    "source": {
+                        "provider": "yfinance",
+                        "stock_change_percent": 1.25,
+                        "sector_change_percent": -0.5,
+                    },
+                }
+            ],
+        }
+    )
+
+    item = table.put_item.call_args.kwargs["Item"]
+    source = item["signals"][0]["source"]
+    assert source["stock_change_percent"] == Decimal("1.25")
+    assert source["sector_change_percent"] == Decimal("-0.5")
+
+
+def test_put_candidate_analysis_converts_nested_signal_floats_to_decimal():
+    table = MagicMock()
+    store = _TestableDynamoStore(table)
+    store._put_system_status = MagicMock()
+
+    store.put_candidate_analysis(
+        {
+            "ticker": "NVDA",
+            "analysis_date": date(2026, 6, 18),
+            "analysis_method": "fallback_heuristic",
+            "recommendation": "HOLD",
+            "risk_level": "MEDIUM",
+            "confidence_score": 40,
+            "signals": [
+                {
+                    "signal_type": "sector_relative",
+                    "source": {"relative_performance": 2.75},
+                }
+            ],
+            "created_at": "2026-06-18T07:00:00",
+        }
+    )
+
+    item = table.put_item.call_args.kwargs["Item"]
+    assert item["signals"][0]["source"]["relative_performance"] == Decimal("2.75")
+
+
 def test_put_earnings_event_writes_date_indexed_item_and_status():
     table = MagicMock()
     store = _TestableDynamoStore(table)
