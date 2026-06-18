@@ -1,10 +1,12 @@
 """CloudFormation custom resource handler for first-run watchlist seeding."""
 
 import csv
+import os
 from pathlib import Path
 from typing import Any
 
 import boto3
+from boto3.dynamodb.conditions import Attr
 from boto3.dynamodb.conditions import Key
 
 
@@ -56,6 +58,21 @@ OPTIONAL_LIST_FIELDS = (
     "primary_customers",
     "geographic_exposure",
     "key_static_risks",
+)
+
+SYNC_FIELDS = (
+    "company_name",
+    "sector",
+    "industry",
+    "company_size",
+    "source",
+    "metadata_source",
+    "metadata_source_url",
+    "metadata_as_of",
+    *OPTIONAL_TEXT_FIELDS,
+    *OPTIONAL_LIST_FIELDS,
+    "is_active",
+    "is_sell_alert_watch",
 )
 
 
@@ -122,12 +139,99 @@ def _build_stock_item(row: dict[str, str], sell_alert_tickers: set[str]) -> dict
     return item
 
 
+def _seed_path() -> Path:
+    return Path(__file__).resolve().parents[3] / "data" / "watchlist_seed.csv"
+
+
+def _load_seed_rows() -> list[dict[str, str]]:
+    with _seed_path().open(newline="") as file:
+        reader = csv.DictReader(file)
+        _validate_header(reader.fieldnames)
+        return list(reader)
+
+
+def _sync_values(item: dict[str, Any]) -> dict[str, Any]:
+    return {field: item[field] for field in SYNC_FIELDS if field in item}
+
+
+def _metadata_changed(existing: dict[str, Any], desired: dict[str, Any]) -> bool:
+    for field in SYNC_FIELDS:
+        if existing.get(field) != desired.get(field):
+            return True
+    return False
+
+
+def _update_stock_metadata(table: Any, item: dict[str, Any]) -> None:
+    ticker = item["ticker"]
+    values = _sync_values(item)
+    expression_names = {f"#f{index}": field for index, field in enumerate(values)}
+    expression_values = {f":v{index}": value for index, value in enumerate(values.values())}
+    set_parts = [
+        f"{name} = {value_name}"
+        for name, value_name in zip(expression_names, expression_values)
+    ]
+    remove_fields = [
+        field
+        for field in (*OPTIONAL_TEXT_FIELDS, *OPTIONAL_LIST_FIELDS)
+        if field not in values
+    ]
+    remove_names = {
+        f"#r{index}": field for index, field in enumerate(remove_fields)
+    }
+    update_expression = "SET " + ", ".join(set_parts)
+    if remove_names:
+        update_expression += " REMOVE " + ", ".join(remove_names)
+    table.update_item(
+        Key={"PK": f"STOCK#{ticker}", "SK": "META"},
+        UpdateExpression=update_expression,
+        ExpressionAttributeNames={**expression_names, **remove_names},
+        ExpressionAttributeValues=expression_values,
+        ConditionExpression=Attr("PK").exists(),
+    )
+
+
+def sync_static_metadata(table: Any, sell_alert_tickers: set[str]) -> dict[str, int]:
+    summary = {
+        "created": 0,
+        "changed": 0,
+        "unchanged": 0,
+        "invalid": 0,
+    }
+    with table.batch_writer() as batch:
+        for row in _load_seed_rows():
+            try:
+                item = _build_stock_item(row, sell_alert_tickers)
+            except ValueError:
+                summary["invalid"] += 1
+                raise
+            existing = table.get_item(
+                Key={"PK": item["PK"], "SK": item["SK"]}
+            ).get("Item")
+            if not existing:
+                batch.put_item(Item=item)
+                summary["created"] += 1
+            elif _metadata_changed(existing, item):
+                _update_stock_metadata(table, item)
+                summary["changed"] += 1
+            else:
+                summary["unchanged"] += 1
+    return summary
+
+
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     props = event.get("ResourceProperties", {})
-    table_name = props["TableName"]
+    table_name = props.get("TableName") or event.get("table_name") or os.environ.get(
+        "STOCKARA_TABLE_NAME"
+    )
+    if not table_name:
+        raise ValueError("TableName, table_name, or STOCKARA_TABLE_NAME is required")
     sell_alert_tickers = {
         ticker.strip().upper()
-        for ticker in props.get("SellAlertTickers", "").split(",")
+        for ticker in (
+            props.get("SellAlertTickers")
+            or event.get("sell_alert_tickers")
+            or "AAPL,MSFT,NVDA"
+        ).split(",")
         if ticker.strip()
     }
 
@@ -135,6 +239,10 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return {"PhysicalResourceId": f"{table_name}-watchlist-seed"}
 
     table = boto3.resource("dynamodb").Table(table_name)
+    if event.get("mode") == "sync_static_metadata":
+        summary = sync_static_metadata(table, sell_alert_tickers)
+        return {"statusCode": 200, "body": summary}
+
     existing = table.query(
         IndexName="GSI1",
         Select="COUNT",
@@ -148,8 +256,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         }
 
     seeded = 0
-    seed_path = Path(__file__).resolve().parents[3] / "data" / "watchlist_seed.csv"
-    with seed_path.open(newline="") as file:
+    with _seed_path().open(newline="") as file:
         reader = csv.DictReader(file)
         _validate_header(reader.fieldnames)
         with table.batch_writer() as batch:

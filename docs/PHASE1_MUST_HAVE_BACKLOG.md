@@ -196,9 +196,33 @@ The items below are must-have gaps to close before treating Phase 1 recommendati
 - `backend/src/collectors/news_collector.py`
 - `infrastructure/stacks/api_stack.py`
 
+### 9. Static Business Context Sync
+
+**Status:** Open.
+
+**Gap:** `data/watchlist_seed.csv` includes source-backed business context fields such as `business_description`, `flagship_products`, `revenue_segments`, `primary_customers`, `competitive_position`, and `key_static_risks`, and the seed handler can store them on first empty-table bootstrap. However, the deployed seed custom resource skips when stock metadata already exists, so new or corrected CSV context does not automatically update existing DynamoDB stock metadata.
+
+**Why it matters:** The analyzer should understand what a company actually sells, where revenue comes from, who the customers are, and what durable risks exist before interpreting catalysts. Stale business context can lead to weak or incorrect recommendation reasoning even when market data is fresh.
+
+**Required outcome:**
+
+- Add an explicit metadata sync path that compares the static watchlist CSV to existing stock metadata and updates changed source-backed static fields without clobbering live collection progress fields.
+- Preserve provenance for context fields, including `metadata_source`, `metadata_source_url`, and `metadata_as_of`.
+- Make sync behavior idempotent and safe to run after deploys or as a manual operator workflow.
+- Surface changed, unchanged, missing, and invalid metadata counts in logs/metrics.
+- Feed stored business context into candidate analysis prompts as neutral company context, not scored market evidence.
+- Tests prove static context is stored on first seed and updated when CSV values change.
+
+**References:**
+
+- `data/watchlist_seed.csv`
+- `docs/WATCHLIST_STATIC_METADATA_CONTRACT.md`
+- `backend/src/scripts/seed_watchlist_handler.py`
+- `backend/src/db/connection.py`
+
 ## P2 - Operational Readiness
 
-### 9. Health Endpoint Should Evaluate Freshness
+### 10. Health Endpoint Should Evaluate Freshness
 
 **Status:** Open.
 
@@ -217,7 +241,7 @@ The items below are must-have gaps to close before treating Phase 1 recommendati
 - `backend/src/api/health.py`
 - `backend/src/db/connection.py`
 
-### 10. Product-Quality Alarms
+### 11. Product-Quality Alarms
 
 **Status:** Open.
 
@@ -238,7 +262,7 @@ The items below are must-have gaps to close before treating Phase 1 recommendati
 - `backend/src/collectors/news_collector.py`
 - `backend/src/analysis/phase1_pipeline.py`
 
-### 11. Motto-Aligned Test Coverage
+### 12. Motto-Aligned Test Coverage
 
 **Status:** Open.
 

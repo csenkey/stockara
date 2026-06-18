@@ -41,6 +41,8 @@ class SignalDirection(str, Enum):
 class SignalType(str, Enum):
     PRICE_MOVE = "price_move"
     VOLUME_MOVE = "volume_move"
+    TECHNICAL_TREND = "technical_trend"
+    VOLUME_PERSISTENCE = "volume_persistence"
     NEWS = "news"
     EARNINGS = "earnings"
     DIVIDEND = "dividend"

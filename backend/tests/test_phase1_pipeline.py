@@ -148,6 +148,50 @@ def test_price_volume_signals_prefer_stored_market_signals():
     assert signals[0]["source"]["raw"]["price_change_percent"] == 6
 
 
+def test_price_volume_signals_add_multi_day_market_context():
+    run_date = date(2026, 6, 17)
+    rows = _market_context_rows(
+        "NVDA",
+        run_date - timedelta(days=29),
+        closes=[100 + offset for offset in range(30)],
+        volumes=[1000] * 27 + [2200, 2300, 2400],
+    )
+
+    with patch("src.analysis.phase1_pipeline.store") as mock_store:
+        mock_store.market_signals_for_ticker.return_value = []
+        mock_store.get_stock_data.return_value = rows
+
+        signals = _price_volume_signals("NVDA", run_date)
+
+    signal_types = {signal["signal_type"] for signal in signals}
+    assert "technical_trend" in signal_types
+    assert "volume_persistence" in signal_types
+    trend = next(signal for signal in signals if signal["signal_type"] == "technical_trend")
+    assert trend["direction"] == "positive"
+    assert trend["score"] > 0
+    assert trend["source"]["provider"] == "derived_ohlcv"
+    assert trend["source"]["raw"]["return_20d_percent"] > 0
+
+
+def test_price_volume_signals_do_not_call_one_day_jump_a_trend():
+    run_date = date(2026, 6, 17)
+    rows = _market_context_rows(
+        "AAPL",
+        run_date - timedelta(days=24),
+        closes=[100] * 24 + [104],
+        volumes=[1000] * 25,
+    )
+
+    with patch("src.analysis.phase1_pipeline.store") as mock_store:
+        mock_store.market_signals_for_ticker.return_value = []
+        mock_store.get_stock_data.return_value = rows
+
+        signals = _price_volume_signals("AAPL", run_date)
+
+    assert any(signal["signal_type"] == "price_move" for signal in signals)
+    assert not any(signal["signal_type"] == "technical_trend" for signal in signals)
+
+
 def test_build_publication_payload_includes_upcoming_earnings():
     stocks = [{"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology"}]
     scores = [{"ticker": "NVDA", "opportunity_score": 0, "negative_score": 0, "signals": []}]
@@ -922,6 +966,23 @@ def _stock_rows(
             )
         rows.append(row)
     return rows
+
+
+def _market_context_rows(
+    ticker: str, start_date: date, closes: list[int], volumes: list[int]
+) -> list[dict]:
+    return [
+        {
+            "ticker": ticker,
+            "trading_date": (start_date + timedelta(days=offset)).isoformat(),
+            "close_price": str(close),
+            "volume": volumes[offset],
+            "data_provider": "yfinance",
+            "price_adjustment": "unadjusted",
+            "provider_priority": "primary",
+        }
+        for offset, close in enumerate(closes)
+    ]
 
 
 def _candidate_score(

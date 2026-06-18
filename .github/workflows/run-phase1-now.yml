@@ -22,6 +22,11 @@ on:
         description: "Maximum dividend tickers to collect in this run"
         required: true
         default: "50"
+      sync_watchlist_metadata:
+        description: "Sync deployed stock metadata from data/watchlist_seed.csv before collection"
+        required: true
+        default: false
+        type: boolean
       publish_after_collection:
         description: "Run analyzer/publisher after collectors finish"
         required: true
@@ -87,10 +92,28 @@ jobs:
             echo "EARNINGS_COLLECTOR_FN=stockara-earnings-collector" >> "$GITHUB_ENV"
             echo "DIVIDEND_COLLECTOR_FN=stockara-dividend-collector" >> "$GITHUB_ENV"
             echo "PUBLISHER_FN=stockara-phase1-analyzer-publisher" >> "$GITHUB_ENV"
+            echo "WATCHLIST_SEED_FN=stockara-watchlist-seed" >> "$GITHUB_ENV"
           else
             echo "Unsupported deployment stage: $stage"
             exit 1
           fi
+
+      - name: Sync watchlist static metadata
+        if: ${{ inputs.sync_watchlist_metadata }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws lambda invoke \
+            --function-name "$WATCHLIST_SEED_FN" \
+            --payload '{"mode":"sync_static_metadata"}' \
+            --log-type Tail \
+            --cli-read-timeout 900 \
+            --cli-binary-format raw-in-base64-out \
+            watchlist-sync-response.json > watchlist-sync-invoke.json
+          python -c "import base64, json; meta=json.load(open('watchlist-sync-invoke.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
+          python -c "import json, sys; meta=json.load(open('watchlist-sync-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
+          cat watchlist-sync-response.json
+          python -m json.tool watchlist-sync-response.json
 
       - name: Invoke stock collector
         shell: bash

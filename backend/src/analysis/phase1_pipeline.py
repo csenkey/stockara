@@ -808,6 +808,11 @@ Negative score: {score['negative_score']}
 Signals:
 {signals}
 
+Use multi-day derived OHLCV context, sector/news/event evidence, and source
+details to decide whether the setup is durable. Treat isolated one-session
+price or volume moves as insufficient for BUY or SELL unless other evidence
+confirms direction and risk/reward.
+
 Return JSON with keys:
 recommendation: BUY, HOLD, or SELL
 risk_level: LOW, MEDIUM, or HIGH
@@ -957,23 +962,28 @@ def _chat_completion_options(
 
 def _price_volume_signals(ticker: str, run_date: date) -> list[dict[str, Any]]:
     stored_signals = _stored_market_signals(ticker, run_date)
-    if stored_signals:
+    try:
+        rows = store.get_stock_data(ticker, run_date - timedelta(days=60), run_date)
+    except Exception as exc:
+        logger.warning("stock_market_context_lookup_failed", ticker=ticker, error=str(exc))
         return stored_signals
-
-    rows = store.get_stock_data(ticker, run_date - timedelta(days=45), run_date)
+    derived_signals = _derived_market_context_signals(ticker, rows)
+    if stored_signals:
+        return stored_signals + derived_signals
     if len(rows) < 2:
-        return []
-    latest = rows[-1]
-    previous = rows[-2]
+        return derived_signals
+    ordered = _ordered_stock_rows(rows)
+    latest = ordered[-1]
+    previous = ordered[-2]
     close = _analysis_close_price(latest)
     prev_close = _analysis_close_price(previous)
     if prev_close <= 0:
-        return []
+        return derived_signals
     price_change = float((close - prev_close) / prev_close * 100)
-    avg_volume = sum(int(row["volume"]) for row in rows[:-1]) / max(1, len(rows) - 1)
+    avg_volume = sum(int(row["volume"]) for row in ordered[:-1]) / max(1, len(ordered) - 1)
     volume_ratio = int(latest["volume"]) / avg_volume if avg_volume else 1
 
-    signals = []
+    signals = derived_signals.copy()
     if abs(price_change) >= 3:
         signals.append(
             _signal(
@@ -998,6 +1008,119 @@ def _price_volume_signals(ticker: str, run_date: date) -> list[dict[str, Any]]:
                 "yfinance",
             )
         )
+    return signals
+
+
+def _derived_market_context_signals(
+    ticker: str, rows: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Build multi-day technical context from stored OHLCV rows.
+
+    These signals are intentionally derived from local data so the shortlist can
+    carry trend durability and volume persistence before any external AI call.
+    """
+    if len(rows) < 6:
+        return []
+    ordered = _ordered_stock_rows(rows)
+    closes = [_analysis_close_price(row) for row in ordered]
+    volumes = [Decimal(str(row.get("volume", 0))) for row in ordered]
+    latest_close = closes[-1]
+
+    return_5d = _window_return_percent(closes, 5)
+    return_20d = _window_return_percent(closes, 20)
+    sma_20 = _average_decimal(closes[-20:]) if len(closes) >= 20 else _average_decimal(closes)
+    close_vs_sma_20 = _pct_move(sma_20, latest_close) if sma_20 > 0 else 0.0
+    recent_changes = [
+        _pct_move(closes[index - 1], closes[index])
+        for index in range(max(1, len(closes) - 10), len(closes))
+    ]
+    up_day_ratio = (
+        sum(1 for change in recent_changes if change > 0) / len(recent_changes)
+        if recent_changes
+        else 0.0
+    )
+    drawdown_20d = _drawdown_percent(closes[-20:])
+
+    trend_score = 0
+    if return_5d >= 2:
+        trend_score += 14
+    elif return_5d <= -2:
+        trend_score -= 14
+    if return_20d >= 5:
+        trend_score += 20
+    elif return_20d <= -5:
+        trend_score -= 20
+    if close_vs_sma_20 >= 2:
+        trend_score += 10
+    elif close_vs_sma_20 <= -2:
+        trend_score -= 10
+    if up_day_ratio >= 0.65:
+        trend_score += 8
+    elif up_day_ratio <= 0.35:
+        trend_score -= 8
+    if drawdown_20d <= -12:
+        trend_score -= min(12, int(abs(drawdown_20d) - 10))
+
+    signals: list[dict[str, Any]] = []
+    if abs(trend_score) >= 20:
+        signals.append(
+            _signal(
+                ticker,
+                "technical_trend",
+                "positive" if trend_score > 0 else "negative",
+                int(max(-55, min(55, trend_score))),
+                "Multi-day technical trend",
+                (
+                    f"{ticker} has {return_5d:.2f}% 5-session return, "
+                    f"{return_20d:.2f}% 20-session return, trades "
+                    f"{close_vs_sma_20:.2f}% versus its 20-session average, "
+                    f"and had {up_day_ratio:.0%} positive sessions recently."
+                ),
+                "derived_ohlcv",
+                {
+                    "return_5d_percent": round(return_5d, 2),
+                    "return_20d_percent": round(return_20d, 2),
+                    "close_vs_sma_20_percent": round(close_vs_sma_20, 2),
+                    "up_day_ratio_10d": round(up_day_ratio, 2),
+                    "drawdown_20d_percent": round(drawdown_20d, 2),
+                    "history_row_count": len(ordered),
+                },
+            )
+        )
+
+    if len(volumes) >= 8:
+        recent_volume = _average_decimal(volumes[-3:])
+        baseline_volume = _average_decimal(volumes[-23:-3] or volumes[:-3])
+        volume_persistence = (
+            float(recent_volume / baseline_volume) if baseline_volume > 0 else 1.0
+        )
+        if volume_persistence >= 1.35:
+            direction = "positive" if return_5d >= 0 else "negative"
+            score = int(min(35, 12 + (volume_persistence - 1) * 12 + abs(return_5d)))
+            if direction == "negative":
+                score = -score
+            signals.append(
+                _signal(
+                    ticker,
+                    "volume_persistence",
+                    direction,
+                    score,
+                    "Persistent elevated volume",
+                    (
+                        f"{ticker}'s last 3 sessions traded at "
+                        f"{volume_persistence:.1f}x baseline volume while its "
+                        f"5-session return was {return_5d:.2f}%."
+                    ),
+                    "derived_ohlcv",
+                    {
+                        "recent_3_session_volume_ratio": round(volume_persistence, 2),
+                        "return_5d_percent": round(return_5d, 2),
+                        "recent_average_volume": _jsonable_value(recent_volume),
+                        "baseline_average_volume": _jsonable_value(baseline_volume),
+                    },
+                )
+            )
+
     return signals
 
 
@@ -1480,6 +1603,32 @@ def _pct_move(previous: Any, current: Any) -> float:
     if previous_dec <= 0:
         return 0.0
     return float((current_dec - previous_dec) / previous_dec * 100)
+
+
+def _ordered_stock_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(rows, key=lambda row: str(row.get("trading_date", "")))
+
+
+def _window_return_percent(closes: list[Decimal], sessions: int) -> float:
+    if len(closes) <= sessions:
+        return _pct_move(closes[0], closes[-1])
+    return _pct_move(closes[-sessions - 1], closes[-1])
+
+
+def _average_decimal(values: list[Decimal]) -> Decimal:
+    if not values:
+        return Decimal("0")
+    return sum(values, Decimal("0")) / Decimal(len(values))
+
+
+def _drawdown_percent(closes: list[Decimal]) -> float:
+    if not closes:
+        return 0.0
+    peak = max(closes)
+    if peak <= 0:
+        return 0.0
+    latest = closes[-1]
+    return float((latest - peak) / peak * 100)
 
 
 def _analysis_close_price(row: dict[str, Any]) -> Decimal:

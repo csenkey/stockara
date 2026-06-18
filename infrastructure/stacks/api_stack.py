@@ -154,7 +154,8 @@ class ApiStack(Stack):
             memory_size=256,
             timeout=Duration.minutes(3),
             role=batch_role,
-            description="Seeds the Phase 1 watchlist on first deploy only",
+            environment={**common_env, "POWERTOOLS_SERVICE_NAME": "watchlist-seed"},
+            description="Seeds and syncs the Phase 1 watchlist static metadata",
         )
 
         self.news_collector_fn = _lambda.Function(

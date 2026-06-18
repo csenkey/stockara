@@ -6,6 +6,7 @@ from backend.src.scripts.seed_watchlist_handler import (
     REQUIRED_METADATA_FIELDS,
     _build_stock_item,
     _validate_header,
+    sync_static_metadata,
 )
 
 
@@ -72,3 +73,87 @@ def test_build_stock_item_rejects_missing_required_field():
 def test_build_stock_item_rejects_invalid_sector():
     with pytest.raises(ValueError, match="invalid sector"):
         _build_stock_item(_complete_row(sector="Everything"), set())
+
+
+def test_sync_static_metadata_updates_context_without_clobbering_live_fields(monkeypatch):
+    existing = _build_stock_item(
+        _complete_row(
+            business_description="Old description.",
+            flagship_products="Old product",
+        ),
+        set(),
+    )
+    existing["latest_stock_data_date"] = "2026-06-18"
+    existing["latest_close_price"] = "213.25"
+    table = _FakeTable([existing])
+    monkeypatch.setattr(
+        "backend.src.scripts.seed_watchlist_handler._load_seed_rows",
+        lambda: [_complete_row()],
+    )
+
+    summary = sync_static_metadata(table, {"AAPL"})
+
+    stored = table.items[("STOCK#AAPL", "META")]
+    assert summary == {"created": 0, "changed": 1, "unchanged": 0, "invalid": 0}
+    assert stored["business_description"] == (
+        "Designs and sells consumer electronics and services."
+    )
+    assert stored["flagship_products"] == ["iPhone", "Mac", "Services"]
+    assert stored["is_sell_alert_watch"] is True
+    assert stored["latest_stock_data_date"] == "2026-06-18"
+    assert stored["latest_close_price"] == "213.25"
+
+
+def test_sync_static_metadata_creates_missing_stock(monkeypatch):
+    table = _FakeTable([])
+    monkeypatch.setattr(
+        "backend.src.scripts.seed_watchlist_handler._load_seed_rows",
+        lambda: [_complete_row()],
+    )
+
+    summary = sync_static_metadata(table, {"AAPL"})
+
+    assert summary == {"created": 1, "changed": 0, "unchanged": 0, "invalid": 0}
+    assert table.items[("STOCK#AAPL", "META")]["company_name"] == "Apple Inc."
+
+
+class _FakeBatch:
+    def __init__(self, table):
+        self.table = table
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def put_item(self, Item):
+        self.table.items[(Item["PK"], Item["SK"])] = dict(Item)
+
+
+class _FakeTable:
+    def __init__(self, items):
+        self.items = {(item["PK"], item["SK"]): dict(item) for item in items}
+
+    def batch_writer(self):
+        return _FakeBatch(self)
+
+    def get_item(self, Key):
+        item = self.items.get((Key["PK"], Key["SK"]))
+        return {"Item": dict(item)} if item else {}
+
+    def update_item(
+        self,
+        Key,
+        UpdateExpression,
+        ExpressionAttributeNames,
+        ExpressionAttributeValues,
+        **_kwargs,
+    ):
+        item = self.items[(Key["PK"], Key["SK"])]
+        set_expression, _, remove_expression = UpdateExpression.partition(" REMOVE ")
+        for part in set_expression.removeprefix("SET ").split(", "):
+            name, value_name = part.split(" = ")
+            item[ExpressionAttributeNames[name]] = ExpressionAttributeValues[value_name]
+        for name in remove_expression.split(", ") if remove_expression else []:
+            item.pop(ExpressionAttributeNames[name], None)
