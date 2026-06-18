@@ -102,14 +102,15 @@ class ApiStack(Stack):
             ),
         )
 
+        stock_collector_function_name = resource_name(
+            deployment_stage,
+            "stockara-stock-collector",
+            "stock-collector",
+        )
         self.stock_collector_fn = _lambda.Function(
             self,
             "StockCollectorFunction",
-            function_name=resource_name(
-                deployment_stage,
-                "stockara-stock-collector",
-                "stock-collector",
-            ),
+            function_name=stock_collector_function_name,
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="src.collectors.stock_collector.handler",
             code=backend_code,
@@ -119,8 +120,10 @@ class ApiStack(Stack):
             environment={
                 **common_env,
                 "POWERTOOLS_SERVICE_NAME": "stock-collector",
+                "STOCKARA_STOCK_HISTORY_BUCKET": artifact_bucket.bucket_name,
                 "STOCK_COLLECTOR_BATCH_SIZE": "5",
                 "STOCK_COLLECTOR_MAX_TICKERS": "10",
+                "STOCK_HISTORICAL_BACKFILL_TICKERS_PER_RUN": "1",
                 "STOCK_INITIAL_HISTORY_PERIOD": "5y",
                 "STOCK_INCREMENTAL_PERIOD": "10d",
                 "YFINANCE_BATCH_PAUSE_SECONDS": "1",
@@ -272,7 +275,20 @@ class ApiStack(Stack):
         data_table.grant_read_write_data(self.ai_analyzer_fn)
         data_table.grant_read_write_data(self.watchlist_seed_fn)
         data_table.grant_read_data(self.api_handler_fn)
+        artifact_bucket.grant_read_write(self.stock_collector_fn)
         artifact_bucket.grant_put(self.ai_analyzer_fn)
+        self.stock_collector_fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["lambda:InvokeFunction"],
+                resources=[
+                    Stack.of(self).format_arn(
+                        service="lambda",
+                        resource="function",
+                        resource_name=stock_collector_function_name,
+                    )
+                ],
+            )
+        )
         openai_api_key_secret.grant_read(self.news_collector_fn)
         openai_api_key_secret.grant_read(self.ai_analyzer_fn)
 

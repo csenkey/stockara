@@ -18,6 +18,20 @@ on:
         description: "Number of short stock-collector invocations to run"
         required: true
         default: "3"
+      historical_backfill:
+        description: "Run resumable historical backfill using S3 archives"
+        required: true
+        default: false
+        type: boolean
+      historical_backfill_max_tickers:
+        description: "Historical backfill tickers per invocation"
+        required: true
+        default: "1"
+      historical_backfill_continue:
+        description: "Let the stock collector asynchronously continue historical backfill"
+        required: true
+        default: false
+        type: boolean
       earnings_max_tickers:
         description: "Maximum earnings tickers to collect in this run"
         required: true
@@ -65,7 +79,7 @@ jobs:
       - name: Validate inputs
         shell: bash
         run: |
-          for value in "${{ inputs.stock_max_tickers }}" "${{ inputs.stock_batch_count }}" "${{ inputs.earnings_max_tickers }}" "${{ inputs.dividend_max_tickers }}" "${{ inputs.analysis_batch_size }}" "${{ inputs.analysis_batch_count }}"; do
+          for value in "${{ inputs.stock_max_tickers }}" "${{ inputs.stock_batch_count }}" "${{ inputs.historical_backfill_max_tickers }}" "${{ inputs.earnings_max_tickers }}" "${{ inputs.dividend_max_tickers }}" "${{ inputs.analysis_batch_size }}" "${{ inputs.analysis_batch_count }}"; do
             if ! [[ "$value" =~ ^[0-9]+$ ]] || [[ "$value" -lt 1 ]]; then
               echo "Batch counts and ticker limits must be positive integers."
               exit 1
@@ -119,7 +133,26 @@ jobs:
           cat watchlist-sync-response.json
           python -m json.tool watchlist-sync-response.json
 
+      - name: Run historical stock backfill
+        if: ${{ inputs.historical_backfill }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(printf '{"mode":"historical_backfill","max_tickers":%s,"continue_backfill":%s}' "${{ inputs.historical_backfill_max_tickers }}" "${{ inputs.historical_backfill_continue }}")"
+          aws lambda invoke \
+            --function-name "$STOCK_COLLECTOR_FN" \
+            --payload "$payload" \
+            --log-type Tail \
+            --cli-read-timeout 900 \
+            --cli-binary-format raw-in-base64-out \
+            historical-backfill-response.json > historical-backfill-invoke.json
+          python -c "import base64, json; meta=json.load(open('historical-backfill-invoke.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
+          python -c "import json, sys; meta=json.load(open('historical-backfill-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
+          cat historical-backfill-response.json
+          python -m json.tool historical-backfill-response.json
+
       - name: Invoke stock collector
+        if: ${{ !inputs.historical_backfill }}
         shell: bash
         run: |
           set -euo pipefail
@@ -139,6 +172,7 @@ jobs:
           done
 
       - name: Invoke news collector
+        if: ${{ !inputs.historical_backfill }}
         shell: bash
         run: |
           set -euo pipefail
@@ -155,6 +189,7 @@ jobs:
           python -m json.tool news-response.json
 
       - name: Invoke earnings collector
+        if: ${{ !inputs.historical_backfill }}
         shell: bash
         run: |
           set -euo pipefail
@@ -171,6 +206,7 @@ jobs:
           python -m json.tool earnings-response.json
 
       - name: Invoke dividend collector
+        if: ${{ !inputs.historical_backfill }}
         shell: bash
         run: |
           set -euo pipefail
@@ -187,7 +223,7 @@ jobs:
           python -m json.tool dividend-response.json
 
       - name: Score Phase 1 candidates
-        if: ${{ inputs.publish_after_collection }}
+        if: ${{ inputs.publish_after_collection && !inputs.historical_backfill }}
         shell: bash
         run: |
           set -euo pipefail
@@ -204,7 +240,7 @@ jobs:
           python -m json.tool score-response.json
 
       - name: Analyze Phase 1 candidate batches
-        if: ${{ inputs.publish_after_collection }}
+        if: ${{ inputs.publish_after_collection && !inputs.historical_backfill }}
         shell: bash
         run: |
           set -euo pipefail
@@ -225,7 +261,7 @@ jobs:
           done
 
       - name: Publish Phase 1 artifacts
-        if: ${{ inputs.publish_after_collection }}
+        if: ${{ inputs.publish_after_collection && !inputs.historical_backfill }}
         shell: bash
         run: |
           set -euo pipefail
@@ -242,7 +278,7 @@ jobs:
           python -m json.tool publisher-response.json
 
       - name: Validate published static artifacts
-        if: ${{ inputs.publish_after_collection }}
+        if: ${{ inputs.publish_after_collection && !inputs.historical_backfill }}
         shell: bash
         run: |
           set -euo pipefail

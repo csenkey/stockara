@@ -271,6 +271,7 @@ class DynamoStore:
                 Item=item,
                 ConditionExpression=Attr("PK").not_exists() & Attr("SK").not_exists(),
             )
+            self._mark_stock_data_row_inserted(record["ticker"], trading_date)
             self._mark_stock_data_collected(
                 record["ticker"],
                 trading_date,
@@ -284,6 +285,20 @@ class DynamoStore:
             if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
                 return False
             raise
+
+    def _mark_stock_data_row_inserted(self, ticker: str, trading_date: str) -> None:
+        self.table.update_item(
+            Key={"PK": f"STOCK#{ticker}", "SK": "META"},
+            UpdateExpression=(
+                "ADD stock_history_row_count :one "
+                "SET stock_history_start_date = "
+                "if_not_exists(stock_history_start_date, :trading_date)"
+            ),
+            ExpressionAttributeValues={
+                ":one": 1,
+                ":trading_date": trading_date,
+            },
+        )
 
     def _mark_stock_data_collected(
         self,

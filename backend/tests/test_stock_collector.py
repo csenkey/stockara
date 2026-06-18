@@ -473,6 +473,159 @@ class TestDueStockSelection:
         assert summary["selected_ticker_count"] == 5
         assert summary["successful_ticker_count"] == 5
 
+    def test_historical_backfill_restores_s3_archive_without_provider_fetch(self):
+        stocks = [{"ticker": "AAPL"}]
+        archived_records = [
+            {
+                "ticker": "AAPL",
+                "trading_date": "2026-06-17",
+                "open_price": "100",
+                "high_price": "110",
+                "low_price": "99",
+                "close_price": "108",
+                "volume": 1000,
+                "data_provider": "yfinance",
+                "price_adjustment": "unadjusted",
+            }
+        ]
+
+        with (
+            patch("backend.src.collectors.stock_collector.DatabasePool"),
+            patch(
+                "backend.src.collectors.stock_collector.store.active_stock_metadata",
+                return_value=stocks,
+            ),
+            patch(
+                "backend.src.collectors.stock_collector._load_history_archive",
+                return_value=archived_records,
+            ),
+            patch("backend.src.collectors.stock_collector._fetch_historical_records") as fetch_history,
+            patch("backend.src.collectors.stock_collector._store_records") as store_records,
+            patch("backend.src.collectors.stock_collector._record_collection_summary"),
+            patch("backend.src.collectors.stock_collector._record_failed_ticker_state"),
+            patch("backend.src.collectors.stock_collector._emit_metric"),
+            patch("backend.src.collectors.stock_collector._emit_collection_summary_metrics"),
+            patch(
+                "backend.src.collectors.stock_collector._compute_and_store_movement_signals",
+                return_value=0,
+            ),
+        ):
+            store_records.return_value = StoreResult(inserted_records=1)
+
+            result = handler({"mode": "historical_backfill", "max_tickers": 1}, None)
+
+        assert result["statusCode"] == 200
+        assert result["body"]["s3_archives_restored"] == 1
+        assert result["body"]["provider_fetches"] == 0
+        fetch_history.assert_not_called()
+        store_records.assert_called_once_with(archived_records)
+
+    def test_historical_backfill_archives_provider_history(self):
+        stocks = [{"ticker": "AAPL"}]
+        provider_records = [
+            {
+                "ticker": "AAPL",
+                "trading_date": date(2026, 6, 17),
+                "open_price": Decimal("100"),
+                "high_price": Decimal("110"),
+                "low_price": Decimal("99"),
+                "close_price": Decimal("108"),
+                "volume": 1000,
+                "data_provider": "yfinance",
+                "price_adjustment": "unadjusted",
+            }
+        ]
+
+        with (
+            patch("backend.src.collectors.stock_collector.DatabasePool"),
+            patch(
+                "backend.src.collectors.stock_collector.store.active_stock_metadata",
+                return_value=stocks,
+            ),
+            patch(
+                "backend.src.collectors.stock_collector._load_history_archive",
+                return_value=None,
+            ),
+            patch(
+                "backend.src.collectors.stock_collector._fetch_historical_records",
+                return_value=provider_records,
+            ),
+            patch("backend.src.collectors.stock_collector._put_history_archive") as put_archive,
+            patch("backend.src.collectors.stock_collector._store_records") as store_records,
+            patch("backend.src.collectors.stock_collector._record_collection_summary"),
+            patch("backend.src.collectors.stock_collector._record_failed_ticker_state"),
+            patch("backend.src.collectors.stock_collector._emit_metric"),
+            patch("backend.src.collectors.stock_collector._emit_collection_summary_metrics"),
+            patch(
+                "backend.src.collectors.stock_collector._compute_and_store_movement_signals",
+                return_value=0,
+            ),
+        ):
+            store_records.return_value = StoreResult(inserted_records=1)
+
+            result = handler({"mode": "historical_backfill", "max_tickers": 1}, None)
+
+        assert result["body"]["s3_archives_written"] == 1
+        assert result["body"]["provider_fetches"] == 1
+        store_records.assert_called_once_with(provider_records)
+
+    def test_historical_backfill_can_queue_next_invocation(self):
+        stocks = [{"ticker": "AAPL"}, {"ticker": "MSFT"}]
+        provider_records = [
+            {
+                "ticker": "AAPL",
+                "trading_date": "2026-06-17",
+                "open_price": "100",
+                "high_price": "110",
+                "low_price": "99",
+                "close_price": "108",
+                "volume": 1000,
+            }
+        ]
+
+        with (
+            patch("backend.src.collectors.stock_collector.DatabasePool"),
+            patch(
+                "backend.src.collectors.stock_collector.store.active_stock_metadata",
+                return_value=stocks,
+            ),
+            patch(
+                "backend.src.collectors.stock_collector._load_history_archive",
+                return_value=None,
+            ),
+            patch(
+                "backend.src.collectors.stock_collector._fetch_historical_records",
+                return_value=provider_records,
+            ),
+            patch("backend.src.collectors.stock_collector._put_history_archive"),
+            patch("backend.src.collectors.stock_collector._store_records") as store_records,
+            patch(
+                "backend.src.collectors.stock_collector._invoke_next_historical_backfill",
+                return_value=True,
+            ) as invoke_next,
+            patch("backend.src.collectors.stock_collector._record_collection_summary"),
+            patch("backend.src.collectors.stock_collector._record_failed_ticker_state"),
+            patch("backend.src.collectors.stock_collector._emit_metric"),
+            patch("backend.src.collectors.stock_collector._emit_collection_summary_metrics"),
+            patch(
+                "backend.src.collectors.stock_collector._compute_and_store_movement_signals",
+                return_value=0,
+            ),
+        ):
+            store_records.return_value = StoreResult(inserted_records=1)
+
+            result = handler(
+                {
+                    "mode": "historical_backfill",
+                    "max_tickers": 1,
+                    "continue_backfill": True,
+                },
+                None,
+            )
+
+        assert result["body"]["continue_queued"] is True
+        invoke_next.assert_called_once()
+
 
 class TestCollectionSummary:
     """Tests collection completeness/failure summaries."""
@@ -594,7 +747,8 @@ class TestStoreRecords:
     """Tests for duplicate detection and record storage."""
 
     @patch("backend.src.collectors.stock_collector.store")
-    def test_insert_new_records(self, mock_store, mock_db_pool):
+    @patch("backend.src.collectors.stock_collector._merge_history_archive")
+    def test_insert_new_records(self, mock_merge_archive, mock_store, mock_db_pool):
         """New records are inserted successfully."""
         mock_store.put_stock_data.return_value = True
         records = [{
@@ -611,9 +765,11 @@ class TestStoreRecords:
         assert result.inserted_records == 1
         assert result.duplicate_records == 0
         mock_store.put_stock_data.assert_called_once()
+        mock_merge_archive.assert_called_once()
 
     @patch("backend.src.collectors.stock_collector.store")
-    def test_duplicate_record_skipped(self, mock_store, mock_db_pool):
+    @patch("backend.src.collectors.stock_collector._merge_history_archive")
+    def test_duplicate_record_skipped(self, mock_merge_archive, mock_store, mock_db_pool):
         """Duplicate records (rowcount=0) are skipped."""
         mock_store.put_stock_data.return_value = False
         records = [{
@@ -629,6 +785,7 @@ class TestStoreRecords:
         result = _store_records(records)
         assert result.inserted_records == 0
         assert result.duplicate_records == 1
+        mock_merge_archive.assert_called_once()
 
     def test_empty_records_list(self, mock_db_pool):
         """Empty records list returns 0 without DB call."""
@@ -637,7 +794,8 @@ class TestStoreRecords:
         assert result.duplicate_records == 0
 
     @patch("backend.src.collectors.stock_collector.store")
-    def test_mixed_new_and_duplicate(self, mock_store, mock_db_pool):
+    @patch("backend.src.collectors.stock_collector._merge_history_archive")
+    def test_mixed_new_and_duplicate(self, mock_merge_archive, mock_store, mock_db_pool):
         """Mix of new and duplicate records counts correctly."""
         mock_store.put_stock_data.side_effect = [True, False]
         records = [
@@ -658,6 +816,26 @@ class TestStoreRecords:
         result = _store_records(records)
         assert result.inserted_records == 1
         assert result.duplicate_records == 1
+        mock_merge_archive.assert_called_once()
+
+    @patch("backend.src.collectors.stock_collector.store")
+    @patch("backend.src.collectors.stock_collector._merge_history_archive")
+    def test_failed_record_is_not_archived(self, mock_merge_archive, mock_store, mock_db_pool):
+        mock_store.put_stock_data.side_effect = RuntimeError("write failed")
+        records = [{
+            "ticker": "AAPL",
+            "trading_date": date(2025, 1, 15),
+            "open_price": Decimal("150.0"),
+            "high_price": Decimal("155.0"),
+            "low_price": Decimal("149.0"),
+            "close_price": Decimal("153.0"),
+            "volume": 1000000,
+        }]
+
+        result = _store_records(records)
+
+        assert result.failed_records == 1
+        mock_merge_archive.assert_not_called()
 
 
 # --- Tests for _alpha_vantage_fallback ---

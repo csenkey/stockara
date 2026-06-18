@@ -7,6 +7,7 @@ Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7
 """
 
 import os
+import json
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
@@ -35,8 +36,19 @@ NASDAQ_MAX_RECORDS_PER_TICKER = int(
 )
 STOOQ_MAX_RECORDS_PER_TICKER = int(os.environ.get("STOOQ_MAX_RECORDS_PER_TICKER", "90"))
 DEFAULT_MARKET_DATA_CURRENCY = os.environ.get("STOCK_DATA_DEFAULT_CURRENCY", "USD")
+STOCK_HISTORY_BUCKET = os.environ.get(
+    "STOCKARA_STOCK_HISTORY_BUCKET",
+    os.environ.get("STOCKARA_ARTIFACT_BUCKET", ""),
+)
+STOCK_HISTORY_PREFIX = os.environ.get("STOCK_HISTORY_PREFIX", "stock-history")
 BATCH_SIZE = int(os.environ.get("STOCK_COLLECTOR_BATCH_SIZE", "5"))
 MAX_TICKERS_PER_RUN = int(os.environ.get("STOCK_COLLECTOR_MAX_TICKERS", "25"))
+HISTORICAL_BACKFILL_TICKERS_PER_RUN = int(
+    os.environ.get("STOCK_HISTORICAL_BACKFILL_TICKERS_PER_RUN", "1")
+)
+HISTORICAL_BACKFILL_MAX_CHAINED_INVOCATIONS = int(
+    os.environ.get("STOCK_HISTORICAL_BACKFILL_MAX_CHAINED_INVOCATIONS", "200")
+)
 INITIAL_HISTORY_PERIOD = os.environ.get("STOCK_INITIAL_HISTORY_PERIOD", "5y")
 INCREMENTAL_PERIOD = os.environ.get("STOCK_INCREMENTAL_PERIOD", "10d")
 YFINANCE_BATCH_PAUSE_SECONDS = float(os.environ.get("YFINANCE_BATCH_PAUSE_SECONDS", "1"))
@@ -102,6 +114,9 @@ def handler(event: dict, context: Any) -> dict:
                 )
             )
             return {"statusCode": 200, "body": "No active tickers to collect"}
+
+        if (event or {}).get("mode") == "historical_backfill":
+            return _run_historical_backfill(stocks, event or {}, context)
 
         selected_stocks = _select_due_stocks(stocks, event or {})
         if not selected_stocks:
@@ -276,6 +291,148 @@ def _fetch_watchlist() -> list[dict[str, Any]]:
     return store.active_stock_metadata()
 
 
+def _run_historical_backfill(
+    stocks: list[dict[str, Any]], event: dict[str, Any], context: Any
+) -> dict[str, Any]:
+    max_tickers = int(event.get("max_tickers", HISTORICAL_BACKFILL_TICKERS_PER_RUN))
+    selected = _select_historical_backfill_stocks(stocks, event, max_tickers)
+    if not selected:
+        return {
+            "statusCode": 200,
+            "body": {
+                "mode": "historical_backfill",
+                "status": "complete",
+                "processed_count": 0,
+                "message": "No tickers need historical backfill",
+            },
+        }
+
+    archived = 0
+    restored = 0
+    fetched = 0
+    failed: list[str] = []
+    no_data: list[str] = []
+    collected_tickers: set[str] = set()
+    inserted_records = 0
+    duplicate_records = 0
+    failed_records = 0
+
+    for stock in selected:
+        if _should_stop_for_time(context):
+            break
+        ticker = stock["ticker"]
+        records = _load_history_archive(ticker)
+        restored_from_archive = bool(records)
+        if records:
+            restored += 1
+        else:
+            records = _fetch_historical_records(ticker, stock)
+            if records:
+                fetched += 1
+        if not records:
+            failed.append(ticker)
+            no_data.append(ticker)
+            continue
+        stored = _store_records(records)
+        inserted_records += stored.inserted_records
+        duplicate_records += stored.duplicate_records
+        failed_records += stored.failed_records
+        if stored.inserted_records > 0 or stored.duplicate_records > 0:
+            collected_tickers.add(ticker)
+            if not restored_from_archive:
+                archived += 1
+        else:
+            failed.append(ticker)
+
+    summary = _build_collection_summary(
+        active_ticker_count=len(stocks),
+        selected_ticker_count=len(selected),
+        records_collected=inserted_records,
+        duplicate_records=duplicate_records,
+        failed_tickers=failed,
+        no_data_tickers=no_data,
+        recovered_tickers=sorted(collected_tickers),
+    )
+    summary["mode"] = "historical_backfill"
+    summary["s3_archives_written"] = archived
+    summary["s3_archives_restored"] = restored
+    summary["provider_fetches"] = fetched
+    summary["failed_record_count"] = failed_records
+    _record_collection_summary(summary)
+    _record_failed_ticker_state(summary)
+    _emit_metric("historical_backfill_archives_written", archived)
+    _emit_metric("historical_backfill_archives_restored", restored)
+    _emit_metric("historical_backfill_provider_fetches", fetched)
+    _emit_collection_summary_metrics(summary)
+    if collected_tickers:
+        movement_signal_count = _compute_and_store_movement_signals(collected_tickers)
+        _emit_metric("market_movement_signals_collected", movement_signal_count)
+
+    should_continue = bool(event.get("continue_backfill", False))
+    invocation_count = int(event.get("invocation_count", 0))
+    continue_queued = False
+    if (
+        should_continue
+        and invocation_count < HISTORICAL_BACKFILL_MAX_CHAINED_INVOCATIONS
+        and _has_more_historical_backfill_work(stocks, selected)
+    ):
+        continue_queued = _invoke_next_historical_backfill(event, invocation_count + 1)
+
+    return {
+        "statusCode": 200,
+        "body": {
+            "mode": "historical_backfill",
+            "processed_tickers": [stock["ticker"] for stock in selected],
+            "records_inserted": inserted_records,
+            "duplicate_records": duplicate_records,
+            "s3_archives_written": archived,
+            "s3_archives_restored": restored,
+            "provider_fetches": fetched,
+            "failed_tickers": failed,
+            "continue_queued": continue_queued,
+        },
+    }
+
+
+def _select_historical_backfill_stocks(
+    stocks: list[dict[str, Any]], event: dict[str, Any], max_tickers: int
+) -> list[dict[str, Any]]:
+    requested = {ticker.upper() for ticker in event.get("tickers", [])}
+    if requested:
+        stocks = [stock for stock in stocks if stock["ticker"] in requested]
+    due = [
+        stock
+        for stock in stocks
+        if _needs_historical_backfill(stock)
+    ]
+    due.sort(
+        key=lambda stock: (
+            stock.get("latest_stock_data_date") is not None,
+            stock.get("latest_stock_collection_failure_count", 0) or 0,
+            stock["ticker"],
+        )
+    )
+    return due[:max_tickers]
+
+
+def _needs_historical_backfill(stock: dict[str, Any]) -> bool:
+    if not stock.get("latest_stock_data_date"):
+        return True
+    row_count = stock.get("stock_history_row_count")
+    return row_count is not None and int(row_count or 0) < 20
+
+
+def _has_more_historical_backfill_work(
+    stocks: list[dict[str, Any]], processed: list[dict[str, Any]]
+) -> bool:
+    processed_tickers = {stock["ticker"] for stock in processed}
+    return any(
+        stock["ticker"] not in processed_tickers
+        and _needs_historical_backfill(stock)
+        for stock in stocks
+    )
+
+
 def _remaining_seconds(context: Any) -> float | None:
     remaining = getattr(context, "get_remaining_time_in_millis", None)
     if not callable(remaining):
@@ -289,6 +446,138 @@ def _should_stop_for_time(context: Any) -> bool:
         remaining is not None
         and remaining <= STOCK_COLLECTOR_MIN_REMAINING_SECONDS
     )
+
+
+def _history_archive_key(ticker: str) -> str:
+    safe_ticker = ticker.upper().replace("/", "-")
+    return f"{STOCK_HISTORY_PREFIX}/{safe_ticker}.json"
+
+
+def _load_history_archive(ticker: str) -> list[dict[str, Any]] | None:
+    if not STOCK_HISTORY_BUCKET:
+        return None
+    try:
+        response = boto3.client("s3").get_object(
+            Bucket=STOCK_HISTORY_BUCKET,
+            Key=_history_archive_key(ticker),
+        )
+        payload = json.loads(response["Body"].read().decode("utf-8"))
+        records = payload.get("records", [])
+        if records:
+            logger.info(
+                "stock_history_archive_restored",
+                ticker=ticker,
+                record_count=len(records),
+            )
+            return records
+    except Exception as exc:
+        error_code = getattr(exc, "response", {}).get("Error", {}).get("Code")
+        if error_code not in {"NoSuchKey", "404", "NotFound"}:
+            logger.warning(
+                "stock_history_archive_load_failed",
+                ticker=ticker,
+                error=str(exc),
+            )
+    return None
+
+
+def _put_history_archive(ticker: str, records: list[dict[str, Any]]) -> None:
+    if not STOCK_HISTORY_BUCKET or not records:
+        return
+    body = json.dumps(
+        {
+            "ticker": ticker,
+            "archived_at": datetime.now(timezone.utc).isoformat(),
+            "record_count": len(records),
+            "records": [_jsonable_record(record) for record in records],
+        },
+        default=str,
+    ).encode("utf-8")
+    boto3.client("s3").put_object(
+        Bucket=STOCK_HISTORY_BUCKET,
+        Key=_history_archive_key(ticker),
+        Body=body,
+        ContentType="application/json",
+        CacheControl="private, max-age=31536000, immutable",
+    )
+    logger.info(
+        "stock_history_archive_written",
+        ticker=ticker,
+        record_count=len(records),
+    )
+
+
+def _merge_history_archive(ticker: str, records: list[dict[str, Any]]) -> None:
+    if not records:
+        return
+    existing_records = _load_history_archive(ticker) or []
+    by_date = {
+        str(record.get("trading_date"))[:10]: record for record in existing_records
+    }
+    for record in records:
+        by_date[str(record.get("trading_date"))[:10]] = record
+    merged = [
+        by_date[key]
+        for key in sorted(key for key in by_date if key and key != "None")
+    ]
+    _put_history_archive(ticker, merged)
+
+
+def _jsonable_record(record: dict[str, Any]) -> dict[str, Any]:
+    output: dict[str, Any] = {}
+    for key, value in record.items():
+        if isinstance(value, Decimal):
+            output[key] = str(value)
+        elif isinstance(value, (date, datetime)):
+            output[key] = value.isoformat()
+        else:
+            output[key] = value
+    return output
+
+
+def _fetch_historical_records(
+    ticker: str, stock_metadata: dict[str, Any] | None = None
+) -> list[dict[str, Any]] | None:
+    data = _fetch_yfinance_with_retry([ticker], period=INITIAL_HISTORY_PERIOD)
+    if data is not None:
+        extract = _extract_ticker_data_result(
+            data,
+            ticker,
+            period=INITIAL_HISTORY_PERIOD,
+            stock_metadata=stock_metadata,
+        )
+        if extract.records:
+            return extract.records
+    records = _fetch_nasdaq_with_retry(ticker, stock_metadata=stock_metadata)
+    if records:
+        return records
+    return _fetch_stooq_with_retry(ticker, stock_metadata=stock_metadata)
+
+
+def _invoke_next_historical_backfill(
+    event: dict[str, Any], invocation_count: int
+) -> bool:
+    function_name = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "")
+    if not function_name:
+        logger.warning("historical_backfill_continue_unavailable_no_function_name")
+        return False
+    payload = {
+        **event,
+        "mode": "historical_backfill",
+        "continue_backfill": True,
+        "invocation_count": invocation_count,
+    }
+    boto3.client("lambda").invoke(
+        FunctionName=function_name,
+        InvocationType="Event",
+        Payload=json.dumps(payload).encode("utf-8"),
+    )
+    logger.info(
+        "historical_backfill_continue_invoked",
+        invocation_count=invocation_count,
+        max_tickers=payload.get("max_tickers"),
+    )
+    return True
 
 
 def _select_due_stocks(stocks: list[dict[str, Any]], event: dict[str, Any]) -> list[dict[str, Any]]:
@@ -915,6 +1204,7 @@ def _store_records(records: list[dict]) -> StoreResult:
     if not records:
         return result
 
+    archive_records_by_ticker: dict[str, list[dict[str, Any]]] = {}
     for record in records:
         try:
             record["collected_at"] = datetime.utcnow().isoformat()
@@ -927,6 +1217,7 @@ def _store_records(records: list[dict]) -> StoreResult:
                     ticker=record["ticker"],
                     trading_date=str(record["trading_date"]),
                 )
+            archive_records_by_ticker.setdefault(record["ticker"], []).append(record)
         except Exception as e:
             logger.warning(
                 "record_insert_failed",
@@ -934,6 +1225,16 @@ def _store_records(records: list[dict]) -> StoreResult:
                 error=str(e),
             )
             result.failed_records += 1
+
+    for ticker, ticker_records in archive_records_by_ticker.items():
+        try:
+            _merge_history_archive(ticker, ticker_records)
+        except Exception as exc:
+            logger.warning(
+                "stock_history_archive_merge_failed",
+                ticker=ticker,
+                error=str(exc),
+            )
 
     return result
 
