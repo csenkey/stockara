@@ -84,64 +84,191 @@ POSITIVE_KEYWORDS = (
 
 def run_phase1_pipeline(event: dict | None = None) -> dict[str, Any]:
     """Run the daily top-picks pipeline and publish static artifacts."""
+    event = event or {}
     run_date = date.today()
     DatabasePool.initialize()
     try:
-        stocks = store.active_stock_metadata()
-        if not stocks:
-            logger.warning("phase1_no_active_stocks")
-            return {"statusCode": 200, "body": "No active stocks configured"}
-
-        freshness = evaluate_data_freshness(stocks, run_date)
-        _emit_metric("eligible_tickers", freshness["eligible_ticker_count"])
-        _emit_metric("excluded_tickers", freshness["excluded_ticker_count"])
-        if freshness["active_ticker_count"]:
-            _emit_metric(
-                "eligible_ticker_coverage_percent",
-                freshness["eligible_ticker_count"] / freshness["active_ticker_count"] * 100,
-            )
-
-        eligible_stocks = freshness["eligible_stocks"]
-        if not eligible_stocks:
-            logger.warning(
-                "phase1_publication_suppressed_no_eligible_tickers",
-                active_ticker_count=freshness["active_ticker_count"],
-                excluded_ticker_count=freshness["excluded_ticker_count"],
-            )
-            _emit_metric("publication_suppressed", 1)
-            return {
-                "statusCode": 200,
-                "body": "Publication suppressed: no eligible tickers passed data freshness gates",
-            }
-
-        scores = score_candidates(eligible_stocks, run_date)
-        shortlist = select_shortlist(scores)
-        analyses = analyze_shortlist(shortlist, eligible_stocks, run_date)
-        payload = build_publication_payload(
-            analyses,
-            scores,
-            eligible_stocks,
-            run_date,
-            data_quality=publication_data_quality(freshness),
-            upcoming_earnings=upcoming_earnings_summary(run_date),
-            upcoming_dividends=upcoming_dividends_summary(run_date),
-        )
-        publish_payload(payload, run_date)
-
-        _emit_metric("candidates_scored", len(scores))
-        _emit_metric("ai_candidates_analyzed", len(analyses))
-        _emit_metric("top_picks_published", len(payload["top_picks"]))
-        _emit_metric("sell_alerts_published", len(payload["sell_alerts"]))
-
-        return {
-            "statusCode": 200,
-            "body": (
-                f"Published {len(payload['top_picks'])} top picks and "
-                f"{len(payload['sell_alerts'])} sell alerts"
-            ),
-        }
+        mode = str(event.get("mode", "full"))
+        if mode == "score":
+            return _run_score_phase(run_date)
+        if mode == "analyze_batch":
+            return _run_analyze_batch_phase(event, run_date)
+        if mode == "publish":
+            return _run_publish_phase(run_date)
+        if mode != "full":
+            return {"statusCode": 400, "body": f"Unsupported Phase 1 mode: {mode}"}
+        return _run_full_phase(run_date)
     finally:
         DatabasePool.close()
+
+
+def _run_full_phase(run_date: date) -> dict[str, Any]:
+    context = _eligible_context(run_date)
+    if context.get("response"):
+        return context["response"]
+
+    eligible_stocks = context["eligible_stocks"]
+    freshness = context["freshness"]
+    scores = score_candidates(eligible_stocks, run_date)
+    shortlist = select_shortlist(scores)
+    analyses = analyze_shortlist(shortlist, eligible_stocks, run_date)
+    payload = build_publication_payload(
+        analyses,
+        scores,
+        eligible_stocks,
+        run_date,
+        data_quality=publication_data_quality(freshness),
+        upcoming_earnings=upcoming_earnings_summary(run_date),
+        upcoming_dividends=upcoming_dividends_summary(run_date),
+    )
+    publish_payload(payload, run_date)
+
+    _emit_metric("candidates_scored", len(scores))
+    _emit_metric("ai_candidates_analyzed", len(analyses))
+    _emit_metric("top_picks_published", len(payload["top_picks"]))
+    _emit_metric("sell_alerts_published", len(payload["sell_alerts"]))
+
+    return {
+        "statusCode": 200,
+        "body": (
+            f"Published {len(payload['top_picks'])} top picks and "
+            f"{len(payload['sell_alerts'])} sell alerts"
+        ),
+    }
+
+
+def _run_score_phase(run_date: date) -> dict[str, Any]:
+    context = _eligible_context(run_date)
+    if context.get("response"):
+        return context["response"]
+
+    scores = score_candidates(context["eligible_stocks"], run_date)
+    shortlist = select_shortlist(scores)
+    _emit_metric("candidates_scored", len(scores))
+    return {
+        "statusCode": 200,
+        "body": {
+            "mode": "score",
+            "candidate_count": len(scores),
+            "shortlist_count": len(shortlist),
+            "shortlisted_tickers": [score["ticker"] for score in shortlist],
+        },
+    }
+
+
+def _run_analyze_batch_phase(event: dict[str, Any], run_date: date) -> dict[str, Any]:
+    batch_index = int(event.get("batch_index", 0))
+    batch_size = int(event.get("batch_size", 5))
+    if batch_index < 0 or batch_size < 1:
+        return {"statusCode": 400, "body": "batch_index must be >= 0 and batch_size must be >= 1"}
+
+    scores = store.candidate_scores_for_date(run_date)
+    if not scores:
+        return {"statusCode": 200, "body": "No candidate scores available for analysis"}
+
+    shortlist = select_shortlist(scores)
+    start = batch_index * batch_size
+    batch = shortlist[start : start + batch_size]
+    if not batch:
+        return {
+            "statusCode": 200,
+            "body": {
+                "mode": "analyze_batch",
+                "batch_index": batch_index,
+                "batch_size": batch_size,
+                "analyzed_count": 0,
+                "shortlist_count": len(shortlist),
+            },
+        }
+
+    stocks = store.active_stock_metadata()
+    if not stocks:
+        logger.warning("phase1_no_active_stocks")
+        return {"statusCode": 200, "body": "No active stocks configured"}
+
+    analyses = analyze_shortlist(batch, stocks, run_date)
+    _emit_metric("ai_candidates_analyzed", len(analyses))
+    return {
+        "statusCode": 200,
+        "body": {
+            "mode": "analyze_batch",
+            "batch_index": batch_index,
+            "batch_size": batch_size,
+            "analyzed_count": len(analyses),
+            "shortlist_count": len(shortlist),
+            "analyzed_tickers": [analysis["ticker"] for analysis in analyses],
+        },
+    }
+
+
+def _run_publish_phase(run_date: date) -> dict[str, Any]:
+    context = _eligible_context(run_date)
+    if context.get("response"):
+        return context["response"]
+
+    scores = store.candidate_scores_for_date(run_date)
+    analyses = store.candidate_analysis_for_date(run_date)
+    if not analyses:
+        logger.warning("phase1_publication_suppressed_no_candidate_analyses")
+        _emit_metric("publication_suppressed", 1)
+        return {
+            "statusCode": 200,
+            "body": "Publication suppressed: no candidate analyses available",
+        }
+
+    freshness = context["freshness"]
+    payload = build_publication_payload(
+        analyses,
+        scores,
+        context["eligible_stocks"],
+        run_date,
+        data_quality=publication_data_quality(freshness),
+        upcoming_earnings=upcoming_earnings_summary(run_date),
+        upcoming_dividends=upcoming_dividends_summary(run_date),
+    )
+    publish_payload(payload, run_date)
+    _emit_metric("top_picks_published", len(payload["top_picks"]))
+    _emit_metric("sell_alerts_published", len(payload["sell_alerts"]))
+
+    return {
+        "statusCode": 200,
+        "body": (
+            f"Published {len(payload['top_picks'])} top picks and "
+            f"{len(payload['sell_alerts'])} sell alerts"
+        ),
+    }
+
+
+def _eligible_context(run_date: date) -> dict[str, Any]:
+    stocks = store.active_stock_metadata()
+    if not stocks:
+        logger.warning("phase1_no_active_stocks")
+        return {"response": {"statusCode": 200, "body": "No active stocks configured"}}
+
+    freshness = evaluate_data_freshness(stocks, run_date)
+    _emit_metric("eligible_tickers", freshness["eligible_ticker_count"])
+    _emit_metric("excluded_tickers", freshness["excluded_ticker_count"])
+    if freshness["active_ticker_count"]:
+        _emit_metric(
+            "eligible_ticker_coverage_percent",
+            freshness["eligible_ticker_count"] / freshness["active_ticker_count"] * 100,
+        )
+
+    eligible_stocks = freshness["eligible_stocks"]
+    if not eligible_stocks:
+        logger.warning(
+            "phase1_publication_suppressed_no_eligible_tickers",
+            active_ticker_count=freshness["active_ticker_count"],
+            excluded_ticker_count=freshness["excluded_ticker_count"],
+        )
+        _emit_metric("publication_suppressed", 1)
+        return {
+            "response": {
+                "statusCode": 200,
+                "body": "Publication suppressed: no eligible tickers passed data freshness gates",
+            },
+        }
+    return {"stocks": stocks, "freshness": freshness, "eligible_stocks": eligible_stocks}
 
 
 def score_candidates(stocks: list[dict[str, Any]], run_date: date) -> list[dict[str, Any]]:

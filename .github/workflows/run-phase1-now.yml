@@ -27,6 +27,14 @@ on:
         required: true
         default: true
         type: boolean
+      analysis_batch_size:
+        description: "Number of shortlisted candidates to analyze per analyzer invocation"
+        required: true
+        default: "5"
+      analysis_batch_count:
+        description: "Number of analyzer batch invocations to run"
+        required: true
+        default: "10"
 
 concurrency:
   group: run-phase1-now-${{ inputs.deployment_stage }}
@@ -48,7 +56,7 @@ jobs:
       - name: Validate inputs
         shell: bash
         run: |
-          for value in "${{ inputs.stock_max_tickers }}" "${{ inputs.earnings_max_tickers }}" "${{ inputs.dividend_max_tickers }}"; do
+          for value in "${{ inputs.stock_max_tickers }}" "${{ inputs.earnings_max_tickers }}" "${{ inputs.dividend_max_tickers }}" "${{ inputs.analysis_batch_size }}" "${{ inputs.analysis_batch_count }}"; do
             if ! [[ "$value" =~ ^[0-9]+$ ]] || [[ "$value" -lt 1 ]]; then
               echo "Ticker limits must be positive integers."
               exit 1
@@ -148,14 +156,52 @@ jobs:
           cat dividend-response.json
           python -m json.tool dividend-response.json
 
-      - name: Invoke analyzer and publisher
+      - name: Score Phase 1 candidates
         if: ${{ inputs.publish_after_collection }}
         shell: bash
         run: |
           set -euo pipefail
           aws lambda invoke \
             --function-name "$PUBLISHER_FN" \
-            --payload '{}' \
+            --payload '{"mode":"score"}' \
+            --log-type Tail \
+            --cli-read-timeout 900 \
+            --cli-binary-format raw-in-base64-out \
+            score-response.json > score-invoke.json
+          python -c "import base64, json; meta=json.load(open('score-invoke.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
+          python -c "import json, sys; meta=json.load(open('score-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
+          cat score-response.json
+          python -m json.tool score-response.json
+
+      - name: Analyze Phase 1 candidate batches
+        if: ${{ inputs.publish_after_collection }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for batch_index in $(seq 0 $((${{ inputs.analysis_batch_count }} - 1))); do
+            echo "Analyzing batch ${batch_index}"
+            payload="$(printf '{"mode":"analyze_batch","batch_index":%s,"batch_size":%s}' "$batch_index" "${{ inputs.analysis_batch_size }}")"
+            aws lambda invoke \
+              --function-name "$PUBLISHER_FN" \
+              --payload "$payload" \
+              --log-type Tail \
+              --cli-read-timeout 900 \
+              --cli-binary-format raw-in-base64-out \
+              "analysis-response-${batch_index}.json" > "analysis-invoke-${batch_index}.json"
+            python -c "import base64, json; meta=json.load(open('analysis-invoke-${batch_index}.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
+            python -c "import json, sys; meta=json.load(open('analysis-invoke-${batch_index}.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
+            cat "analysis-response-${batch_index}.json"
+            python -m json.tool "analysis-response-${batch_index}.json"
+          done
+
+      - name: Publish Phase 1 artifacts
+        if: ${{ inputs.publish_after_collection }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws lambda invoke \
+            --function-name "$PUBLISHER_FN" \
+            --payload '{"mode":"publish"}' \
             --log-type Tail \
             --cli-read-timeout 900 \
             --cli-binary-format raw-in-base64-out \

@@ -794,6 +794,108 @@ def test_run_phase1_pipeline_scores_only_eligible_tickers_when_coverage_is_parti
     assert payload["data_quality"]["coverage_status"] == "partial"
 
 
+def test_run_phase1_score_mode_scores_without_analyzing_or_publishing():
+    stock = {"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology"}
+    scores = [_candidate_score("NVDA", opportunity_score=80, negative_score=5)]
+
+    with (
+        patch("src.analysis.phase1_pipeline.DatabasePool"),
+        patch(
+            "src.analysis.phase1_pipeline._eligible_context",
+            return_value={"eligible_stocks": [stock], "freshness": {}},
+        ),
+        patch("src.analysis.phase1_pipeline.score_candidates", return_value=scores),
+        patch("src.analysis.phase1_pipeline.select_shortlist", return_value=scores),
+        patch("src.analysis.phase1_pipeline.analyze_shortlist") as analyze_shortlist,
+        patch("src.analysis.phase1_pipeline.publish_payload") as publish_payload,
+        patch("src.analysis.phase1_pipeline._emit_metric"),
+        patch.object(phase1_pipeline, "date", _fixed_date(date(2026, 6, 17))),
+    ):
+        result = run_phase1_pipeline({"mode": "score"})
+
+    assert result["statusCode"] == 200
+    assert result["body"]["candidate_count"] == 1
+    assert result["body"]["shortlisted_tickers"] == ["NVDA"]
+    analyze_shortlist.assert_not_called()
+    publish_payload.assert_not_called()
+
+
+def test_run_phase1_analyze_batch_mode_slices_shortlist():
+    stocks = [
+        {"ticker": "AAPL", "company_name": "Apple", "sector": "Technology"},
+        {"ticker": "MSFT", "company_name": "Microsoft", "sector": "Technology"},
+        {"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology"},
+    ]
+    scores = [
+        _candidate_score("AAPL", opportunity_score=80, negative_score=0),
+        _candidate_score("MSFT", opportunity_score=70, negative_score=0),
+        _candidate_score("NVDA", opportunity_score=60, negative_score=0),
+    ]
+    analyses = [{"ticker": "NVDA"}]
+
+    with (
+        patch("src.analysis.phase1_pipeline.DatabasePool"),
+        patch(
+            "src.analysis.phase1_pipeline.store.candidate_scores_for_date",
+            return_value=scores,
+        ),
+        patch("src.analysis.phase1_pipeline.select_shortlist", return_value=scores),
+        patch("src.analysis.phase1_pipeline.store.active_stock_metadata", return_value=stocks),
+        patch("src.analysis.phase1_pipeline.analyze_shortlist", return_value=analyses) as analyze,
+        patch("src.analysis.phase1_pipeline._emit_metric"),
+        patch.object(phase1_pipeline, "date", _fixed_date(date(2026, 6, 17))),
+    ):
+        result = run_phase1_pipeline(
+            {"mode": "analyze_batch", "batch_index": 1, "batch_size": 2}
+        )
+
+    assert result["statusCode"] == 200
+    assert result["body"]["analyzed_count"] == 1
+    assert result["body"]["analyzed_tickers"] == ["NVDA"]
+    assert analyze.call_args.args[0] == [scores[2]]
+
+
+def test_run_phase1_publish_mode_uses_stored_scores_and_analyses():
+    stocks = [{"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology"}]
+    scores = [_candidate_score("NVDA", opportunity_score=80, negative_score=5)]
+    analyses = [{"ticker": "NVDA", "recommendation": "BUY"}]
+    payload = {"top_picks": [{"ticker": "NVDA"}], "sell_alerts": []}
+
+    with (
+        patch("src.analysis.phase1_pipeline.DatabasePool"),
+        patch(
+            "src.analysis.phase1_pipeline._eligible_context",
+            return_value={
+                "eligible_stocks": stocks,
+                "freshness": {"coverage_status": "complete"},
+            },
+        ),
+        patch(
+            "src.analysis.phase1_pipeline.store.candidate_scores_for_date",
+            return_value=scores,
+        ),
+        patch(
+            "src.analysis.phase1_pipeline.store.candidate_analysis_for_date",
+            return_value=analyses,
+        ),
+        patch("src.analysis.phase1_pipeline.publication_data_quality", return_value={}),
+        patch("src.analysis.phase1_pipeline.upcoming_earnings_summary", return_value=[]),
+        patch("src.analysis.phase1_pipeline.upcoming_dividends_summary", return_value=[]),
+        patch(
+            "src.analysis.phase1_pipeline.build_publication_payload",
+            return_value=payload,
+        ) as build_payload,
+        patch("src.analysis.phase1_pipeline.publish_payload") as publish_payload,
+        patch("src.analysis.phase1_pipeline._emit_metric"),
+        patch.object(phase1_pipeline, "date", _fixed_date(date(2026, 6, 17))),
+    ):
+        result = run_phase1_pipeline({"mode": "publish"})
+
+    assert result["statusCode"] == 200
+    build_payload.assert_called_once()
+    publish_payload.assert_called_once_with(payload, date(2026, 6, 17))
+
+
 def _stock_rows(
     ticker: str, start_date: date, count: int, include_provenance: bool = True
 ) -> list[dict]:
