@@ -174,6 +174,7 @@ class ApiStack(Stack):
             environment={
                 **common_env,
                 **openai_env,
+                "OPENAI_NEWS_MODEL": "gpt-5.4-mini",
                 "POWERTOOLS_SERVICE_NAME": "news-collector",
             },
             description="Collects and summarizes news for Phase 1 signals",
@@ -238,6 +239,8 @@ class ApiStack(Stack):
             environment={
                 **common_env,
                 **openai_env,
+                "OPENAI_ANALYSIS_MODEL": "gpt-5.4-mini",
+                "OPENAI_REVIEW_MODEL": "gpt-5.4",
                 "POWERTOOLS_SERVICE_NAME": "phase1-publisher",
             },
             description="Scores candidates, analyzes shortlist, and publishes static top picks",

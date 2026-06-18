@@ -18,7 +18,7 @@ The project also includes a public demo-trading feature: 100 superhero-named sim
 - Frontend: React 18, TypeScript, Vite, Tailwind CSS, Recharts, lucide-react
 - Database: DynamoDB single-table design provisioned by CDK
 - Infrastructure: AWS CDK in Python, Lambda, API Gateway, EventBridge, Cognito, KMS, S3, CloudFront, CloudWatch
-- External services: yfinance, Alpha Vantage, NewsAPI, Finnhub, OpenAI GPT-4o-mini
+- External services: yfinance, Alpha Vantage, NewsAPI, Finnhub, OpenAI mini analysis/news models plus stronger review model
 - Testing: pytest plus Hypothesis-style property tests for trading invariants
 
 ## Repository Map
@@ -87,6 +87,7 @@ Prefer targeted tests while iterating, then run the relevant full suite before h
 - Stocks must have exactly one sector and one company size: `blue_chip`, `mid_cap`, or `startup`.
 - AI analysis considers at least 30 calendar days of stock data and 7 calendar days of news.
 - AI recommendations use only `BUY`, `HOLD`, or `SELL`; risk uses only `LOW`, `MEDIUM`, or `HIGH`.
+- Public BUY/SELL recommendations should pass the stronger AI review gate; review failures or rejections suppress publication.
 - If current-day analysis is missing, suggestions use the most recent analysis and expose the analysis date.
 - User portfolios must be encrypted as a single stored string and decrypted only in memory.
 - Portfolio writes validate ticker existence, positive integer quantity, and positive buying price before replacing stored data.

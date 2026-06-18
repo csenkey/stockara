@@ -2,6 +2,7 @@
 
 from datetime import date, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from src.analysis import phase1_pipeline
@@ -374,6 +375,120 @@ def test_analyze_shortlist_falls_back_when_openai_client_init_fails():
     put_analysis.assert_called_once()
 
 
+def test_analyze_shortlist_reviews_actionable_ai_recommendations():
+    stock = {"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology"}
+    score = _candidate_score("NVDA", opportunity_score=90, negative_score=5)
+    client = _SequencedOpenAIClient(
+        [
+            {
+                "recommendation": "BUY",
+                "risk_level": "MEDIUM",
+                "confidence_score": 82,
+                "catalyst": "Volume breakout",
+                "expected_timeframe": "1-30 days",
+                "reasoning": "Evidence supports a near-term catalyst.",
+                "invalidation_criteria": "Breakout fails.",
+            },
+            {
+                "approved": True,
+                "rationale": "The thesis is specific and supported.",
+                "concerns": [],
+                "confidence_adjustment": 3,
+            },
+        ]
+    )
+
+    with (
+        patch("src.analysis.phase1_pipeline._build_openai_client", return_value=client),
+        patch("src.analysis.phase1_pipeline.store.put_candidate_analysis") as put_analysis,
+        patch("src.analysis.phase1_pipeline._emit_metric"),
+    ):
+        analyses = analyze_shortlist([score], [stock], date(2026, 6, 17))
+
+    assert client.models == ["gpt-5.4-mini", "gpt-5.4"]
+    assert analyses[0]["analysis_method"] == "ai"
+    assert analyses[0]["analysis_model"] == "gpt-5.4-mini"
+    assert analyses[0]["publication_allowed"] is True
+    assert analyses[0]["confidence_score"] == 85
+    assert analyses[0]["ai_review"]["status"] == "approved"
+    assert analyses[0]["ai_review"]["model"] == "gpt-5.4"
+    put_analysis.assert_called_once()
+
+
+def test_review_rejection_suppresses_public_publication():
+    stocks = [{"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology"}]
+    scores = [_candidate_score("NVDA", opportunity_score=90, negative_score=5)]
+    analyses = [
+        {
+            "ticker": "NVDA",
+            "analysis_method": "ai",
+            "analysis_model": "gpt-5.4-mini",
+            "publication_allowed": False,
+            "recommendation": "BUY",
+            "risk_level": "MEDIUM",
+            "confidence_score": 84,
+            "catalyst": "Unusual volume",
+            "expected_timeframe": "1-30 days",
+            "reasoning": "The setup looks interesting.",
+            "invalidation_criteria": "Momentum fades.",
+            "opportunity_score": 90,
+            "negative_score": 5,
+            "signals": [],
+            "ai_review": {
+                "status": "rejected",
+                "model": "gpt-5.4",
+                "approved": False,
+                "rationale": "Evidence is too weak.",
+                "concerns": ["weak evidence"],
+            },
+        }
+    ]
+
+    with (
+        patch("src.analysis.phase1_pipeline.store.sell_alert_tickers", return_value=[]),
+        patch("src.analysis.phase1_pipeline._emit_metric") as emit_metric,
+    ):
+        payload = build_publication_payload(analyses, scores, stocks, date(2026, 6, 17))
+
+    assert payload["top_picks"] == []
+    assert payload["review_policy"]["reviewed_count"] == 1
+    assert payload["review_policy"]["rejected_count"] == 1
+    assert payload["review_policy"]["review_suppressed_count"] == 1
+    assert "withheld by the review model" in payload["data_warnings"][-1]
+    emit_metric.assert_called_once_with("review_publication_suppressed", 1)
+
+
+def test_review_failure_suppresses_actionable_ai_recommendation():
+    stock = {"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology"}
+    score = _candidate_score("NVDA", opportunity_score=90, negative_score=5)
+    client = _SequencedOpenAIClient(
+        [
+            {
+                "recommendation": "BUY",
+                "risk_level": "MEDIUM",
+                "confidence_score": 82,
+                "catalyst": "Volume breakout",
+                "expected_timeframe": "1-30 days",
+                "reasoning": "Evidence supports a near-term catalyst.",
+                "invalidation_criteria": "Breakout fails.",
+            },
+        ],
+        fail_after=1,
+    )
+
+    with (
+        patch("src.analysis.phase1_pipeline._build_openai_client", return_value=client),
+        patch("src.analysis.phase1_pipeline.store.put_candidate_analysis"),
+        patch("src.analysis.phase1_pipeline._emit_metric"),
+    ):
+        analyses = analyze_shortlist([score], [stock], date(2026, 6, 17))
+
+    assert analyses[0]["recommendation"] == "BUY"
+    assert analyses[0]["publication_allowed"] is False
+    assert analyses[0]["ai_review"]["status"] == "error"
+    assert analyses[0]["ai_review"]["concerns"] == ["review_model_error"]
+
+
 def test_build_publication_payload_suppresses_fallback_buy_and_sell_by_default():
     stocks = [
         {"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology"},
@@ -723,6 +838,33 @@ class _FailingOpenAIClient:
             @staticmethod
             def create(**_kwargs):
                 raise RuntimeError("OpenAI unavailable")
+
+
+class _SequencedOpenAIClient:
+    def __init__(self, responses: list[dict], fail_after: int | None = None):
+        self.responses = responses
+        self.fail_after = fail_after
+        self.calls = 0
+        self.models: list[str] = []
+        self.chat = SimpleNamespace(
+            completions=SimpleNamespace(create=self._create),
+        )
+
+    def _create(self, **kwargs):
+        if self.fail_after is not None and self.calls >= self.fail_after:
+            raise RuntimeError("review unavailable")
+        self.models.append(kwargs["model"])
+        payload = self.responses[self.calls]
+        self.calls += 1
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content=phase1_pipeline.json.dumps(payload),
+                    )
+                )
+            ]
+        )
 
 
 def _fixed_date(today: date):

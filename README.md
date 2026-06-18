@@ -7,7 +7,8 @@ Stockara Phase 1 is a low-cost, serverless catalyst scanner. It collects market/
 - **Daily top picks**: 5-10 promising near-term opportunities.
 - **Urgent sell alerts**: high-severity negative signals from a configurable watchlist.
 - **Cheap first-pass scanning**: price/volume, news, earnings, dividends, options, analyst, insider, institutional, social/news momentum, and sector-relative signals.
-- **Bounded AI usage**: OpenAI runs only on the shortlisted candidates.
+- **Bounded AI usage**: OpenAI runs only on the shortlisted candidates, with a
+  stronger review model gating public BUY/SELL publication.
 - **Static read model**: public reads use S3/CloudFront JSON artifacts, not live database queries.
 
 ## Architecture
@@ -32,7 +33,7 @@ Key jobs:
 | Backend | Python 3.12, FastAPI, Pydantic, structlog |
 | Frontend | React 18, TypeScript, Vite, Tailwind CSS |
 | Storage | DynamoDB on-demand, S3, CloudFront |
-| AI | OpenAI GPT-4o-mini with deterministic fallback |
+| AI | OpenAI mini analysis model plus stronger review model with deterministic fallback |
 | Infrastructure | AWS CDK in Python, GitHub Actions |
 | Testing | pytest |
 
@@ -116,6 +117,9 @@ Published artifacts:
 | `STOCKARA_TABLE_NAME` | DynamoDB table name |
 | `STOCKARA_ARTIFACT_BUCKET` | S3 bucket for static frontend and generated JSON artifacts |
 | `OPENAI_API_KEY` | Optional OpenAI key; deterministic fallback is used if absent |
+| `OPENAI_ANALYSIS_MODEL` | Candidate analysis model, default `gpt-5.4-mini` |
+| `OPENAI_REVIEW_MODEL` | Stronger publication review model, default `gpt-5.4` |
+| `OPENAI_NEWS_MODEL` | News summarization model, default `gpt-5.4-mini` |
 | `NEWSAPI_KEY` | Optional NewsAPI key |
 | `FINNHUB_KEY` | Optional Finnhub key |
 | `ALPHA_VANTAGE_API_KEY` | Optional Alpha Vantage fallback key |

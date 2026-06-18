@@ -1,7 +1,7 @@
 """News collection Lambda handler.
 
 Polls NewsAPI and Finnhub for stock-related news articles, deduplicates them,
-generates AI summaries via OpenAI GPT-4o-mini, and stores results in the database.
+generates AI summaries via OpenAI, and stores results in the database.
 
 Triggered by EventBridge every 15 minutes (configurable).
 """
@@ -24,6 +24,7 @@ logger = structlog.get_logger(__name__)
 NEWSAPI_KEY = os.environ.get("NEWSAPI_KEY", "")
 FINNHUB_KEY = os.environ.get("FINNHUB_KEY", "")
 POLL_INTERVAL_MINUTES = int(os.environ.get("NEWS_POLL_INTERVAL_MINUTES", "15"))
+OPENAI_NEWS_MODEL = os.environ.get("OPENAI_NEWS_MODEL", "gpt-5.4-mini")
 
 # CloudWatch metrics client
 cloudwatch = boto3.client("cloudwatch")
@@ -156,7 +157,7 @@ def get_existing_hashes(conn, hashes: list[str]) -> set[str]:
 
 
 def generate_summary(client: OpenAI | None, title: str, content: str) -> dict[str, Any]:
-    """Generate a structured summary using OpenAI GPT-4o-mini.
+    """Generate a structured summary using OpenAI.
 
     Args:
         client: OpenAI client instance.
@@ -184,7 +185,7 @@ def generate_summary(client: OpenAI | None, title: str, content: str) -> dict[st
             raise RuntimeError("OpenAI API key is not configured")
 
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=OPENAI_NEWS_MODEL,
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
             max_tokens=300,

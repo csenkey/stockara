@@ -16,7 +16,11 @@ from src.services.secrets import get_openai_api_key
 
 logger = structlog.get_logger(__name__)
 
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_ANALYSIS_MODEL = os.environ.get(
+    "OPENAI_ANALYSIS_MODEL",
+    os.environ.get("OPENAI_MODEL", "gpt-5.4-mini"),
+)
+OPENAI_REVIEW_MODEL = os.environ.get("OPENAI_REVIEW_MODEL", "gpt-5.4")
 ARTIFACT_BUCKET = os.environ.get("STOCKARA_ARTIFACT_BUCKET", "")
 SHORTLIST_SIZE = int(os.environ.get("PHASE1_SHORTLIST_SIZE", "50"))
 TOP_PICK_COUNT = int(os.environ.get("PHASE1_TOP_PICK_COUNT", "10"))
@@ -344,6 +348,8 @@ def analyze_shortlist(
                 confidence_score=analysis["confidence_score"],
                 publication_allowed=analysis["publication_allowed"],
             )
+        elif _requires_review(analysis):
+            analysis = _review_candidate_analysis(client, stock, analysis)
         store.put_candidate_analysis(analysis)
         analyses.append(analysis)
     return analyses
@@ -405,6 +411,7 @@ def build_publication_payload(
                 "expected_timeframe": row["expected_timeframe"],
                 "rationale": row["reasoning"],
                 "invalidation_criteria": row["invalidation_criteria"],
+                "ai_review": row.get("ai_review"),
                 "supporting_evidence": _evidence(row["signals"]),
                 "source_traceability": [signal["source"] for signal in row["signals"][:5]],
             }
@@ -436,6 +443,7 @@ def build_publication_payload(
                 "confidence_score": row["confidence_score"],
                 "negative_catalyst": row["catalyst"],
                 "rationale": row["reasoning"],
+                "ai_review": row.get("ai_review"),
                 "supporting_evidence": _evidence(row["signals"]),
                 "source_traceability": [signal["source"] for signal in row["signals"][:5]],
             }
@@ -459,11 +467,22 @@ def build_publication_payload(
             "fallback_publication_suppressed",
             fallback_policy["suppressed_fallback_count"],
         )
+    review_policy = _review_policy_summary(analyses)
+    if review_policy["review_suppressed_count"]:
+        data_warnings.append(
+            f"{review_policy['review_suppressed_count']} AI-generated actionable "
+            "recommendation(s) were withheld by the review model."
+        )
+        _emit_metric(
+            "review_publication_suppressed",
+            review_policy["review_suppressed_count"],
+        )
     return {
         "publication_date": run_date.isoformat(),
         "generated_at": datetime.utcnow().isoformat(),
         "publication_scope": "top_opportunities_among_eligible_tickers",
         "fallback_policy": fallback_policy,
+        "review_policy": review_policy,
         "top_picks": top_picks,
         "sell_alerts": sell_alerts,
         "upcoming_earnings": upcoming_earnings or [],
@@ -540,7 +559,7 @@ def _analyze_candidate(
     prompt = _build_prompt(stock, score)
     try:
         response = client.chat.completions.create(
-            model=OPENAI_MODEL,
+            model=OPENAI_ANALYSIS_MODEL,
             messages=[
                 {
                     "role": "system",
@@ -619,6 +638,7 @@ def _normalize_ai_analysis(
         "ticker": stock["ticker"],
         "analysis_date": run_date.isoformat(),
         "analysis_method": "ai",
+        "analysis_model": OPENAI_ANALYSIS_MODEL,
         "publication_allowed": True,
         "recommendation": recommendation,
         "risk_level": risk_level,
@@ -660,6 +680,131 @@ catalyst: short phrase
 expected_timeframe: e.g. 1-7 days, 1-30 days, 1-90 days
 reasoning: 2-3 concise sentences
 invalidation_criteria: concise condition that would invalidate the thesis
+"""
+
+
+def _requires_review(analysis: dict[str, Any]) -> bool:
+    return (
+        analysis.get("analysis_method") == "ai"
+        and analysis.get("recommendation") in {"BUY", "SELL"}
+        and bool(analysis.get("publication_allowed", True))
+    )
+
+
+def _review_candidate_analysis(
+    client: OpenAI | None, stock: dict[str, Any], analysis: dict[str, Any]
+) -> dict[str, Any]:
+    """Use a stronger model to block weak actionable AI recommendations."""
+    if client is None:
+        logger.warning("candidate_ai_review_unavailable", ticker=stock["ticker"])
+        _emit_metric("ai_review_unavailable", 1)
+        return {
+            **analysis,
+            "publication_allowed": False,
+            "ai_review": {
+                "status": "unavailable",
+                "model": OPENAI_REVIEW_MODEL,
+                "approved": False,
+                "rationale": "OpenAI review client was unavailable.",
+                "concerns": ["review_model_unavailable"],
+            },
+        }
+
+    try:
+        response = client.chat.completions.create(
+            model=OPENAI_REVIEW_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a skeptical investment-risk reviewer. "
+                        "Your job is to reject unsupported BUY or SELL stock "
+                        "recommendations. This is not financial advice."
+                    ),
+                },
+                {"role": "user", "content": _build_review_prompt(stock, analysis)},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.1,
+            max_tokens=400,
+        )
+        parsed = json.loads(response.choices[0].message.content or "{}")
+        approved = bool(parsed.get("approved", False))
+        confidence_adjustment = int(parsed.get("confidence_adjustment", 0) or 0)
+        confidence_score = max(
+            0,
+            min(100, int(analysis["confidence_score"]) + confidence_adjustment),
+        )
+        concerns = parsed.get("concerns", [])
+        if not isinstance(concerns, list):
+            concerns = [str(concerns)]
+        updated = {
+            **analysis,
+            "confidence_score": confidence_score,
+            "publication_allowed": approved,
+            "ai_review": {
+                "status": "approved" if approved else "rejected",
+                "model": OPENAI_REVIEW_MODEL,
+                "approved": approved,
+                "rationale": str(parsed.get("rationale", ""))[:750],
+                "concerns": [str(concern)[:250] for concern in concerns[:5]],
+            },
+        }
+        _emit_metric("ai_reviews_completed", 1)
+        if not approved:
+            _emit_metric("ai_reviews_rejected", 1)
+            logger.warning(
+                "candidate_ai_review_rejected",
+                ticker=stock["ticker"],
+                recommendation=analysis["recommendation"],
+                rationale=updated["ai_review"]["rationale"],
+            )
+        return updated
+    except Exception as exc:
+        logger.warning("candidate_ai_review_failed", ticker=stock["ticker"], error=str(exc))
+        _emit_metric("ai_review_failures", 1)
+        return {
+            **analysis,
+            "publication_allowed": False,
+            "ai_review": {
+                "status": "error",
+                "model": OPENAI_REVIEW_MODEL,
+                "approved": False,
+                "rationale": "Review model call failed.",
+                "concerns": ["review_model_error"],
+            },
+        }
+
+
+def _build_review_prompt(stock: dict[str, Any], analysis: dict[str, Any]) -> str:
+    evidence = "\n".join(_evidence(analysis.get("signals", []))[:8])
+    return f"""Review this Stockara recommendation for publication.
+
+Ticker: {stock['ticker']}
+Company: {stock['company_name']}
+Sector: {stock['sector']}
+Recommendation: {analysis['recommendation']}
+Risk level: {analysis['risk_level']}
+Confidence score: {analysis['confidence_score']}
+Opportunity score: {analysis['opportunity_score']}
+Negative score: {analysis['negative_score']}
+Catalyst: {analysis['catalyst']}
+Reasoning: {analysis['reasoning']}
+Invalidation criteria: {analysis['invalidation_criteria']}
+
+Evidence:
+{evidence}
+
+Approve only if the recommendation is well-supported by the evidence, the risk
+is clearly stated, and the thesis is specific enough to be useful. Reject if the
+recommendation is too speculative, stale, contradicted, or insufficiently
+supported.
+
+Return JSON with keys:
+approved: boolean
+rationale: concise explanation
+concerns: list of short strings
+confidence_adjustment: integer from -20 to 10
 """
 
 
@@ -1260,6 +1405,34 @@ def _fallback_policy_summary(analyses: list[dict[str, Any]]) -> dict[str, Any]:
         "fallback_reason_counts": fallback_reason_counts,
         "fallback_tickers": [analysis["ticker"] for analysis in fallback_analyses],
         "suppressed_fallback_tickers": [analysis["ticker"] for analysis in suppressed],
+    }
+
+
+def _review_policy_summary(analyses: list[dict[str, Any]]) -> dict[str, Any]:
+    reviewed = [analysis for analysis in analyses if analysis.get("ai_review")]
+    suppressed = [
+        analysis
+        for analysis in reviewed
+        if analysis.get("recommendation") in {"BUY", "SELL"}
+        and not _is_publication_allowed(analysis)
+    ]
+    status_counts: dict[str, int] = {}
+    for analysis in reviewed:
+        status = str(analysis.get("ai_review", {}).get("status") or "unknown")
+        status_counts[status] = status_counts.get(status, 0) + 1
+
+    return {
+        "analysis_model": OPENAI_ANALYSIS_MODEL,
+        "review_model": OPENAI_REVIEW_MODEL,
+        "reviewed_count": len(reviewed),
+        "approved_count": status_counts.get("approved", 0),
+        "rejected_count": status_counts.get("rejected", 0),
+        "review_error_count": status_counts.get("error", 0),
+        "review_unavailable_count": status_counts.get("unavailable", 0),
+        "review_suppressed_count": len(suppressed),
+        "review_status_counts": status_counts,
+        "reviewed_tickers": [analysis["ticker"] for analysis in reviewed],
+        "review_suppressed_tickers": [analysis["ticker"] for analysis in suppressed],
     }
 
 
