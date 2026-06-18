@@ -858,7 +858,10 @@ def test_run_phase1_analyze_batch_mode_slices_shortlist():
 def test_run_phase1_publish_mode_uses_stored_scores_and_analyses():
     stocks = [{"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology"}]
     scores = [_candidate_score("NVDA", opportunity_score=80, negative_score=5)]
-    analyses = [{"ticker": "NVDA", "recommendation": "BUY"}]
+    analyses = [
+        {"ticker": "NVDA", "recommendation": "BUY"},
+        {"ticker": "AAPL", "recommendation": "BUY"},
+    ]
     payload = {"top_picks": [{"ticker": "NVDA"}], "sell_alerts": []}
 
     with (
@@ -878,6 +881,7 @@ def test_run_phase1_publish_mode_uses_stored_scores_and_analyses():
             "src.analysis.phase1_pipeline.store.candidate_analysis_for_date",
             return_value=analyses,
         ),
+        patch("src.analysis.phase1_pipeline.store.sell_alert_tickers", return_value=[]),
         patch("src.analysis.phase1_pipeline.publication_data_quality", return_value={}),
         patch("src.analysis.phase1_pipeline.upcoming_earnings_summary", return_value=[]),
         patch("src.analysis.phase1_pipeline.upcoming_dividends_summary", return_value=[]),
@@ -893,6 +897,7 @@ def test_run_phase1_publish_mode_uses_stored_scores_and_analyses():
 
     assert result["statusCode"] == 200
     build_payload.assert_called_once()
+    assert build_payload.call_args.args[0] == [{"ticker": "NVDA", "recommendation": "BUY"}]
     publish_payload.assert_called_once_with(payload, date(2026, 6, 17))
 
 

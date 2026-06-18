@@ -208,6 +208,12 @@ def _run_publish_phase(run_date: date) -> dict[str, Any]:
 
     scores = store.candidate_scores_for_date(run_date)
     analyses = store.candidate_analysis_for_date(run_date)
+    shortlist_tickers = {score["ticker"] for score in select_shortlist(scores)}
+    analyses = [
+        analysis
+        for analysis in analyses
+        if analysis.get("ticker") in shortlist_tickers
+    ]
     if not analyses:
         logger.warning("phase1_publication_suppressed_no_candidate_analyses")
         _emit_metric("publication_suppressed", 1)
