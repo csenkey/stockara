@@ -572,8 +572,11 @@ def _analyze_candidate(
                 {"role": "user", "content": prompt},
             ],
             response_format={"type": "json_object"},
-            temperature=0.25,
-            max_tokens=500,
+            **_chat_completion_options(
+                OPENAI_ANALYSIS_MODEL,
+                max_tokens=500,
+                temperature=0.25,
+            ),
         )
         parsed = json.loads(response.choices[0].message.content or "{}")
         return _normalize_ai_analysis(stock, score, parsed, run_date)
@@ -725,8 +728,11 @@ def _review_candidate_analysis(
                 {"role": "user", "content": _build_review_prompt(stock, analysis)},
             ],
             response_format={"type": "json_object"},
-            temperature=0.1,
-            max_tokens=400,
+            **_chat_completion_options(
+                OPENAI_REVIEW_MODEL,
+                max_tokens=400,
+                temperature=0.1,
+            ),
         )
         parsed = json.loads(response.choices[0].message.content or "{}")
         approved = bool(parsed.get("approved", False))
@@ -806,6 +812,14 @@ rationale: concise explanation
 concerns: list of short strings
 confidence_adjustment: integer from -20 to 10
 """
+
+
+def _chat_completion_options(
+    model: str, max_tokens: int, temperature: float
+) -> dict[str, Any]:
+    if model.startswith("gpt-5"):
+        return {"max_completion_tokens": max_tokens}
+    return {"max_tokens": max_tokens, "temperature": temperature}
 
 
 def _price_volume_signals(ticker: str, run_date: date) -> list[dict[str, Any]]:

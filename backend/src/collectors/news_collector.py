@@ -188,8 +188,11 @@ def generate_summary(client: OpenAI | None, title: str, content: str) -> dict[st
             model=OPENAI_NEWS_MODEL,
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
-            max_tokens=300,
-            temperature=0.3,
+            **_chat_completion_options(
+                OPENAI_NEWS_MODEL,
+                max_tokens=300,
+                temperature=0.3,
+            ),
         )
 
         import json
@@ -220,6 +223,14 @@ def generate_summary(client: OpenAI | None, title: str, content: str) -> dict[st
         text = f"{title} {content}".upper()
         tickers = [ticker for ticker in active_tickers if ticker in text]
         return {"summary": title[:500], "tickers": tickers, "sentiment": "neutral"}
+
+
+def _chat_completion_options(
+    model: str, max_tokens: int, temperature: float
+) -> dict[str, Any]:
+    if model.startswith("gpt-5"):
+        return {"max_completion_tokens": max_tokens}
+    return {"max_tokens": max_tokens, "temperature": temperature}
 
 
 def store_article(conn, article: dict[str, Any], summary_data: dict[str, Any], title_source_hash: str) -> None:

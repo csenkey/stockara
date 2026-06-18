@@ -10,6 +10,7 @@ from src.analysis.phase1_pipeline import (
     FALLBACK_CONFIDENCE_CAP,
     _analysis_close_price,
     _analyze_candidate,
+    _chat_completion_options,
     _dividend_signals,
     _event_signals,
     _price_volume_signals,
@@ -373,6 +374,15 @@ def test_analyze_shortlist_falls_back_when_openai_client_init_fails():
     assert analyses[0]["analysis_method"] == "fallback_heuristic"
     assert analyses[0]["fallback_reason"] == "openai_client_unavailable"
     put_analysis.assert_called_once()
+
+
+def test_chat_completion_options_use_gpt5_token_parameter():
+    assert _chat_completion_options(
+        "gpt-5.4-mini", max_tokens=500, temperature=0.25
+    ) == {"max_completion_tokens": 500}
+    assert _chat_completion_options(
+        "gpt-4o-mini", max_tokens=500, temperature=0.25
+    ) == {"max_tokens": 500, "temperature": 0.25}
 
 
 def test_analyze_shortlist_reviews_actionable_ai_recommendations():
