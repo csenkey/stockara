@@ -387,6 +387,7 @@ def test_build_publication_payload_suppresses_fallback_buy_and_sell_by_default()
         {
             "ticker": "NVDA",
             "analysis_method": "fallback_heuristic",
+            "fallback_reason": "openai_client_unavailable",
             "publication_allowed": False,
             "recommendation": "BUY",
             "risk_level": "MEDIUM",
@@ -402,6 +403,7 @@ def test_build_publication_payload_suppresses_fallback_buy_and_sell_by_default()
         {
             "ticker": "TSLA",
             "analysis_method": "fallback_heuristic",
+            "fallback_reason": "openai_error",
             "publication_allowed": False,
             "recommendation": "SELL",
             "risk_level": "HIGH",
@@ -426,6 +428,10 @@ def test_build_publication_payload_suppresses_fallback_buy_and_sell_by_default()
     assert payload["sell_alerts"] == []
     assert payload["fallback_policy"]["fallback_analysis_count"] == 2
     assert payload["fallback_policy"]["suppressed_fallback_count"] == 2
+    assert payload["fallback_policy"]["fallback_reason_counts"] == {
+        "openai_client_unavailable": 1,
+        "openai_error": 1,
+    }
     assert "heuristic fallback" in payload["data_warnings"][-2]
     assert "withheld from public publication" in payload["data_warnings"][-1]
     emit_metric.assert_called_once_with("fallback_publication_suppressed", 2)

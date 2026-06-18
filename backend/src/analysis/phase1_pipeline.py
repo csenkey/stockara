@@ -1245,6 +1245,11 @@ def _fallback_policy_summary(analyses: list[dict[str, Any]]) -> dict[str, Any]:
         if analysis.get("recommendation") in {"BUY", "SELL"}
         and not _is_publication_allowed(analysis)
     ]
+    fallback_reason_counts: dict[str, int] = {}
+    for analysis in fallback_analyses:
+        reason = str(analysis.get("fallback_reason") or "unknown")
+        fallback_reason_counts[reason] = fallback_reason_counts.get(reason, 0) + 1
+
     return {
         "fallback_actionable_recommendations_allowed": (
             ALLOW_FALLBACK_ACTIONABLE_RECOMMENDATIONS
@@ -1252,6 +1257,7 @@ def _fallback_policy_summary(analyses: list[dict[str, Any]]) -> dict[str, Any]:
         "fallback_confidence_cap": FALLBACK_CONFIDENCE_CAP,
         "fallback_analysis_count": len(fallback_analyses),
         "suppressed_fallback_count": len(suppressed),
+        "fallback_reason_counts": fallback_reason_counts,
         "fallback_tickers": [analysis["ticker"] for analysis in fallback_analyses],
         "suppressed_fallback_tickers": [analysis["ticker"] for analysis in suppressed],
     }

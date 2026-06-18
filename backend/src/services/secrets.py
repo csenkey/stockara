@@ -58,4 +58,14 @@ def _extract_secret_string(response: dict[str, Any]) -> str | None:
         if isinstance(value, str) and value.strip():
             return value.strip()
 
+    string_values = [value.strip() for value in payload.values() if isinstance(value, str) and value.strip()]
+    if len(string_values) == 1:
+        logger.warning("openai_api_key_secret_used_single_custom_json_field")
+        return string_values[0]
+
+    logger.warning(
+        "openai_api_key_secret_missing_supported_json_field",
+        supported_keys=["OPENAI_API_KEY", "openai_api_key", "api_key"],
+        available_keys=sorted(str(key) for key in payload.keys()),
+    )
     return None

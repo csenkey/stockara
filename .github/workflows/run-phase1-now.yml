@@ -92,6 +92,7 @@ jobs:
             --function-name "$STOCK_COLLECTOR_FN" \
             --payload '{"max_tickers":${{ inputs.stock_max_tickers }}}' \
             --log-type Tail \
+            --cli-read-timeout 900 \
             --cli-binary-format raw-in-base64-out \
             stock-response.json > stock-invoke.json
           python -c "import base64, json; meta=json.load(open('stock-invoke.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
@@ -107,6 +108,7 @@ jobs:
             --function-name "$NEWS_COLLECTOR_FN" \
             --payload '{}' \
             --log-type Tail \
+            --cli-read-timeout 900 \
             --cli-binary-format raw-in-base64-out \
             news-response.json > news-invoke.json
           python -c "import base64, json; meta=json.load(open('news-invoke.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
@@ -122,6 +124,7 @@ jobs:
             --function-name "$EARNINGS_COLLECTOR_FN" \
             --payload '{"max_tickers":${{ inputs.earnings_max_tickers }}}' \
             --log-type Tail \
+            --cli-read-timeout 900 \
             --cli-binary-format raw-in-base64-out \
             earnings-response.json > earnings-invoke.json
           python -c "import base64, json; meta=json.load(open('earnings-invoke.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
@@ -137,6 +140,7 @@ jobs:
             --function-name "$DIVIDEND_COLLECTOR_FN" \
             --payload '{"max_tickers":${{ inputs.dividend_max_tickers }}}' \
             --log-type Tail \
+            --cli-read-timeout 900 \
             --cli-binary-format raw-in-base64-out \
             dividend-response.json > dividend-invoke.json
           python -c "import base64, json; meta=json.load(open('dividend-invoke.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
@@ -153,9 +157,43 @@ jobs:
             --function-name "$PUBLISHER_FN" \
             --payload '{}' \
             --log-type Tail \
+            --cli-read-timeout 900 \
             --cli-binary-format raw-in-base64-out \
             publisher-response.json > publisher-invoke.json
           python -c "import base64, json; meta=json.load(open('publisher-invoke.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
           python -c "import json, sys; meta=json.load(open('publisher-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
           cat publisher-response.json
           python -m json.tool publisher-response.json
+
+      - name: Validate published static artifacts
+        if: ${{ inputs.publish_after_collection }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bucket="$(aws cloudformation describe-stacks \
+            --stack-name StockMonitoringFrontend \
+            --query "Stacks[0].Outputs[?OutputKey=='BucketName'].OutputValue | [0]" \
+            --output text)"
+
+          for key in top-picks/latest.json sell-alerts/latest.json; do
+            aws s3api head-object --bucket "$bucket" --key "$key" >/dev/null
+            aws s3 cp "s3://$bucket/$key" - | python -m json.tool >/dev/null
+            echo "Validated s3://$bucket/$key"
+          done
+
+          aws s3 cp "s3://$bucket/top-picks/latest.json" top-picks-latest.json
+          python - <<'PY'
+          import json
+
+          payload = json.load(open("top-picks-latest.json"))
+          print(
+              "Publication summary: "
+              f"generated_at={payload.get('generated_at')} "
+              f"candidate_count={payload.get('candidate_count')} "
+              f"analyzed_count={payload.get('analyzed_count')} "
+              f"top_picks={len(payload.get('top_picks', []))} "
+              f"sell_alerts={len(payload.get('sell_alerts', []))}"
+          )
+          for warning in payload.get("data_warnings", []):
+              print(f"Data warning: {warning}")
+          PY

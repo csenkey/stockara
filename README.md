@@ -125,7 +125,7 @@ Published artifacts:
 
 ## GitHub Actions
 
-Pushes to `main`, `feature/**`, or `codex/**` run tests, frontend build, CDK synth/deploy, and a `/api/health` smoke test.
+During early Phase 1 development, pushes to `main` run tests, frontend build, CDK synth/deploy, and a `/api/health` smoke test. Branch-scoped AWS deployments are intentionally disabled while Istvan is the only developer.
 
 The manual **Run Phase 1 Pipeline Now** workflow invokes stock, news, earnings, dividend, and optionally publisher Lambdas for an already deployed stage. Use it to backfill or diagnose production data before reaching for AWS Console test events.
 

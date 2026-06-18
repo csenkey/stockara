@@ -67,15 +67,15 @@ Prefer targeted tests while iterating, then run the relevant full suite before h
 
 ## How We Work
 
-- Do all development on feature branches. Do not commit implementation work directly on `main`.
-- Every commit on `main`, `feature/**`, or `codex/**` is expected to trigger an AWS deployment through CI/CD.
-- `main` deploys the stable `prod` stage; feature branches deploy isolated, branch-scoped stages.
+- During early Phase 1 development, commit implementation work directly on `main`; Istvan is the only developer and branch-scoped environments are intentionally disabled for now.
+- Every commit on `main` is expected to trigger an AWS deployment through CI/CD.
+- `main` deploys the active `prod` stage. Do not create or deploy feature/codex branch-scoped AWS stages unless this policy is explicitly re-enabled.
 - Before committing, run all relevant local tests and builds. A commit is not ready for deployment until local tests pass.
 - If the AWS deployment fails, fetch the failure details automatically from GitHub Actions logs or related AWS logs, diagnose the issue, correct it, amend the feature-branch commit, and retry deployment.
 - Continue the fix, amend, and retry loop until the feature-branch deployment is green.
 - After each successful AWS deployment, run a smoke test against the deployed environment to verify the core application is working.
 - Treat a green deploy plus passing smoke test as the minimum bar before opening or updating a pull request for review.
-- When a feature is ready and approved, squash merge the feature branch into `main`, then delete the feature branch.
+- When branch-based development is re-enabled later, squash merge completed feature branches into `main`, then delete the feature branch and its branch-scoped AWS resources.
 
 ## Core Product Rules
 

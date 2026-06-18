@@ -46,6 +46,30 @@ def test_get_openai_api_key_fetches_json_secret(monkeypatch):
         assert get_openai_api_key() == "sk-json"
 
 
+def test_get_openai_api_key_accepts_single_custom_json_field(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY_SECRET_NAME", "stockara/prod/openai-api-key-current")
+    secrets_client = MagicMock()
+    secrets_client.get_secret_value.return_value = {
+        "SecretString": '{"openai-api-key-current": "sk-custom"}'
+    }
+
+    with patch("backend.src.services.secrets.boto3.client", return_value=secrets_client):
+        assert get_openai_api_key() == "sk-custom"
+
+
+def test_get_openai_api_key_rejects_ambiguous_json_secret(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY_SECRET_NAME", "stockara/prod/openai-api-key-current")
+    secrets_client = MagicMock()
+    secrets_client.get_secret_value.return_value = {
+        "SecretString": '{"username": "stockara", "password": "sk-secret"}'
+    }
+
+    with patch("backend.src.services.secrets.boto3.client", return_value=secrets_client):
+        assert get_openai_api_key() is None
+
+
 def test_get_openai_api_key_returns_none_without_configuration(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY_SECRET_NAME", raising=False)
