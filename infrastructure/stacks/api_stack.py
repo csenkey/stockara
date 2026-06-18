@@ -7,6 +7,7 @@ from aws_cdk import (
     CfnOutput,
     CustomResource,
     Duration,
+    Size,
     Stack,
     aws_apigateway as apigw,
     custom_resources as cr,
@@ -132,6 +133,32 @@ class ApiStack(Stack):
                 "YFINANCE_BATCH_PAUSE_SECONDS": "1",
             },
             description="Collects daily OHLCV data for the Phase 1 universe",
+        )
+
+        self.stooq_zip_extractor_fn = _lambda.Function(
+            self,
+            "StooqZipExtractorFunction",
+            function_name=resource_name(
+                deployment_stage,
+                "stockara-stooq-zip-extractor",
+                "stooq-zip-extractor",
+            ),
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            handler="src.scripts.stooq_zip_extractor.handler",
+            code=backend_code,
+            memory_size=1024,
+            ephemeral_storage_size=Size.gibibytes(2),
+            timeout=Duration.minutes(15),
+            role=batch_role,
+            environment={
+                **common_env,
+                "POWERTOOLS_SERVICE_NAME": "stooq-zip-extractor",
+                "STOOQ_ZIP_KEY": "stooq/data.zip",
+                "STOOQ_EXTRACTED_PREFIX": "stooq-extracted/",
+                "STOOQ_ZIP_EXTRACT_MAX_ENTRIES": "1000",
+                "STOCK_COLLECTOR_FUNCTION_NAME": stock_collector_function_name,
+            },
+            description="Extracts uploaded Stooq zip files to S3 for one-time backfill",
         )
 
         self.watchlist_seed_fn = _lambda.Function(
@@ -279,6 +306,7 @@ class ApiStack(Stack):
         data_table.grant_read_write_data(self.watchlist_seed_fn)
         data_table.grant_read_data(self.api_handler_fn)
         artifact_bucket.grant_read_write(self.stock_collector_fn)
+        artifact_bucket.grant_read_write(self.stooq_zip_extractor_fn)
         artifact_bucket.grant_put(self.ai_analyzer_fn)
         batch_role.add_to_policy(
             iam.PolicyStatement(
@@ -419,4 +447,10 @@ class ApiStack(Stack):
             "ApiUrl",
             value=self.api.url,
             description="Base URL for the public health API",
+        )
+        CfnOutput(
+            self,
+            "StooqZipExtractorFunctionName",
+            value=self.stooq_zip_extractor_fn.function_name,
+            description="Lambda function for extracting uploaded Stooq zip data",
         )

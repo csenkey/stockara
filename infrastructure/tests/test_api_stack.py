@@ -65,6 +65,28 @@ def test_calendar_collector_lambdas_and_schedules_are_created():
         },
     )
     template.has_resource_properties(
+        "AWS::Lambda::Function",
+        {
+            "FunctionName": "stockara-codex-test-stooq-zip-extractor",
+            "Handler": "src.scripts.stooq_zip_extractor.handler",
+            "MemorySize": 1024,
+            "EphemeralStorage": {"Size": 2048},
+            "Timeout": 900,
+            "Environment": {
+                "Variables": assertions.Match.object_like(
+                    {
+                        "POWERTOOLS_SERVICE_NAME": "stooq-zip-extractor",
+                        "STOOQ_ZIP_KEY": "stooq/data.zip",
+                        "STOOQ_EXTRACTED_PREFIX": "stooq-extracted/",
+                        "STOCK_COLLECTOR_FUNCTION_NAME": (
+                            "stockara-codex-test-stock-collector"
+                        ),
+                    }
+                )
+            },
+        },
+    )
+    template.has_resource_properties(
         "AWS::Events::Rule",
         {
             "Name": "stockara-codex-test-dividend-collection",

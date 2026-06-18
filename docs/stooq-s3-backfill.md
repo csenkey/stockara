@@ -8,22 +8,33 @@ downloaded locally and should seed Stockara's DynamoDB `stock_data` rows.
 The current uploaded source is:
 
 ```text
-s3://stockmonitoringfrontend-sitebucket397a1860-q0p14kssoh4b/stooq/
+s3://stockmonitoringfrontend-sitebucket397a1860-q0p14kssoh4b/stooq/data.zip
 ```
 
-The loader scans recursively under the prefix, so files in Stooq's nested
-subfolders are included.
+Use the deployed `stockara-stooq-zip-extractor` Lambda to extract the zip inside
+AWS. It streams `.txt` members from the zip back to S3 and can start the stock
+collector backfill after extraction completes.
 
 ```bash
-aws s3 sync "/Users/istvancsenkey-sinko/Downloads/data/daily/us" \
-  "s3://stockmonitoringfrontend-sitebucket397a1860-q0p14kssoh4b/stooq/" \
-  --exclude "*" \
-  --include "*.txt"
+aws lambda invoke \
+  --function-name stockara-stooq-zip-extractor \
+  --cli-binary-format raw-in-base64-out \
+  --payload '{
+    "bucket": "stockmonitoringfrontend-sitebucket397a1860-q0p14kssoh4b",
+    "zip_key": "stooq/data.zip",
+    "output_prefix": "stooq-extracted/",
+    "max_entries": 1000,
+    "continue_extraction": true,
+    "start_backfill_on_complete": true
+  }' \
+  /tmp/stooq-extract-response.json
 ```
 
 ## Start Backfill
 
-Invoke the deployed stock collector Lambda with `mode=stooq_s3_backfill`.
+The extractor can start this automatically when
+`start_backfill_on_complete=true`. To start the stock collector manually after
+extraction completes, invoke:
 
 ```bash
 aws lambda invoke \
@@ -32,7 +43,7 @@ aws lambda invoke \
   --payload '{
     "mode": "stooq_s3_backfill",
     "bucket": "stockmonitoringfrontend-sitebucket397a1860-q0p14kssoh4b",
-    "s3_prefix": "stooq/",
+    "s3_prefix": "stooq-extracted/",
     "max_files": 1,
     "continue_backfill": true
   }' \
