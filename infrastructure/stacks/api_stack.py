@@ -280,18 +280,7 @@ class ApiStack(Stack):
         batch_role.add_to_policy(
             iam.PolicyStatement(
                 actions=["lambda:InvokeFunction"],
-                resources=[
-                    Stack.of(self).format_arn(
-                        service="lambda",
-                        resource="function",
-                        resource_name=stock_collector_function_name,
-                    ),
-                    Stack.of(self).format_arn(
-                        service="lambda",
-                        resource="function",
-                        resource_name=f"{stock_collector_function_name}:*",
-                    ),
-                ],
+                resources=["*"],
             )
         )
         openai_api_key_secret.grant_read(self.news_collector_fn)
