@@ -38,6 +38,7 @@ from backend.src.collectors.stock_collector import (
     _nasdaq_fallback_with_details,
     _parse_nasdaq_response,
     _parse_stooq_csv,
+    _parse_stooq_backfill_txt,
     _stooq_fallback_with_details,
     _stooq_symbol,
 )
@@ -841,6 +842,57 @@ class TestDueStockSelection:
         invoke_next.assert_called_once()
         assert invoke_next.call_args.args[2] == {"AAPL"}
 
+    def test_stooq_s3_backfill_loads_uploaded_txt(self):
+        stocks = [{"ticker": "ZWS", "exchange": "NYSE", "currency": "USD"}]
+        body = MagicMock()
+        body.read.return_value = (
+            b"<TICKER>,<PER>,<DATE>,<TIME>,<OPEN>,<HIGH>,<LOW>,<CLOSE>,<VOL>,<OPENINT>\n"
+            b"ZWS.US,D,20120329,000000,8.96558,10.1145,8.94253,9.41238,35127128.068423,0\n"
+        )
+        s3 = MagicMock()
+        s3.list_objects_v2.return_value = {
+            "Contents": [{"Key": "stock-history/stooq-upload/zws.us.txt"}]
+        }
+        s3.get_object.return_value = {"Body": body}
+
+        with (
+            patch("backend.src.collectors.stock_collector.DatabasePool"),
+            patch(
+                "backend.src.collectors.stock_collector.store.active_stock_metadata",
+                return_value=stocks,
+            ),
+            patch("backend.src.collectors.stock_collector.boto3.client", return_value=s3),
+            patch("backend.src.collectors.stock_collector._store_records") as store_records,
+            patch("backend.src.collectors.stock_collector._record_collection_summary"),
+            patch("backend.src.collectors.stock_collector._emit_metric"),
+            patch("backend.src.collectors.stock_collector._emit_collection_summary_metrics"),
+            patch("backend.src.collectors.stock_collector._record_stooq_s3_backfill_status"),
+            patch(
+                "backend.src.collectors.stock_collector._compute_and_store_movement_signals",
+                return_value=0,
+            ),
+        ):
+            store_records.return_value = StoreResult(inserted_records=1)
+
+            result = handler(
+                {
+                    "mode": "stooq_s3_backfill",
+                    "bucket": "stockara-artifacts",
+                    "s3_prefix": "stock-history/stooq-upload/",
+                    "max_files": 1,
+                },
+                None,
+            )
+
+        assert result["statusCode"] == 200
+        assert result["body"]["records_inserted"] == 1
+        assert result["body"]["processed_files"] == 1
+        stored_records = store_records.call_args.args[0]
+        assert stored_records[0]["ticker"] == "ZWS"
+        assert stored_records[0]["trading_date"] == date(2012, 3, 29)
+        assert stored_records[0]["volume"] == 35127128
+        assert stored_records[0]["price_adjustment"] == "adjusted"
+
 
 class TestCollectionSummary:
     """Tests collection completeness/failure summaries."""
@@ -1363,6 +1415,35 @@ class TestNoKeyMarketDataFallbacks:
         assert result[0]["exchange"] == "NASDAQ"
         assert result[0]["currency"] == "USD"
         assert result[0]["fetch_period"] == "stooq_daily"
+
+    def test_parse_stooq_backfill_txt_returns_adjusted_ohlcv(self):
+        txt = (
+            "<TICKER>,<PER>,<DATE>,<TIME>,<OPEN>,<HIGH>,<LOW>,<CLOSE>,<VOL>,<OPENINT>\n"
+            "ZWS.US,D,20120329,000000,8.96558,10.1145,8.94253,9.41238,35127128.068423,0\n"
+            "ZWS.US,D,20120330,000000,9.50739,10.1185,9.50739,9.93074,2360509.726843,0\n"
+        )
+
+        result = _parse_stooq_backfill_txt(
+            txt,
+            stock_metadata_by_ticker={
+                "ZWS": {"exchange": "NYSE", "currency": "USD"}
+            },
+        )
+
+        assert result is not None
+        assert len(result) == 2
+        assert result[0]["ticker"] == "ZWS"
+        assert result[0]["trading_date"] == date(2012, 3, 29)
+        assert result[0]["open_price"] == Decimal("8.9656")
+        assert result[0]["close_price"] == Decimal("9.4124")
+        assert result[0]["adjusted_close_price"] == Decimal("9.4124")
+        assert result[0]["volume"] == 35127128
+        assert result[0]["provider_symbol"] == "zws.us"
+        assert result[0]["provider_priority"] == "operator_backfill"
+        assert result[0]["price_adjustment"] == "adjusted"
+        assert result[0]["corporate_action_adjusted"] is True
+        assert result[0]["exchange"] == "NYSE"
+        assert result[0]["currency"] == "USD"
 
     @patch("backend.src.collectors.stock_collector.time.sleep")
     @patch("backend.src.collectors.stock_collector.requests.get")

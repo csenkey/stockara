@@ -11,7 +11,7 @@ import json
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 
 import boto3
@@ -47,6 +47,10 @@ STOCK_HISTORY_BUCKET = os.environ.get(
     os.environ.get("STOCKARA_ARTIFACT_BUCKET", ""),
 )
 STOCK_HISTORY_PREFIX = os.environ.get("STOCK_HISTORY_PREFIX", "stock-history")
+STOOQ_BACKFILL_PREFIX = os.environ.get(
+    "STOOQ_BACKFILL_PREFIX", f"{STOCK_HISTORY_PREFIX}/stooq-upload"
+)
+STOOQ_BACKFILL_FILES_PER_RUN = int(os.environ.get("STOOQ_BACKFILL_FILES_PER_RUN", "1"))
 BATCH_SIZE = int(os.environ.get("STOCK_COLLECTOR_BATCH_SIZE", "5"))
 MAX_TICKERS_PER_RUN = int(os.environ.get("STOCK_COLLECTOR_MAX_TICKERS", "25"))
 HISTORICAL_BACKFILL_TICKERS_PER_RUN = int(
@@ -123,6 +127,8 @@ def handler(event: dict, context: Any) -> dict:
 
         if (event or {}).get("mode") == "historical_backfill":
             return _run_historical_backfill(stocks, event or {}, context)
+        if (event or {}).get("mode") == "stooq_s3_backfill":
+            return _run_stooq_s3_backfill(stocks, event or {}, context)
 
         selected_stocks = _select_due_stocks(stocks, event or {})
         if not selected_stocks:
@@ -473,6 +479,211 @@ def _run_historical_backfill(
     }
 
 
+def _run_stooq_s3_backfill(
+    stocks: list[dict[str, Any]], event: dict[str, Any], context: Any
+) -> dict[str, Any]:
+    bucket = event.get("bucket") or STOCK_HISTORY_BUCKET
+    prefix = event.get("s3_prefix") or STOOQ_BACKFILL_PREFIX
+    if not bucket:
+        return {
+            "statusCode": 400,
+            "body": {
+                "mode": "stooq_s3_backfill",
+                "status": "failed",
+                "message": "No S3 bucket configured for Stooq backfill",
+            },
+        }
+
+    stock_by_ticker = {stock["ticker"].upper(): stock for stock in stocks}
+    requested_tickers = {
+        str(ticker).upper()
+        for ticker in event.get("tickers", [])
+    }
+    max_files = int(event.get("max_files", STOOQ_BACKFILL_FILES_PER_RUN))
+    run_id = str(
+        event.get("backfill_run_id")
+        or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    )
+    continuation_token = event.get("continuation_token")
+    processed_tickers = {
+        str(ticker).upper()
+        for ticker in event.get("processed_tickers", [])
+    }
+
+    s3 = boto3.client("s3")
+    processed_files = 0
+    skipped_files = 0
+    inserted_records = 0
+    duplicate_records = 0
+    failed_records = 0
+    malformed_files: list[str] = []
+    unavailable_tickers: list[str] = []
+    collected_tickers: set[str] = set()
+    next_continuation_token = continuation_token
+    exhausted = False
+
+    while processed_files < max_files and not _should_stop_for_time(context):
+        list_kwargs: dict[str, Any] = {
+            "Bucket": bucket,
+            "Prefix": prefix,
+            "MaxKeys": min(1000, max_files - processed_files),
+        }
+        if next_continuation_token:
+            list_kwargs["ContinuationToken"] = next_continuation_token
+        response = s3.list_objects_v2(**list_kwargs)
+        keys = [
+            item["Key"]
+            for item in response.get("Contents", [])
+            if item.get("Key") and str(item["Key"]).lower().endswith(".txt")
+        ]
+        next_continuation_token = response.get("NextContinuationToken")
+        if not keys and not next_continuation_token:
+            exhausted = True
+            break
+
+        for key in keys:
+            if processed_files >= max_files:
+                break
+            object_response = s3.get_object(Bucket=bucket, Key=key)
+            text = object_response["Body"].read().decode("utf-8-sig")
+            records = _parse_stooq_backfill_txt(
+                text,
+                stock_metadata_by_ticker=stock_by_ticker,
+            )
+            if not records:
+                malformed_files.append(key)
+                skipped_files += 1
+                continue
+
+            ticker = records[0]["ticker"]
+            if requested_tickers and ticker not in requested_tickers:
+                skipped_files += 1
+                continue
+            if ticker not in stock_by_ticker:
+                unavailable_tickers.append(ticker)
+                skipped_files += 1
+                continue
+
+            stored = _store_records(records)
+            inserted_records += stored.inserted_records
+            duplicate_records += stored.duplicate_records
+            failed_records += stored.failed_records
+            processed_tickers.add(ticker)
+            processed_files += 1
+            if stored.inserted_records > 0 or stored.duplicate_records > 0:
+                collected_tickers.add(ticker)
+
+        if not next_continuation_token:
+            exhausted = True
+            break
+
+    continue_queued = False
+    if (
+        bool(event.get("continue_backfill", False))
+        and next_continuation_token
+        and not exhausted
+    ):
+        continue_queued = _invoke_next_stooq_s3_backfill(
+            event,
+            next_continuation_token,
+            processed_tickers,
+            run_id,
+        )
+
+    summary = _build_collection_summary(
+        active_ticker_count=len(stocks),
+        selected_ticker_count=processed_files,
+        records_collected=inserted_records,
+        duplicate_records=duplicate_records,
+        failed_tickers=sorted(set(unavailable_tickers)),
+        malformed_tickers=malformed_files,
+        recovered_tickers=sorted(collected_tickers),
+    )
+    summary["mode"] = "stooq_s3_backfill"
+    summary["failed_record_count"] = failed_records
+    summary["skipped_file_count"] = skipped_files
+    _record_collection_summary(summary)
+    _emit_collection_summary_metrics(summary)
+    _emit_metric("stooq_s3_backfill_files_processed", processed_files)
+    _emit_metric("stooq_s3_backfill_records_inserted", inserted_records)
+
+    if collected_tickers:
+        movement_signal_count = _compute_and_store_movement_signals(collected_tickers)
+        _emit_metric("market_movement_signals_collected", movement_signal_count)
+
+    _record_stooq_s3_backfill_status(
+        run_id=run_id,
+        bucket=bucket,
+        prefix=prefix,
+        processed_files=processed_files,
+        skipped_files=skipped_files,
+        processed_tickers=processed_tickers,
+        inserted_records=inserted_records,
+        duplicate_records=duplicate_records,
+        failed_records=failed_records,
+        malformed_files=malformed_files,
+        unavailable_tickers=unavailable_tickers,
+        continuation_token=next_continuation_token,
+        continue_queued=continue_queued,
+        complete=exhausted and not continue_queued,
+    )
+
+    return {
+        "statusCode": 200,
+        "body": {
+            "mode": "stooq_s3_backfill",
+            "backfill_run_id": run_id,
+            "bucket": bucket,
+            "s3_prefix": prefix,
+            "processed_files": processed_files,
+            "skipped_files": skipped_files,
+            "processed_total": len(processed_tickers),
+            "records_inserted": inserted_records,
+            "duplicate_records": duplicate_records,
+            "failed_records": failed_records,
+            "malformed_files": malformed_files,
+            "unavailable_tickers": sorted(set(unavailable_tickers)),
+            "continuation_token": next_continuation_token,
+            "continue_queued": continue_queued,
+            "complete": exhausted and not continue_queued,
+        },
+    }
+
+
+def _invoke_next_stooq_s3_backfill(
+    event: dict[str, Any],
+    continuation_token: str,
+    processed_tickers: set[str],
+    run_id: str,
+) -> bool:
+    function_name = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "")
+    if not function_name:
+        logger.warning("stooq_s3_backfill_continue_unavailable_no_function_name")
+        return False
+    payload = {
+        **event,
+        "mode": "stooq_s3_backfill",
+        "continue_backfill": True,
+        "continuation_token": continuation_token,
+        "processed_tickers": sorted(processed_tickers),
+        "backfill_run_id": run_id,
+    }
+    try:
+        boto3.client("lambda").invoke(
+            FunctionName=function_name,
+            InvocationType="Event",
+            Payload=json.dumps(payload).encode("utf-8"),
+        )
+        logger.info(
+            "stooq_s3_backfill_continue_invoked",
+            processed_ticker_count=len(processed_tickers),
+        )
+        return True
+    except Exception as exc:
+        logger.warning("stooq_s3_backfill_continue_invoke_failed", error=str(exc))
+        return False
+
+
 def _select_historical_backfill_stocks(
     stocks: list[dict[str, Any]], event: dict[str, Any], max_tickers: int
 ) -> list[dict[str, Any]]:
@@ -666,6 +877,66 @@ def _record_historical_backfill_status(
         )
     except Exception as exc:
         logger.warning("historical_backfill_status_write_failed", error=str(exc))
+
+
+def _record_stooq_s3_backfill_status(
+    *,
+    run_id: str,
+    bucket: str,
+    prefix: str,
+    processed_files: int,
+    skipped_files: int,
+    processed_tickers: set[str],
+    inserted_records: int,
+    duplicate_records: int,
+    failed_records: int,
+    malformed_files: list[str],
+    unavailable_tickers: list[str],
+    continuation_token: str | None,
+    continue_queued: bool,
+    complete: bool,
+) -> None:
+    if not STOCK_HISTORY_BUCKET:
+        return
+    body = json.dumps(
+        {
+            "mode": "stooq_s3_backfill",
+            "run_id": run_id,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "source_bucket": bucket,
+            "source_prefix": prefix,
+            "processed_files": processed_files,
+            "skipped_files": skipped_files,
+            "processed_ticker_count": len(processed_tickers),
+            "inserted_records": inserted_records,
+            "duplicate_records": duplicate_records,
+            "failed_records": failed_records,
+            "malformed_files_sample": malformed_files[-25:],
+            "unavailable_tickers_sample": sorted(set(unavailable_tickers))[-50:],
+            "continuation_token": continuation_token,
+            "continue_queued": continue_queued,
+            "complete": complete,
+            "processed_tickers_sample": sorted(processed_tickers)[-50:],
+        },
+        default=str,
+    ).encode("utf-8")
+    key = f"{STOCK_HISTORY_PREFIX}/_backfill/stooq-upload-latest.json"
+    try:
+        boto3.client("s3").put_object(
+            Bucket=STOCK_HISTORY_BUCKET,
+            Key=key,
+            Body=body,
+            ContentType="application/json",
+            CacheControl="no-store",
+        )
+        logger.info(
+            "stooq_s3_backfill_status_written",
+            key=key,
+            processed_files=processed_files,
+            continue_queued=continue_queued,
+        )
+    except Exception as exc:
+        logger.warning("stooq_s3_backfill_status_write_failed", error=str(exc))
 
 
 def _merge_history_archive(ticker: str, records: list[dict[str, Any]]) -> None:
@@ -2011,6 +2282,140 @@ def _parse_stooq_csv(
     except csv.Error as e:
         logger.warning("stooq_csv_parse_failed", ticker=ticker, error=str(e))
         return None
+
+
+def _parse_stooq_backfill_txt(
+    text: str,
+    stock_metadata_by_ticker: dict[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]] | None:
+    try:
+        import csv
+        from io import StringIO
+
+        rows = list(csv.DictReader(StringIO(text.strip())))
+        if not rows:
+            return None
+
+        records: list[dict[str, Any]] = []
+        expected_ticker: str | None = None
+        stock_metadata_by_ticker = stock_metadata_by_ticker or {}
+        for row in rows:
+            ticker_value = str(row.get("<TICKER>") or "").strip().upper()
+            if not ticker_value:
+                return None
+            ticker = ticker_value.removesuffix(".US")
+            if expected_ticker is None:
+                expected_ticker = ticker
+            elif ticker != expected_ticker:
+                logger.warning(
+                    "stooq_backfill_file_mixed_tickers",
+                    expected_ticker=expected_ticker,
+                    ticker=ticker,
+                )
+                return None
+
+            record = _parse_stooq_backfill_record(
+                ticker,
+                ticker_value.lower(),
+                row,
+                stock_metadata=stock_metadata_by_ticker.get(ticker),
+            )
+            if record:
+                records.append(record)
+
+        return records or None
+    except csv.Error as exc:
+        logger.warning("stooq_backfill_csv_parse_failed", error=str(exc))
+        return None
+
+
+def _parse_stooq_backfill_record(
+    ticker: str,
+    provider_symbol: str,
+    values: dict[str, Any],
+    stock_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    try:
+        if str(values.get("<PER>", "")).strip().upper() != "D":
+            return None
+        date_value = str(values.get("<DATE>", "")).strip()
+        record_date = date(
+            int(date_value[0:4]),
+            int(date_value[4:6]),
+            int(date_value[6:8]),
+        )
+        open_price = _to_decimal(values.get("<OPEN>"))
+        high_price = _to_decimal(values.get("<HIGH>"))
+        low_price = _to_decimal(values.get("<LOW>"))
+        close_price = _to_decimal(values.get("<CLOSE>"))
+        volume = _stooq_backfill_volume(values.get("<VOL>"))
+
+        if any(p is None for p in [open_price, high_price, low_price, close_price]):
+            logger.warning(
+                "stooq_backfill_malformed_record",
+                ticker=ticker,
+                trading_date=date_value,
+            )
+            return None
+
+        if any(p <= 0 for p in [open_price, high_price, low_price, close_price]):
+            logger.warning(
+                "stooq_backfill_invalid_prices",
+                ticker=ticker,
+                trading_date=date_value,
+            )
+            return None
+
+        if volume < 0:
+            logger.warning(
+                "stooq_backfill_invalid_volume",
+                ticker=ticker,
+                trading_date=date_value,
+            )
+            return None
+
+        return {
+            "ticker": ticker,
+            "trading_date": record_date,
+            "open_price": open_price,
+            "high_price": high_price,
+            "low_price": low_price,
+            "close_price": close_price,
+            "adjusted_close_price": close_price,
+            "volume": volume,
+            "data_provider": "stooq",
+            "provider_symbol": provider_symbol,
+            "provider_endpoint": "uploaded_stooq_txt",
+            "provider_priority": "operator_backfill",
+            "price_adjustment": "adjusted",
+            "has_adjusted_close": True,
+            "corporate_action_adjusted": True,
+            "adjustment_context": "stooq_adjusted_ohlcv",
+            "split_dividend_adjustment": "provider_adjusted_ohlcv",
+            "currency": _metadata_value(
+                stock_metadata,
+                "currency",
+                DEFAULT_MARKET_DATA_CURRENCY,
+            ),
+            "exchange": _metadata_value(stock_metadata, "exchange"),
+            "fetch_period": "stooq_uploaded_history",
+            "fetch_window_start": None,
+            "fetch_window_end": None,
+        }
+    except (ValueError, TypeError, InvalidOperation) as exc:
+        logger.warning(
+            "stooq_backfill_parse_failed",
+            ticker=ticker,
+            values=values,
+            error=str(exc),
+        )
+        return None
+
+
+def _stooq_backfill_volume(value: Any) -> int:
+    if value is None or str(value).strip() == "":
+        return 0
+    return int(Decimal(str(value)).to_integral_value(rounding=ROUND_HALF_UP))
 
 
 def _parse_stooq_record(
