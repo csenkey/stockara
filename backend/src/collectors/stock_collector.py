@@ -545,7 +545,7 @@ def _run_stooq_s3_backfill(
             if processed_files >= max_files:
                 break
             object_response = s3.get_object(Bucket=bucket, Key=key)
-            text = object_response["Body"].read().decode("utf-8-sig")
+            text = _decode_stooq_backfill_bytes(object_response["Body"].read(), key)
             records = _parse_stooq_backfill_txt(
                 text,
                 stock_metadata_by_ticker=stock_by_ticker,
@@ -2282,6 +2282,19 @@ def _parse_stooq_csv(
     except csv.Error as e:
         logger.warning("stooq_csv_parse_failed", ticker=ticker, error=str(e))
         return None
+
+
+def _decode_stooq_backfill_bytes(data: bytes, key: str) -> str:
+    try:
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        logger.warning(
+            "stooq_backfill_utf8_decode_failed",
+            key=key,
+            error=str(exc),
+            fallback_encoding="cp1250",
+        )
+        return data.decode("cp1250", errors="replace")
 
 
 def _parse_stooq_backfill_txt(

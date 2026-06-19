@@ -893,6 +893,62 @@ class TestDueStockSelection:
         assert stored_records[0]["volume"] == 35127128
         assert stored_records[0]["price_adjustment"] == "adjusted"
 
+    def test_stooq_s3_backfill_skips_non_utf8_malformed_file(self):
+        stocks = [{"ticker": "ZWS", "exchange": "NYSE", "currency": "USD"}]
+        malformed_body = MagicMock()
+        malformed_body.read.return_value = b"<TICKER>,<PER>,<DATE>,<TIME>,<OPEN>\xa2\n"
+        valid_body = MagicMock()
+        valid_body.read.return_value = (
+            b"<TICKER>,<PER>,<DATE>,<TIME>,<OPEN>,<HIGH>,<LOW>,<CLOSE>,<VOL>,<OPENINT>\n"
+            b"ZWS.US,D,20120329,000000,8.96558,10.1145,8.94253,9.41238,35127128,0\n"
+        )
+        s3 = MagicMock()
+        s3.list_objects_v2.return_value = {
+            "Contents": [
+                {"Key": "stooq-extracted/data/bad.us.txt"},
+                {"Key": "stooq-extracted/data/zws.us.txt"},
+            ]
+        }
+        s3.get_object.side_effect = [
+            {"Body": malformed_body},
+            {"Body": valid_body},
+        ]
+
+        with (
+            patch("backend.src.collectors.stock_collector.DatabasePool"),
+            patch(
+                "backend.src.collectors.stock_collector.store.active_stock_metadata",
+                return_value=stocks,
+            ),
+            patch("backend.src.collectors.stock_collector.boto3.client", return_value=s3),
+            patch("backend.src.collectors.stock_collector._store_records") as store_records,
+            patch("backend.src.collectors.stock_collector._record_collection_summary"),
+            patch("backend.src.collectors.stock_collector._emit_metric"),
+            patch("backend.src.collectors.stock_collector._emit_collection_summary_metrics"),
+            patch("backend.src.collectors.stock_collector._record_stooq_s3_backfill_status"),
+            patch(
+                "backend.src.collectors.stock_collector._compute_and_store_movement_signals",
+                return_value=0,
+            ),
+        ):
+            store_records.return_value = StoreResult(inserted_records=1)
+
+            result = handler(
+                {
+                    "mode": "stooq_s3_backfill",
+                    "bucket": "stockara-artifacts",
+                    "s3_prefix": "stooq-extracted/",
+                    "max_files": 1,
+                },
+                None,
+            )
+
+        assert result["statusCode"] == 200
+        assert result["body"]["processed_files"] == 1
+        assert result["body"]["skipped_files"] == 1
+        assert result["body"]["malformed_files"] == ["stooq-extracted/data/bad.us.txt"]
+        assert result["body"]["records_inserted"] == 1
+
 
 class TestCollectionSummary:
     """Tests collection completeness/failure summaries."""
