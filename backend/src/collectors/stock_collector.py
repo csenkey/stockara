@@ -564,7 +564,7 @@ def _run_stooq_s3_backfill(
                 skipped_files += 1
                 continue
 
-            stored = _store_records(records)
+            stored = _store_stooq_backfill_records(records)
             inserted_records += stored.inserted_records
             duplicate_records += stored.duplicate_records
             failed_records += stored.failed_records
@@ -1832,6 +1832,38 @@ def _store_records(records: list[dict]) -> StoreResult:
                 error=str(exc),
             )
 
+    return result
+
+
+def _store_stooq_backfill_records(records: list[dict]) -> StoreResult:
+    result = StoreResult()
+    if not records:
+        return result
+    try:
+        stored = store.put_stock_data_backfill_batch(records)
+        result.inserted_records = int(stored.get("inserted_records", 0))
+        result.duplicate_records = int(stored.get("duplicate_records", 0))
+        result.failed_records = int(stored.get("failed_records", 0))
+    except Exception as exc:
+        logger.warning(
+            "stooq_backfill_batch_store_failed",
+            ticker=records[0].get("ticker"),
+            error=str(exc),
+        )
+        result.failed_records = len(records)
+    if result.inserted_records > 0 or result.duplicate_records > 0:
+        records_by_ticker: dict[str, list[dict[str, Any]]] = {}
+        for record in records:
+            records_by_ticker.setdefault(record["ticker"], []).append(record)
+        for ticker, ticker_records in records_by_ticker.items():
+            try:
+                _merge_history_archive(ticker, ticker_records)
+            except Exception as exc:
+                logger.warning(
+                    "stock_history_archive_merge_failed",
+                    ticker=ticker,
+                    error=str(exc),
+                )
     return result
 
 

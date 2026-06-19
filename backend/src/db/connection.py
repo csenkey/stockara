@@ -230,6 +230,105 @@ class DynamoStore:
     def put_stock_data(self, record: dict[str, Any]) -> bool:
         trading_date = _date_str(record["trading_date"])
         collected_at = record.get("collected_at", _now())
+        item = self._stock_data_item(record, trading_date, collected_at)
+        try:
+            self.table.put_item(
+                Item=item,
+                ConditionExpression=Attr("PK").not_exists() & Attr("SK").not_exists(),
+            )
+            self._mark_stock_data_row_inserted(record["ticker"], trading_date)
+            self._mark_stock_data_collected(
+                record["ticker"],
+                trading_date,
+                collected_at,
+                item["close_price"],
+                item.get("data_provider"),
+                item.get("price_adjustment"),
+            )
+            return True
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                return False
+            raise
+
+    def put_stock_data_backfill_batch(self, records: list[dict[str, Any]]) -> dict[str, int]:
+        if not records:
+            return {"inserted_records": 0, "duplicate_records": 0, "failed_records": 0}
+
+        ticker = str(records[0]["ticker"]).upper()
+        dated_records = sorted(records, key=lambda record: _date_str(record["trading_date"]))
+        start_date = date.fromisoformat(_date_str(dated_records[0]["trading_date"]))
+        end_date = date.fromisoformat(_date_str(dated_records[-1]["trading_date"]))
+        existing_dates = {
+            str(row["trading_date"])
+            for row in self.get_stock_data(ticker, start_date, end_date)
+        }
+        new_records = [
+            record
+            for record in dated_records
+            if _date_str(record["trading_date"]) not in existing_dates
+        ]
+        duplicate_records = len(dated_records) - len(new_records)
+        if not new_records:
+            return {
+                "inserted_records": 0,
+                "duplicate_records": duplicate_records,
+                "failed_records": 0,
+            }
+
+        collected_at = _now()
+        try:
+            with self.table.batch_writer() as batch:
+                for record in new_records:
+                    trading_date = _date_str(record["trading_date"])
+                    record_collected_at = record.get("collected_at", collected_at)
+                    batch.put_item(
+                        Item=self._stock_data_item(
+                            record,
+                            trading_date,
+                            record_collected_at,
+                        )
+                    )
+        except Exception:
+            return {
+                "inserted_records": 0,
+                "duplicate_records": duplicate_records,
+                "failed_records": len(new_records),
+            }
+
+        latest_record = new_records[-1]
+        latest_date = _date_str(latest_record["trading_date"])
+        latest_collected_at = latest_record.get("collected_at", collected_at)
+        latest_item = self._stock_data_item(
+            latest_record,
+            latest_date,
+            latest_collected_at,
+        )
+        self._mark_stock_data_rows_inserted(
+            ticker,
+            _date_str(new_records[0]["trading_date"]),
+            len(new_records),
+        )
+        self._mark_stock_data_collected(
+            ticker,
+            latest_date,
+            latest_collected_at,
+            latest_item["close_price"],
+            latest_item.get("data_provider"),
+            latest_item.get("price_adjustment"),
+        )
+        return {
+            "inserted_records": len(new_records),
+            "duplicate_records": duplicate_records,
+            "failed_records": 0,
+        }
+
+    def _stock_data_item(
+        self,
+        record: dict[str, Any],
+        trading_date: str,
+        collected_at: str,
+    ) -> dict[str, Any]:
         item = {
             "PK": f"STOCKDATA#{record['ticker']}",
             "SK": f"DATE#{trading_date}",
@@ -266,27 +365,14 @@ class DynamoStore:
         for field in optional_fields:
             if field in record:
                 item[field] = record[field]
-        try:
-            self.table.put_item(
-                Item=item,
-                ConditionExpression=Attr("PK").not_exists() & Attr("SK").not_exists(),
-            )
-            self._mark_stock_data_row_inserted(record["ticker"], trading_date)
-            self._mark_stock_data_collected(
-                record["ticker"],
-                trading_date,
-                collected_at,
-                item["close_price"],
-                item.get("data_provider"),
-                item.get("price_adjustment"),
-            )
-            return True
-        except ClientError as exc:
-            if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
-                return False
-            raise
+        return item
 
     def _mark_stock_data_row_inserted(self, ticker: str, trading_date: str) -> None:
+        self._mark_stock_data_rows_inserted(ticker, trading_date, 1)
+
+    def _mark_stock_data_rows_inserted(
+        self, ticker: str, trading_date: str, count: int
+    ) -> None:
         self.table.update_item(
             Key={"PK": f"STOCK#{ticker}", "SK": "META"},
             UpdateExpression=(
@@ -295,7 +381,7 @@ class DynamoStore:
                 "if_not_exists(stock_history_start_date, :trading_date)"
             ),
             ExpressionAttributeValues={
-                ":one": 1,
+                ":one": count,
                 ":trading_date": trading_date,
             },
         )

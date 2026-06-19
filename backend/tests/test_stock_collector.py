@@ -862,7 +862,9 @@ class TestDueStockSelection:
                 return_value=stocks,
             ),
             patch("backend.src.collectors.stock_collector.boto3.client", return_value=s3),
-            patch("backend.src.collectors.stock_collector._store_records") as store_records,
+            patch(
+                "backend.src.collectors.stock_collector._store_stooq_backfill_records"
+            ) as store_records,
             patch("backend.src.collectors.stock_collector._record_collection_summary"),
             patch("backend.src.collectors.stock_collector._emit_metric"),
             patch("backend.src.collectors.stock_collector._emit_collection_summary_metrics"),
@@ -921,7 +923,9 @@ class TestDueStockSelection:
                 return_value=stocks,
             ),
             patch("backend.src.collectors.stock_collector.boto3.client", return_value=s3),
-            patch("backend.src.collectors.stock_collector._store_records") as store_records,
+            patch(
+                "backend.src.collectors.stock_collector._store_stooq_backfill_records"
+            ) as store_records,
             patch("backend.src.collectors.stock_collector._record_collection_summary"),
             patch("backend.src.collectors.stock_collector._emit_metric"),
             patch("backend.src.collectors.stock_collector._emit_collection_summary_metrics"),

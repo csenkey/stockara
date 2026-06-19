@@ -428,6 +428,66 @@ def test_put_stock_data_persists_provider_provenance_and_updates_summary():
     )
 
 
+def test_put_stock_data_backfill_batch_skips_existing_dates_and_updates_summary_once():
+    table = MagicMock()
+    batch = MagicMock()
+    table.batch_writer.return_value.__enter__.return_value = batch
+    store = _TestableDynamoStore(table)
+    store.get_stock_data = MagicMock(
+        return_value=[{"ticker": "AAPL", "trading_date": "2026-06-17"}]
+    )
+    store._mark_stock_data_rows_inserted = MagicMock()
+    store._mark_stock_data_collected = MagicMock()
+
+    result = store.put_stock_data_backfill_batch(
+        [
+            {
+                "ticker": "AAPL",
+                "trading_date": date(2026, 6, 17),
+                "open_price": Decimal("195.00"),
+                "high_price": Decimal("199.00"),
+                "low_price": Decimal("194.00"),
+                "close_price": Decimal("198.00"),
+                "volume": 123456,
+                "data_provider": "operator_backfill",
+            },
+            {
+                "ticker": "AAPL",
+                "trading_date": date(2026, 6, 18),
+                "open_price": Decimal("198.00"),
+                "high_price": Decimal("202.00"),
+                "low_price": Decimal("197.00"),
+                "close_price": Decimal("201.00"),
+                "volume": 234567,
+                "data_provider": "operator_backfill",
+                "collected_at": "2026-06-19T12:00:00",
+            },
+        ]
+    )
+
+    assert result == {
+        "inserted_records": 1,
+        "duplicate_records": 1,
+        "failed_records": 0,
+    }
+    batch.put_item.assert_called_once()
+    item = batch.put_item.call_args.kwargs["Item"]
+    assert item["PK"] == "STOCKDATA#AAPL"
+    assert item["SK"] == "DATE#2026-06-18"
+    assert item["data_provider"] == "operator_backfill"
+    store._mark_stock_data_rows_inserted.assert_called_once_with(
+        "AAPL", "2026-06-18", 1
+    )
+    store._mark_stock_data_collected.assert_called_once_with(
+        "AAPL",
+        "2026-06-18",
+        "2026-06-19T12:00:00",
+        Decimal("201.00"),
+        "operator_backfill",
+        None,
+    )
+
+
 def test_mark_stock_collection_failed_persists_retry_state():
     table = MagicMock()
     store = _TestableDynamoStore(table)
