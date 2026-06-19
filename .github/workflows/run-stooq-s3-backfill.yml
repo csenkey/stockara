@@ -82,7 +82,7 @@ jobs:
               continue_backfill: $continueBackfill
             }
             + (if $startAfterKey == "" then {} else {start_after_key: $startAfterKey} end)
-            + (if $continuationToken == "" then {} else {continuation_token: $continuationToken} end)')
+            + (if $continuationToken == "" then {} else {continuation_token: $continuationToken} end)'"
           echo "$payload"
           aws lambda invoke \
             --function-name stockara-stock-collector \
