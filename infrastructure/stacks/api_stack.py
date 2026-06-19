@@ -156,6 +156,7 @@ class ApiStack(Stack):
                 "STOOQ_ZIP_KEY": "stooq/data.zip",
                 "STOOQ_EXTRACTED_PREFIX": "stooq-extracted/",
                 "STOOQ_ZIP_EXTRACT_MAX_ENTRIES": "1000",
+                "STOOQ_BACKFILL_MAX_FILES": "250",
                 "STOCK_COLLECTOR_FUNCTION_NAME": stock_collector_function_name,
             },
             description="Extracts uploaded Stooq zip files to S3 for one-time backfill",

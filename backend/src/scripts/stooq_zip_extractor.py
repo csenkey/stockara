@@ -22,6 +22,7 @@ DEFAULT_BUCKET = os.environ.get("STOCKARA_ARTIFACT_BUCKET", "")
 DEFAULT_ZIP_KEY = os.environ.get("STOOQ_ZIP_KEY", "stooq/data.zip")
 DEFAULT_OUTPUT_PREFIX = os.environ.get("STOOQ_EXTRACTED_PREFIX", "stooq-extracted/")
 DEFAULT_MAX_ENTRIES = int(os.environ.get("STOOQ_ZIP_EXTRACT_MAX_ENTRIES", "1000"))
+DEFAULT_BACKFILL_MAX_FILES = int(os.environ.get("STOOQ_BACKFILL_MAX_FILES", "250"))
 STOCK_COLLECTOR_FUNCTION_NAME = os.environ.get("STOCK_COLLECTOR_FUNCTION_NAME", "")
 LOCAL_ZIP_PATH = "/tmp/stooq-data.zip"
 S3_TRANSFER_CONFIG = TransferConfig(use_threads=False)
@@ -37,6 +38,11 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
     continue_extraction = bool(event.get("continue_extraction", True))
     start_backfill_on_complete = bool(event.get("start_backfill_on_complete", False))
     backfill_event = dict(event.get("backfill_event") or {})
+    backfill_max_files = int(
+        event.get("backfill_max_files")
+        or backfill_event.get("max_files")
+        or DEFAULT_BACKFILL_MAX_FILES
+    )
 
     if not bucket:
         return _response(400, {"status": "failed", "message": "bucket is required"})
@@ -119,7 +125,7 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
                 "mode": "stooq_s3_backfill",
                 "bucket": bucket,
                 "s3_prefix": output_prefix,
-                "max_files": 1,
+                "max_files": backfill_max_files,
                 "continue_backfill": True,
                 **backfill_event,
             }
