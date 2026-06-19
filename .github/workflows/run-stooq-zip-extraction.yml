@@ -70,7 +70,12 @@ jobs:
           echo "$payload"
           aws lambda invoke \
             --function-name stockara-stooq-zip-extractor \
+            --log-type Tail \
+            --cli-read-timeout 900 \
             --cli-binary-format raw-in-base64-out \
             --payload "$payload" \
-            /tmp/stooq-extractor-response.json
+            /tmp/stooq-extractor-response.json > /tmp/stooq-extractor-invoke.json
+          python -c "import base64, json; meta=json.load(open('/tmp/stooq-extractor-invoke.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
+          python -c "import json, sys; meta=json.load(open('/tmp/stooq-extractor-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
           cat /tmp/stooq-extractor-response.json
+          python -m json.tool /tmp/stooq-extractor-response.json
