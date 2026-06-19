@@ -22,7 +22,7 @@ DEFAULT_BUCKET = os.environ.get("STOCKARA_ARTIFACT_BUCKET", "")
 DEFAULT_ZIP_KEY = os.environ.get("STOOQ_ZIP_KEY", "stooq/data.zip")
 DEFAULT_OUTPUT_PREFIX = os.environ.get("STOOQ_EXTRACTED_PREFIX", "stooq-extracted/")
 DEFAULT_MAX_ENTRIES = int(os.environ.get("STOOQ_ZIP_EXTRACT_MAX_ENTRIES", "1000"))
-DEFAULT_BACKFILL_MAX_FILES = int(os.environ.get("STOOQ_BACKFILL_MAX_FILES", "250"))
+DEFAULT_BACKFILL_MAX_FILES = int(os.environ.get("STOOQ_BACKFILL_MAX_FILES", "5"))
 STOCK_COLLECTOR_FUNCTION_NAME = os.environ.get("STOCK_COLLECTOR_FUNCTION_NAME", "")
 LOCAL_ZIP_PATH = "/tmp/stooq-data.zip"
 S3_TRANSFER_CONFIG = TransferConfig(use_threads=False)

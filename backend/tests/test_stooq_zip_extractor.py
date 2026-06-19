@@ -101,7 +101,7 @@ def test_extractor_can_start_stock_backfill_after_complete(tmp_path, monkeypatch
             "mode": "stooq_s3_backfill",
             "bucket": "bucket",
             "s3_prefix": "stooq-extracted/",
-            "max_files": 250,
+            "max_files": 5,
             "continue_backfill": True,
         }
     )

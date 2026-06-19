@@ -14,7 +14,7 @@ on:
       max_files:
         description: Stooq txt files to import per Lambda invocation
         required: true
-        default: "250"
+        default: "5"
       continue_backfill:
         description: Let the stock collector asynchronously continue Stooq import
         required: true
