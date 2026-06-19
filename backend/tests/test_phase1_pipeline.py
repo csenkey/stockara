@@ -108,6 +108,7 @@ def test_build_publication_payload_includes_partial_coverage_quality():
         "active_ticker_count": 2,
         "eligible_ticker_count": 1,
         "excluded_ticker_count": 1,
+        "exclusion_reason_counts": {"missing_stock_data": 1},
         "warnings": ["1 active ticker(s) were excluded by data freshness gates."],
     }
 
@@ -118,6 +119,7 @@ def test_build_publication_payload_includes_partial_coverage_quality():
 
     assert payload["publication_scope"] == "top_opportunities_among_eligible_tickers"
     assert payload["data_quality"]["coverage_status"] == "partial"
+    assert payload["data_quality"]["exclusion_reason_counts"]["missing_stock_data"] == 1
     assert "excluded by data freshness gates" in payload["data_warnings"][-1]
 
 
@@ -494,6 +496,8 @@ def test_review_rejection_suppresses_public_publication():
                 "approved": False,
                 "rationale": "Evidence is too weak.",
                 "concerns": ["weak evidence"],
+                "rejection_category": "insufficient_evidence",
+                "what_would_make_approvable": "More durable catalyst evidence.",
             },
         }
     ]
@@ -508,6 +512,34 @@ def test_review_rejection_suppresses_public_publication():
     assert payload["review_policy"]["reviewed_count"] == 1
     assert payload["review_policy"]["rejected_count"] == 1
     assert payload["review_policy"]["review_suppressed_count"] == 1
+    assert payload["review_policy"]["review_rejection_audit_count"] == 1
+    assert payload["review_rejections"] == [
+        {
+            "ticker": "NVDA",
+            "company_name": "NVIDIA",
+            "sector": "Technology",
+            "analysis_method": "ai",
+            "analysis_model": "gpt-5.4-mini",
+            "recommendation": "BUY",
+            "risk_level": "MEDIUM",
+            "confidence_score": 84,
+            "opportunity_score": 90,
+            "negative_score": 5,
+            "catalyst": "Unusual volume",
+            "analyst_reasoning": "The setup looks interesting.",
+            "invalidation_criteria": "Momentum fades.",
+            "supporting_evidence": [],
+            "ai_review": {
+                "status": "rejected",
+                "model": "gpt-5.4",
+                "approved": False,
+                "rationale": "Evidence is too weak.",
+                "concerns": ["weak evidence"],
+                "rejection_category": "insufficient_evidence",
+                "what_would_make_approvable": "More durable catalyst evidence.",
+            },
+        }
+    ]
     assert "withheld by the review model" in payload["data_warnings"][-1]
     emit_metric.assert_called_once_with("review_publication_suppressed", 1)
 
@@ -738,6 +770,8 @@ def test_evaluate_data_freshness_excludes_stale_ticker_but_allows_partial_covera
     assert [stock["ticker"] for stock in freshness["eligible_stocks"]] == ["NVDA"]
     assert freshness["excluded_tickers"][0]["ticker"] == "STALE"
     assert "stale_stock_data" in freshness["excluded_tickers"][0]["reasons"]
+    quality = phase1_pipeline.publication_data_quality(freshness)
+    assert quality["exclusion_reason_counts"]["stale_stock_data"] == 1
 
 
 def test_evaluate_data_freshness_excludes_latest_row_without_provenance():

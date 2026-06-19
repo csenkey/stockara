@@ -435,11 +435,16 @@ def evaluate_data_freshness(
 def publication_data_quality(freshness: dict[str, Any]) -> dict[str, Any]:
     """Return the public data-quality subset for publication artifacts."""
     excluded = freshness["excluded_tickers"]
+    exclusion_reason_counts: dict[str, int] = {}
+    for row in excluded:
+        for reason in row.get("reasons", []):
+            exclusion_reason_counts[reason] = exclusion_reason_counts.get(reason, 0) + 1
     return {
         "coverage_status": freshness["coverage_status"],
         "active_ticker_count": freshness["active_ticker_count"],
         "eligible_ticker_count": freshness["eligible_ticker_count"],
         "excluded_ticker_count": freshness["excluded_ticker_count"],
+        "exclusion_reason_counts": dict(sorted(exclusion_reason_counts.items())),
         "excluded_ticker_examples": excluded[:20],
         "stock_freshness_max_age_days": freshness["stock_freshness_max_age_days"],
         "min_history_calendar_days": freshness["min_history_calendar_days"],
@@ -616,6 +621,7 @@ def build_publication_payload(
         "publication_scope": "top_opportunities_among_eligible_tickers",
         "fallback_policy": fallback_policy,
         "review_policy": review_policy,
+        "review_rejections": _review_rejection_audit(analyses, stock_map),
         "top_picks": top_picks,
         "sell_alerts": sell_alerts,
         "upcoming_earnings": upcoming_earnings or [],
@@ -892,6 +898,12 @@ def _review_candidate_analysis(
                 "approved": approved,
                 "rationale": str(parsed.get("rationale", ""))[:750],
                 "concerns": [str(concern)[:250] for concern in concerns[:5]],
+                "rejection_category": str(parsed.get("rejection_category", ""))[:120]
+                or None,
+                "what_would_make_approvable": str(
+                    parsed.get("what_would_make_approvable", "")
+                )[:500]
+                or None,
             },
         }
         _emit_metric("ai_reviews_completed", 1)
@@ -949,6 +961,8 @@ approved: boolean
 rationale: concise explanation
 concerns: list of short strings
 confidence_adjustment: integer from -20 to 10
+rejection_category: short category when not approved, otherwise empty string
+what_would_make_approvable: concise missing evidence or prompt issue when not approved
 """
 
 
@@ -1729,7 +1743,54 @@ def _review_policy_summary(analyses: list[dict[str, Any]]) -> dict[str, Any]:
         "review_status_counts": status_counts,
         "reviewed_tickers": [analysis["ticker"] for analysis in reviewed],
         "review_suppressed_tickers": [analysis["ticker"] for analysis in suppressed],
+        "review_rejection_audit_count": len(suppressed),
     }
+
+
+def _review_rejection_audit(
+    analyses: list[dict[str, Any]], stock_map: dict[str, dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Return analyst/reviewer details for withheld AI recommendations."""
+    suppressed = [
+        analysis
+        for analysis in analyses
+        if analysis.get("ai_review")
+        and analysis.get("recommendation") in {"BUY", "SELL"}
+        and not _is_publication_allowed(analysis)
+    ]
+    suppressed.sort(
+        key=lambda row: (
+            row.get("recommendation") == "BUY",
+            row.get("opportunity_score", 0),
+            row.get("negative_score", 0),
+            row.get("confidence_score", 0),
+        ),
+        reverse=True,
+    )
+
+    audit_rows: list[dict[str, Any]] = []
+    for row in suppressed[:50]:
+        stock = stock_map.get(row["ticker"], {})
+        audit_rows.append(
+            {
+                "ticker": row["ticker"],
+                "company_name": stock.get("company_name", row["ticker"]),
+                "sector": stock.get("sector"),
+                "analysis_method": row.get("analysis_method", "ai"),
+                "analysis_model": row.get("analysis_model", OPENAI_ANALYSIS_MODEL),
+                "recommendation": row["recommendation"],
+                "risk_level": row["risk_level"],
+                "confidence_score": row["confidence_score"],
+                "opportunity_score": row["opportunity_score"],
+                "negative_score": row["negative_score"],
+                "catalyst": row["catalyst"],
+                "analyst_reasoning": row["reasoning"],
+                "invalidation_criteria": row["invalidation_criteria"],
+                "supporting_evidence": _evidence(row.get("signals", [])),
+                "ai_review": row.get("ai_review"),
+            }
+        )
+    return audit_rows
 
 
 def _parse_date(value: Any) -> date | None:

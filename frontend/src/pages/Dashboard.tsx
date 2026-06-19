@@ -5,6 +5,16 @@ interface SignalSource {
   observed_at: string;
 }
 
+interface AiReview {
+  status: string;
+  model: string;
+  approved: boolean;
+  rationale: string;
+  concerns: string[];
+  rejection_category?: string | null;
+  what_would_make_approvable?: string | null;
+}
+
 interface TopPick {
   rank: number;
   ticker: string;
@@ -35,13 +45,39 @@ interface SellAlert {
   source_traceability: SignalSource[];
 }
 
+interface ReviewRejection {
+  ticker: string;
+  company_name: string;
+  sector?: string;
+  recommendation: "BUY" | "SELL";
+  risk_level: "LOW" | "MEDIUM" | "HIGH";
+  confidence_score: number;
+  opportunity_score: number;
+  negative_score: number;
+  catalyst: string;
+  analyst_reasoning: string;
+  invalidation_criteria: string;
+  supporting_evidence: string[];
+  ai_review: AiReview;
+}
+
+interface DataQuality {
+  coverage_status?: string;
+  active_ticker_count?: number;
+  eligible_ticker_count?: number;
+  excluded_ticker_count?: number;
+  exclusion_reason_counts?: Record<string, number>;
+}
+
 interface TopPicksPayload {
   publication_date: string;
   generated_at: string;
   top_picks: TopPick[];
   sell_alerts: SellAlert[];
+  review_rejections?: ReviewRejection[];
   candidate_count: number;
   analyzed_count: number;
+  data_quality?: DataQuality;
   data_warnings: string[];
 }
 
@@ -98,6 +134,7 @@ export default function Dashboard() {
     if (!payload?.generated_at) return "Waiting for first publication";
     return formatDate(payload.generated_at);
   }, [payload]);
+  const reviewRejections = payload?.review_rejections ?? [];
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
@@ -165,16 +202,36 @@ export default function Dashboard() {
                     <li key={warning}>{warning}</li>
                   ))}
                 </ul>
+                <FreshnessSummary dataQuality={payload.data_quality} />
               </div>
+            )}
+
+            {reviewRejections.length > 0 && (
+              <section>
+                <h2 className="mb-3 text-lg font-semibold">
+                  Withheld AI Recommendations
+                </h2>
+                <div className="space-y-3">
+                  {reviewRejections.map((row) => (
+                    <ReviewRejectionRow key={row.ticker} row={row} />
+                  ))}
+                </div>
+              </section>
             )}
 
             <section>
               <h2 className="mb-3 text-lg font-semibold">Top Opportunities</h2>
-              <div className="grid gap-4 lg:grid-cols-2">
-                {payload.top_picks.map((pick) => (
-                  <PickRow key={pick.ticker} pick={pick} />
-                ))}
-              </div>
+              {payload.top_picks.length === 0 ? (
+                <div className="border border-slate-800 bg-slate-900 p-5 text-sm text-slate-300">
+                  No BUY recommendations passed the review gate for this publication.
+                </div>
+              ) : (
+                <div className="grid gap-4 lg:grid-cols-2">
+                  {payload.top_picks.map((pick) => (
+                    <PickRow key={pick.ticker} pick={pick} />
+                  ))}
+                </div>
+              )}
             </section>
 
             <section>
@@ -195,6 +252,97 @@ export default function Dashboard() {
         )}
       </div>
     </main>
+  );
+}
+
+function FreshnessSummary({ dataQuality }: { dataQuality?: DataQuality }) {
+  const reasonCounts = dataQuality?.exclusion_reason_counts ?? {};
+  const entries = Object.entries(reasonCounts).sort((a, b) => b[1] - a[1]);
+  if (entries.length === 0) return null;
+
+  return (
+    <div className="mt-3 border-t border-amber-800 pt-3">
+      <div className="mb-2 text-xs font-semibold uppercase text-amber-200">
+        Freshness exclusion reasons
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {entries.map(([reason, count]) => (
+          <span
+            key={reason}
+            className="border border-amber-700 bg-amber-900 px-2 py-1 text-xs text-amber-50"
+          >
+            {reason}: {count}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ReviewRejectionRow({ row }: { row: ReviewRejection }) {
+  return (
+    <article className="border border-slate-700 bg-slate-900 p-4">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <div className="text-xs uppercase text-slate-500">
+            Analyst proposed {row.recommendation}
+          </div>
+          <h3 className="mt-1 text-lg font-semibold">{row.ticker}</h3>
+          <p className="mt-1 text-sm text-slate-400">
+            {row.company_name}
+            {row.sector ? ` · ${row.sector}` : ""}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2 text-xs">
+          <span className={`border px-2 py-1 ${badgeClass(row.risk_level)}`}>
+            {row.risk_level}
+          </span>
+          <span className="border border-slate-700 bg-slate-800 px-2 py-1 text-slate-200">
+            confidence {row.confidence_score}%
+          </span>
+          <span className="border border-slate-700 bg-slate-800 px-2 py-1 text-slate-200">
+            opp {row.opportunity_score}
+          </span>
+          <span className="border border-slate-700 bg-slate-800 px-2 py-1 text-slate-200">
+            neg {row.negative_score}
+          </span>
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-4 text-sm lg:grid-cols-2">
+        <div>
+          <div className="text-xs font-semibold uppercase text-slate-500">
+            Analyst thesis
+          </div>
+          <p className="mt-1 font-medium text-slate-100">{row.catalyst}</p>
+          <p className="mt-2 leading-6 text-slate-300">{row.analyst_reasoning}</p>
+        </div>
+        <div>
+          <div className="text-xs font-semibold uppercase text-slate-500">
+            Reviewer rationale
+          </div>
+          {row.ai_review.rejection_category && (
+            <p className="mt-1 text-xs uppercase text-amber-300">
+              {row.ai_review.rejection_category}
+            </p>
+          )}
+          <p className="mt-2 leading-6 text-slate-300">{row.ai_review.rationale}</p>
+          {row.ai_review.what_would_make_approvable && (
+            <p className="mt-2 text-slate-400">
+              Needed: {row.ai_review.what_would_make_approvable}
+            </p>
+          )}
+        </div>
+      </div>
+
+      {row.ai_review.concerns.length > 0 && (
+        <ul className="mt-4 space-y-1 border-t border-slate-800 pt-3 text-sm text-slate-400">
+          {row.ai_review.concerns.map((concern) => (
+            <li key={concern}>{concern}</li>
+          ))}
+        </ul>
+      )}
+    </article>
   );
 }
 

@@ -303,11 +303,30 @@ class SellAlert(BaseModel):
     source_traceability: list[SignalSource]
 
 
+class ReviewRejection(BaseModel):
+    ticker: str
+    company_name: str
+    sector: Optional[str] = None
+    analysis_method: AnalysisMethod = AnalysisMethod.AI
+    analysis_model: Optional[str] = None
+    recommendation: Recommendation
+    risk_level: RiskLevel
+    confidence_score: int
+    opportunity_score: int
+    negative_score: int
+    catalyst: str
+    analyst_reasoning: str
+    invalidation_criteria: str
+    supporting_evidence: list[str] = Field(default_factory=list)
+    ai_review: dict[str, Any]
+
+
 class PublishedTopPicks(BaseModel):
     publication_date: date
     generated_at: datetime
     top_picks: list[TopPick]
     sell_alerts: list[SellAlert]
+    review_rejections: list[ReviewRejection] = Field(default_factory=list)
     candidate_count: int
     analyzed_count: int
     data_warnings: list[str] = Field(default_factory=list)
