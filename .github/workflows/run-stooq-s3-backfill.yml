@@ -19,6 +19,14 @@ on:
         description: Let the stock collector asynchronously continue Stooq import
         required: true
         default: "true"
+      start_after_key:
+        description: Optional S3 key to resume after
+        required: false
+        default: ""
+      continuation_token:
+        description: Optional S3 continuation token to resume with
+        required: false
+        default: ""
 
 env:
   AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
@@ -62,6 +70,8 @@ jobs:
           payload="$(jq -n \
             --arg bucket "${{ inputs.bucket }}" \
             --arg s3Prefix "${{ inputs.s3_prefix }}" \
+            --arg startAfterKey "${{ inputs.start_after_key }}" \
+            --arg continuationToken "${{ inputs.continuation_token }}" \
             --argjson maxFiles "${{ inputs.max_files }}" \
             --argjson continueBackfill "${{ inputs.continue_backfill }}" \
             '{
@@ -70,7 +80,9 @@ jobs:
               s3_prefix: $s3Prefix,
               max_files: $maxFiles,
               continue_backfill: $continueBackfill
-            }')"
+            }
+            + (if $startAfterKey == "" then {} else {start_after_key: $startAfterKey} end)
+            + (if $continuationToken == "" then {} else {continuation_token: $continuationToken} end)')
           echo "$payload"
           aws lambda invoke \
             --function-name stockara-stock-collector \
