@@ -72,8 +72,8 @@ def test_cloudfront_custom_error_responses_for_spa():
     )
 
 
-def test_frontend_deployment_preserves_generated_artifacts():
-    """Verify frontend deploy pruning does not delete generated read models."""
+def test_frontend_deployment_does_not_prune_bucket_data():
+    """Verify frontend deploy does not delete generated or operational data."""
     app = cdk.App()
     stack = FrontendStack(app, "TestFrontend")
     template = assertions.Template.from_stack(stack)
@@ -81,7 +81,7 @@ def test_frontend_deployment_preserves_generated_artifacts():
     template.has_resource_properties(
         "Custom::CDKBucketDeployment",
         {
-            "Prune": True,
+            "Prune": False,
             "Exclude": ["top-picks/*", "sell-alerts/*"],
         },
     )

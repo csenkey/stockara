@@ -83,7 +83,7 @@ class FrontendStack(Stack):
                 distribution=self.distribution,
                 distribution_paths=["/*"],
                 exclude=["top-picks/*", "sell-alerts/*"],
-                prune=True,
+                prune=False,
             )
 
         # Outputs
