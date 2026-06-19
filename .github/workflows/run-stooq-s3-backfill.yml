@@ -1,0 +1,85 @@
+name: Run Stooq S3 Backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      bucket:
+        description: S3 bucket containing extracted Stooq txt files
+        required: true
+        default: stockmonitoringfrontend-sitebucket397a1860-q0p14kssoh4b
+      s3_prefix:
+        description: S3 prefix containing extracted Stooq txt files
+        required: true
+        default: stooq-extracted/
+      max_files:
+        description: Stooq txt files to import per Lambda invocation
+        required: true
+        default: "250"
+      continue_backfill:
+        description: Let the stock collector asynchronously continue Stooq import
+        required: true
+        default: "true"
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+jobs:
+  invoke:
+    name: Invoke Stooq S3 backfill
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Validate inputs
+        shell: bash
+        run: |
+          if ! [[ "${{ inputs.max_files }}" =~ ^[0-9]+$ ]] || [[ "${{ inputs.max_files }}" -lt 1 ]]; then
+            echo "max_files must be a positive integer."
+            exit 1
+          fi
+
+      - name: Check AWS OIDC role configuration
+        run: |
+          if [[ -z "${{ secrets.AWS_ROLE_TO_ASSUME }}" ]]; then
+            echo "Missing GitHub secret AWS_ROLE_TO_ASSUME."
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: stockara-stooq-backfill-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Invoke stock collector Stooq backfill
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -n \
+            --arg bucket "${{ inputs.bucket }}" \
+            --arg s3Prefix "${{ inputs.s3_prefix }}" \
+            --argjson maxFiles "${{ inputs.max_files }}" \
+            --argjson continueBackfill "${{ inputs.continue_backfill }}" \
+            '{
+              mode: "stooq_s3_backfill",
+              bucket: $bucket,
+              s3_prefix: $s3Prefix,
+              max_files: $maxFiles,
+              continue_backfill: $continueBackfill
+            }')"
+          echo "$payload"
+          aws lambda invoke \
+            --function-name stockara-stock-collector \
+            --log-type Tail \
+            --cli-read-timeout 900 \
+            --cli-binary-format raw-in-base64-out \
+            --payload "$payload" \
+            /tmp/stooq-backfill-response.json > /tmp/stooq-backfill-invoke.json
+          python -c "import base64, json; meta=json.load(open('/tmp/stooq-backfill-invoke.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
+          python -c "import json, sys; meta=json.load(open('/tmp/stooq-backfill-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
+          cat /tmp/stooq-backfill-response.json
+          python -m json.tool /tmp/stooq-backfill-response.json
