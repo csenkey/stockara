@@ -27,6 +27,14 @@ on:
         description: Optional S3 continuation token to resume with
         required: false
         default: ""
+      repeat_until_complete:
+        description: Repeatedly invoke from returned cursors inside GitHub Actions
+        required: true
+        default: "false"
+      max_invocations:
+        description: Maximum synchronous Lambda invocations when repeat_until_complete is true
+        required: true
+        default: "1000"
 
 env:
   AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
@@ -48,6 +56,10 @@ jobs:
             echo "max_files must be a positive integer."
             exit 1
           fi
+          if ! [[ "${{ inputs.max_invocations }}" =~ ^[0-9]+$ ]] || [[ "${{ inputs.max_invocations }}" -lt 1 ]]; then
+            echo "max_invocations must be a positive integer."
+            exit 1
+          fi
 
       - name: Check AWS OIDC role configuration
         run: |
@@ -67,31 +79,64 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          payload="$(jq -n \
-            --arg bucket "${{ inputs.bucket }}" \
-            --arg s3Prefix "${{ inputs.s3_prefix }}" \
-            --arg startAfterKey "${{ inputs.start_after_key }}" \
-            --arg continuationToken "${{ inputs.continuation_token }}" \
-            --argjson maxFiles "${{ inputs.max_files }}" \
-            --argjson continueBackfill "${{ inputs.continue_backfill }}" \
-            '{
-              mode: "stooq_s3_backfill",
-              bucket: $bucket,
-              s3_prefix: $s3Prefix,
-              max_files: $maxFiles,
-              continue_backfill: $continueBackfill
-            }
-            + (if $startAfterKey == "" then {} else {start_after_key: $startAfterKey} end)
-            + (if $continuationToken == "" then {} else {continuation_token: $continuationToken} end)')"
-          echo "$payload"
-          aws lambda invoke \
-            --function-name stockara-stock-collector \
-            --log-type Tail \
-            --cli-read-timeout 900 \
-            --cli-binary-format raw-in-base64-out \
-            --payload "$payload" \
-            /tmp/stooq-backfill-response.json > /tmp/stooq-backfill-invoke.json
-          python -c "import base64, json; meta=json.load(open('/tmp/stooq-backfill-invoke.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
-          python -c "import json, sys; meta=json.load(open('/tmp/stooq-backfill-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
-          cat /tmp/stooq-backfill-response.json
-          python -m json.tool /tmp/stooq-backfill-response.json
+          start_after_key="${{ inputs.start_after_key }}"
+          continuation_token="${{ inputs.continuation_token }}"
+          invocation_count=0
+          repeat_until_complete="${{ inputs.repeat_until_complete }}"
+          max_invocations="${{ inputs.max_invocations }}"
+
+          while true; do
+            invocation_count=$((invocation_count + 1))
+            continue_backfill="${{ inputs.continue_backfill }}"
+            if [[ "$repeat_until_complete" == "true" ]]; then
+              continue_backfill=false
+            fi
+
+            payload="$(jq -n \
+              --arg bucket "${{ inputs.bucket }}" \
+              --arg s3Prefix "${{ inputs.s3_prefix }}" \
+              --arg startAfterKey "$start_after_key" \
+              --arg continuationToken "$continuation_token" \
+              --argjson maxFiles "${{ inputs.max_files }}" \
+              --argjson continueBackfill "$continue_backfill" \
+              '{
+                mode: "stooq_s3_backfill",
+                bucket: $bucket,
+                s3_prefix: $s3Prefix,
+                max_files: $maxFiles,
+                continue_backfill: $continueBackfill
+              }
+              + (if $startAfterKey == "" then {} else {start_after_key: $startAfterKey} end)
+              + (if $continuationToken == "" then {} else {continuation_token: $continuationToken} end)')"
+
+            echo "Invocation $invocation_count payload:"
+            echo "$payload"
+            aws lambda invoke \
+              --function-name stockara-stock-collector \
+              --log-type Tail \
+              --cli-read-timeout 900 \
+              --cli-binary-format raw-in-base64-out \
+              --payload "$payload" \
+              /tmp/stooq-backfill-response.json > /tmp/stooq-backfill-invoke.json
+            python -c "import base64, json; meta=json.load(open('/tmp/stooq-backfill-invoke.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
+            python -c "import json, sys; meta=json.load(open('/tmp/stooq-backfill-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
+            cat /tmp/stooq-backfill-response.json
+            python -m json.tool /tmp/stooq-backfill-response.json
+
+            complete="$(jq -r '.body.complete // false' /tmp/stooq-backfill-response.json)"
+            start_after_key="$(jq -r '.body.start_after_key // ""' /tmp/stooq-backfill-response.json)"
+            continuation_token="$(jq -r '.body.continuation_token // ""' /tmp/stooq-backfill-response.json)"
+
+            if [[ "$repeat_until_complete" != "true" || "$complete" == "true" ]]; then
+              break
+            fi
+            if [[ -z "$start_after_key" && -z "$continuation_token" ]]; then
+              echo "No continuation cursor returned; stopping repeat loop."
+              break
+            fi
+            if [[ "$invocation_count" -ge "$max_invocations" ]]; then
+              echo "Reached max_invocations=$max_invocations before completion."
+              break
+            fi
+            sleep 1
+          done
