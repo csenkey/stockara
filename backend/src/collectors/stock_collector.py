@@ -532,7 +532,7 @@ def _run_stooq_s3_backfill(
         list_kwargs: dict[str, Any] = {
             "Bucket": bucket,
             "Prefix": prefix,
-            "MaxKeys": min(1000, max_files - processed_files),
+            "MaxKeys": 1000,
         }
         if next_continuation_token:
             list_kwargs["ContinuationToken"] = next_continuation_token
@@ -550,6 +550,17 @@ def _run_stooq_s3_backfill(
         for key in keys:
             if processed_files >= max_files:
                 break
+            ticker_from_key = _stooq_backfill_ticker_from_key(key)
+            if not ticker_from_key:
+                skipped_files += 1
+                continue
+            if requested_tickers and ticker_from_key not in requested_tickers:
+                skipped_files += 1
+                continue
+            if ticker_from_key not in stock_by_ticker:
+                unavailable_tickers.append(ticker_from_key)
+                skipped_files += 1
+                continue
             object_response = s3.get_object(Bucket=bucket, Key=key)
             text = _decode_stooq_backfill_bytes(object_response["Body"].read(), key)
             records = _parse_stooq_backfill_txt(
@@ -563,11 +574,8 @@ def _run_stooq_s3_backfill(
                 continue
 
             ticker = records[0]["ticker"]
-            if requested_tickers and ticker not in requested_tickers:
-                skipped_files += 1
-                continue
-            if ticker not in stock_by_ticker:
-                unavailable_tickers.append(ticker)
+            if ticker != ticker_from_key:
+                malformed_files.append(key)
                 skipped_files += 1
                 continue
 
@@ -2321,6 +2329,14 @@ def _decode_stooq_backfill_bytes(data: bytes, key: str) -> str:
             fallback_encoding="cp1250",
         )
         return data.decode("cp1250", errors="replace")
+
+
+def _stooq_backfill_ticker_from_key(key: str) -> str | None:
+    filename = key.rsplit("/", 1)[-1].lower()
+    if not filename.endswith(".us.txt"):
+        return None
+    ticker = filename.removesuffix(".us.txt").strip()
+    return ticker.upper() if ticker else None
 
 
 def _parse_stooq_backfill_txt(

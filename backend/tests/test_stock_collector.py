@@ -39,6 +39,7 @@ from backend.src.collectors.stock_collector import (
     _parse_nasdaq_response,
     _parse_stooq_csv,
     _parse_stooq_backfill_txt,
+    _stooq_backfill_ticker_from_key,
     _limit_stooq_backfill_records,
     _stooq_fallback_with_details,
     _stooq_symbol,
@@ -909,8 +910,8 @@ class TestDueStockSelection:
         s3 = MagicMock()
         s3.list_objects_v2.return_value = {
             "Contents": [
-                {"Key": "stooq-extracted/data/bad.us.txt"},
-                {"Key": "stooq-extracted/data/zws.us.txt"},
+                {"Key": "stooq-extracted/data/old/zws.us.txt"},
+                {"Key": "stooq-extracted/data/new/zws.us.txt"},
             ]
         }
         s3.get_object.side_effect = [
@@ -952,8 +953,60 @@ class TestDueStockSelection:
         assert result["statusCode"] == 200
         assert result["body"]["processed_files"] == 1
         assert result["body"]["skipped_files"] == 1
-        assert result["body"]["malformed_files"] == ["stooq-extracted/data/bad.us.txt"]
+        assert result["body"]["malformed_files"] == ["stooq-extracted/data/old/zws.us.txt"]
         assert result["body"]["records_inserted"] == 1
+
+    def test_stooq_s3_backfill_skips_inactive_ticker_without_download(self):
+        stocks = [{"ticker": "ZWS", "exchange": "NYSE", "currency": "USD"}]
+        body = MagicMock()
+        body.read.return_value = (
+            b"<TICKER>,<PER>,<DATE>,<TIME>,<OPEN>,<HIGH>,<LOW>,<CLOSE>,<VOL>,<OPENINT>\n"
+            b"ZWS.US,D,20120329,000000,8.96558,10.1145,8.94253,9.41238,35127128,0\n"
+        )
+        s3 = MagicMock()
+        s3.list_objects_v2.return_value = {
+            "Contents": [
+                {"Key": "stooq-extracted/data/inactive.us.txt"},
+                {"Key": "stooq-extracted/data/zws.us.txt"},
+            ]
+        }
+        s3.get_object.return_value = {"Body": body}
+
+        with (
+            patch("backend.src.collectors.stock_collector.DatabasePool"),
+            patch(
+                "backend.src.collectors.stock_collector.store.active_stock_metadata",
+                return_value=stocks,
+            ),
+            patch("backend.src.collectors.stock_collector.boto3.client", return_value=s3),
+            patch(
+                "backend.src.collectors.stock_collector._store_stooq_backfill_records"
+            ) as store_records,
+            patch("backend.src.collectors.stock_collector._record_collection_summary"),
+            patch("backend.src.collectors.stock_collector._emit_metric"),
+            patch("backend.src.collectors.stock_collector._emit_collection_summary_metrics"),
+            patch("backend.src.collectors.stock_collector._record_stooq_s3_backfill_status"),
+        ):
+            store_records.return_value = StoreResult(inserted_records=1)
+
+            result = handler(
+                {
+                    "mode": "stooq_s3_backfill",
+                    "bucket": "stockara-artifacts",
+                    "s3_prefix": "stooq-extracted/",
+                    "max_files": 1,
+                },
+                None,
+            )
+
+        assert result["statusCode"] == 200
+        assert result["body"]["processed_files"] == 1
+        assert result["body"]["skipped_files"] == 1
+        assert result["body"]["unavailable_tickers"] == ["INACTIVE"]
+        s3.get_object.assert_called_once_with(
+            Bucket="stockara-artifacts",
+            Key="stooq-extracted/data/zws.us.txt",
+        )
 
 
 class TestCollectionSummary:
@@ -1517,6 +1570,13 @@ class TestNoKeyMarketDataFallbacks:
         result = _limit_stooq_backfill_records(records, 2)
 
         assert result == records[1:]
+
+    def test_stooq_backfill_ticker_from_key_extracts_us_txt_filename(self):
+        assert (
+            _stooq_backfill_ticker_from_key("stooq-extracted/data/daily/zws.us.txt")
+            == "ZWS"
+        )
+        assert _stooq_backfill_ticker_from_key("stooq-extracted/data/readme.txt") is None
 
     def test_store_stooq_backfill_records_does_not_merge_history_archive(self):
         records = [
