@@ -51,6 +51,9 @@ STOOQ_BACKFILL_PREFIX = os.environ.get(
     "STOOQ_BACKFILL_PREFIX", f"{STOCK_HISTORY_PREFIX}/stooq-upload"
 )
 STOOQ_BACKFILL_FILES_PER_RUN = int(os.environ.get("STOOQ_BACKFILL_FILES_PER_RUN", "1"))
+STOOQ_BACKFILL_RECORDS_PER_FILE = int(
+    os.environ.get("STOOQ_BACKFILL_RECORDS_PER_FILE", "120")
+)
 BATCH_SIZE = int(os.environ.get("STOCK_COLLECTOR_BATCH_SIZE", "5"))
 MAX_TICKERS_PER_RUN = int(os.environ.get("STOCK_COLLECTOR_MAX_TICKERS", "25"))
 HISTORICAL_BACKFILL_TICKERS_PER_RUN = int(
@@ -500,6 +503,9 @@ def _run_stooq_s3_backfill(
         for ticker in event.get("tickers", [])
     }
     max_files = int(event.get("max_files", STOOQ_BACKFILL_FILES_PER_RUN))
+    max_records_per_file = int(
+        event.get("max_records_per_file", STOOQ_BACKFILL_RECORDS_PER_FILE)
+    )
     run_id = str(
         event.get("backfill_run_id")
         or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -550,6 +556,7 @@ def _run_stooq_s3_backfill(
                 text,
                 stock_metadata_by_ticker=stock_by_ticker,
             )
+            records = _limit_stooq_backfill_records(records, max_records_per_file)
             if not records:
                 malformed_files.append(key)
                 skipped_files += 1
@@ -607,7 +614,7 @@ def _run_stooq_s3_backfill(
     _emit_metric("stooq_s3_backfill_files_processed", processed_files)
     _emit_metric("stooq_s3_backfill_records_inserted", inserted_records)
 
-    if collected_tickers:
+    if collected_tickers and bool(event.get("compute_signals", False)):
         movement_signal_count = _compute_and_store_movement_signals(collected_tickers)
         _emit_metric("market_movement_signals_collected", movement_signal_count)
 
@@ -1851,19 +1858,6 @@ def _store_stooq_backfill_records(records: list[dict]) -> StoreResult:
             error=str(exc),
         )
         result.failed_records = len(records)
-    if result.inserted_records > 0 or result.duplicate_records > 0:
-        records_by_ticker: dict[str, list[dict[str, Any]]] = {}
-        for record in records:
-            records_by_ticker.setdefault(record["ticker"], []).append(record)
-        for ticker, ticker_records in records_by_ticker.items():
-            try:
-                _merge_history_archive(ticker, ticker_records)
-            except Exception as exc:
-                logger.warning(
-                    "stock_history_archive_merge_failed",
-                    ticker=ticker,
-                    error=str(exc),
-                )
     return result
 
 
@@ -2372,6 +2366,19 @@ def _parse_stooq_backfill_txt(
     except csv.Error as exc:
         logger.warning("stooq_backfill_csv_parse_failed", error=str(exc))
         return None
+
+
+def _limit_stooq_backfill_records(
+    records: list[dict[str, Any]] | None,
+    max_records: int,
+) -> list[dict[str, Any]] | None:
+    if not records:
+        return records
+    if max_records <= 0 or len(records) <= max_records:
+        return records
+    return sorted(records, key=lambda record: _record_date(record["trading_date"]))[
+        -max_records:
+    ]
 
 
 def _parse_stooq_backfill_record(

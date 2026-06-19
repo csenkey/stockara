@@ -39,8 +39,10 @@ from backend.src.collectors.stock_collector import (
     _parse_nasdaq_response,
     _parse_stooq_csv,
     _parse_stooq_backfill_txt,
+    _limit_stooq_backfill_records,
     _stooq_fallback_with_details,
     _stooq_symbol,
+    _store_stooq_backfill_records,
 )
 
 
@@ -1504,6 +1506,47 @@ class TestNoKeyMarketDataFallbacks:
         assert result[0]["corporate_action_adjusted"] is True
         assert result[0]["exchange"] == "NYSE"
         assert result[0]["currency"] == "USD"
+
+    def test_limit_stooq_backfill_records_keeps_latest_rows(self):
+        records = [
+            {"ticker": "ZWS", "trading_date": date(2012, 3, 29)},
+            {"ticker": "ZWS", "trading_date": date(2012, 3, 30)},
+            {"ticker": "ZWS", "trading_date": date(2012, 4, 2)},
+        ]
+
+        result = _limit_stooq_backfill_records(records, 2)
+
+        assert result == records[1:]
+
+    def test_store_stooq_backfill_records_does_not_merge_history_archive(self):
+        records = [
+            {
+                "ticker": "ZWS",
+                "trading_date": date(2012, 3, 29),
+                "open_price": Decimal("8.9656"),
+                "high_price": Decimal("10.1145"),
+                "low_price": Decimal("8.9425"),
+                "close_price": Decimal("9.4124"),
+                "volume": 35127128,
+            }
+        ]
+
+        with (
+            patch(
+                "backend.src.collectors.stock_collector.store.put_stock_data_backfill_batch",
+                return_value={
+                    "inserted_records": 1,
+                    "duplicate_records": 0,
+                    "failed_records": 0,
+                },
+            ) as put_batch,
+            patch("backend.src.collectors.stock_collector._merge_history_archive") as merge_archive,
+        ):
+            result = _store_stooq_backfill_records(records)
+
+        assert result.inserted_records == 1
+        put_batch.assert_called_once_with(records)
+        merge_archive.assert_not_called()
 
     @patch("backend.src.collectors.stock_collector.time.sleep")
     @patch("backend.src.collectors.stock_collector.requests.get")
