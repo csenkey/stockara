@@ -511,6 +511,7 @@ def _run_stooq_s3_backfill(
         or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     )
     continuation_token = event.get("continuation_token")
+    start_after_key = event.get("start_after_key")
     processed_tickers = {
         str(ticker).upper()
         for ticker in event.get("processed_tickers", [])
@@ -526,6 +527,7 @@ def _run_stooq_s3_backfill(
     unavailable_tickers: list[str] = []
     collected_tickers: set[str] = set()
     next_continuation_token = continuation_token
+    next_start_after_key = start_after_key
     exhausted = False
 
     while processed_files < max_files and not _should_stop_for_time(context):
@@ -536,6 +538,8 @@ def _run_stooq_s3_backfill(
         }
         if next_continuation_token:
             list_kwargs["ContinuationToken"] = next_continuation_token
+        elif next_start_after_key:
+            list_kwargs["StartAfter"] = next_start_after_key
         response = s3.list_objects_v2(**list_kwargs)
         keys = [
             item["Key"]
@@ -550,6 +554,7 @@ def _run_stooq_s3_backfill(
         for key in keys:
             if processed_files >= max_files:
                 break
+            next_start_after_key = key
             ticker_from_key = _stooq_backfill_ticker_from_key(key)
             if not ticker_from_key:
                 skipped_files += 1
@@ -588,19 +593,29 @@ def _run_stooq_s3_backfill(
             if stored.inserted_records > 0 or stored.duplicate_records > 0:
                 collected_tickers.add(ticker)
 
-        if not next_continuation_token:
+        if (
+            processed_files >= max_files
+            and keys
+            and next_start_after_key != keys[-1]
+        ):
+            next_continuation_token = None
+
+        if not next_continuation_token and (
+            not keys or next_start_after_key == keys[-1]
+        ):
             exhausted = True
             break
 
     continue_queued = False
     if (
         bool(event.get("continue_backfill", False))
-        and next_continuation_token
         and not exhausted
+        and (next_continuation_token or next_start_after_key)
     ):
         continue_queued = _invoke_next_stooq_s3_backfill(
             event,
             next_continuation_token,
+            next_start_after_key,
             processed_tickers,
             run_id,
         )
@@ -639,6 +654,7 @@ def _run_stooq_s3_backfill(
         malformed_files=malformed_files,
         unavailable_tickers=unavailable_tickers,
         continuation_token=next_continuation_token,
+        start_after_key=next_start_after_key,
         continue_queued=continue_queued,
         complete=exhausted and not continue_queued,
     )
@@ -659,6 +675,7 @@ def _run_stooq_s3_backfill(
             "malformed_files": malformed_files,
             "unavailable_tickers": sorted(set(unavailable_tickers)),
             "continuation_token": next_continuation_token,
+            "start_after_key": next_start_after_key,
             "continue_queued": continue_queued,
             "complete": exhausted and not continue_queued,
         },
@@ -667,7 +684,8 @@ def _run_stooq_s3_backfill(
 
 def _invoke_next_stooq_s3_backfill(
     event: dict[str, Any],
-    continuation_token: str,
+    continuation_token: str | None,
+    start_after_key: str | None,
     processed_tickers: set[str],
     run_id: str,
 ) -> bool:
@@ -680,6 +698,7 @@ def _invoke_next_stooq_s3_backfill(
         "mode": "stooq_s3_backfill",
         "continue_backfill": True,
         "continuation_token": continuation_token,
+        "start_after_key": start_after_key,
         "processed_tickers": sorted(processed_tickers),
         "backfill_run_id": run_id,
     }
@@ -908,6 +927,7 @@ def _record_stooq_s3_backfill_status(
     malformed_files: list[str],
     unavailable_tickers: list[str],
     continuation_token: str | None,
+    start_after_key: str | None,
     continue_queued: bool,
     complete: bool,
 ) -> None:
@@ -929,6 +949,7 @@ def _record_stooq_s3_backfill_status(
             "malformed_files_sample": malformed_files[-25:],
             "unavailable_tickers_sample": sorted(set(unavailable_tickers))[-50:],
             "continuation_token": continuation_token,
+            "start_after_key": start_after_key,
             "continue_queued": continue_queued,
             "complete": complete,
             "processed_tickers_sample": sorted(processed_tickers)[-50:],

@@ -1008,6 +1008,66 @@ class TestDueStockSelection:
             Key="stooq-extracted/data/zws.us.txt",
         )
 
+    def test_stooq_s3_backfill_continues_from_last_scanned_key_inside_page(self):
+        stocks = [
+            {"ticker": "ZWS", "exchange": "NYSE", "currency": "USD"},
+            {"ticker": "AAPL", "exchange": "NASDAQ", "currency": "USD"},
+        ]
+        body = MagicMock()
+        body.read.return_value = (
+            b"<TICKER>,<PER>,<DATE>,<TIME>,<OPEN>,<HIGH>,<LOW>,<CLOSE>,<VOL>,<OPENINT>\n"
+            b"ZWS.US,D,20120329,000000,8.96558,10.1145,8.94253,9.41238,35127128,0\n"
+        )
+        s3 = MagicMock()
+        s3.list_objects_v2.return_value = {
+            "Contents": [
+                {"Key": "stooq-extracted/data/inactive.us.txt"},
+                {"Key": "stooq-extracted/data/zws.us.txt"},
+                {"Key": "stooq-extracted/data/aapl.us.txt"},
+            ],
+            "NextContinuationToken": "NEXT_PAGE",
+        }
+        s3.get_object.return_value = {"Body": body}
+
+        with (
+            patch("backend.src.collectors.stock_collector.DatabasePool"),
+            patch(
+                "backend.src.collectors.stock_collector.store.active_stock_metadata",
+                return_value=stocks,
+            ),
+            patch("backend.src.collectors.stock_collector.boto3.client", return_value=s3),
+            patch(
+                "backend.src.collectors.stock_collector._store_stooq_backfill_records"
+            ) as store_records,
+            patch(
+                "backend.src.collectors.stock_collector._invoke_next_stooq_s3_backfill",
+                return_value=True,
+            ) as invoke_next,
+            patch("backend.src.collectors.stock_collector._record_collection_summary"),
+            patch("backend.src.collectors.stock_collector._emit_metric"),
+            patch("backend.src.collectors.stock_collector._emit_collection_summary_metrics"),
+            patch("backend.src.collectors.stock_collector._record_stooq_s3_backfill_status"),
+        ):
+            store_records.return_value = StoreResult(inserted_records=1)
+
+            result = handler(
+                {
+                    "mode": "stooq_s3_backfill",
+                    "bucket": "stockara-artifacts",
+                    "s3_prefix": "stooq-extracted/",
+                    "max_files": 1,
+                    "continue_backfill": True,
+                },
+                None,
+            )
+
+        assert result["body"]["continue_queued"] is True
+        assert result["body"]["continuation_token"] is None
+        assert result["body"]["start_after_key"] == "stooq-extracted/data/zws.us.txt"
+        invoke_next.assert_called_once()
+        assert invoke_next.call_args.args[1] is None
+        assert invoke_next.call_args.args[2] == "stooq-extracted/data/zws.us.txt"
+
 
 class TestCollectionSummary:
     """Tests collection completeness/failure summaries."""
