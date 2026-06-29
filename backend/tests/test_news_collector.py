@@ -10,6 +10,7 @@ import hashlib
 import json
 from unittest.mock import MagicMock, patch
 
+import pytest
 
 from backend.src.collectors.news_collector import (
     build_news_collection_summary,
@@ -23,6 +24,15 @@ from backend.src.collectors.news_collector import (
     collect_news,
     handler,
 )
+from backend.src.services.secrets import get_provider_api_key
+
+
+def setup_function():
+    get_provider_api_key.cache_clear()
+
+
+def teardown_function():
+    get_provider_api_key.cache_clear()
 
 
 # --- Tests for compute_title_source_hash (Requirement 2.5) ---
@@ -74,6 +84,11 @@ class TestComputeTitleSourceHash:
 
 class TestFetchNewsapiArticles:
     """Tests for NewsAPI article fetching with mocked HTTP responses."""
+
+    @pytest.fixture(autouse=True)
+    def _newsapi_key(self, monkeypatch):
+        monkeypatch.setenv("NEWSAPI_KEY", "test-newsapi-key")
+        get_provider_api_key.cache_clear()
 
     @patch("requests.get")
     def test_successful_fetch(self, mock_get):
@@ -208,6 +223,11 @@ class TestFetchNewsapiArticles:
 
 class TestFetchFinnhubArticles:
     """Tests for Finnhub article fetching with mocked HTTP responses."""
+
+    @pytest.fixture(autouse=True)
+    def _finnhub_key(self, monkeypatch):
+        monkeypatch.setenv("FINNHUB_KEY", "test-finnhub-key")
+        get_provider_api_key.cache_clear()
 
     @patch("requests.get")
     def test_successful_fetch(self, mock_get):
