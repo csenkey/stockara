@@ -33,6 +33,22 @@ def test_latest_prices_uses_stock_metadata_not_stock_data_scan():
     store._scan.assert_not_called()
 
 
+def test_existing_news_hashes_deduplicates_batch_get_keys():
+    table = MagicMock()
+    table.meta.client.batch_get_item.return_value = {"Responses": {"stockara": []}}
+    store = _TestableDynamoStore(table)
+
+    assert store.existing_news_hashes(["hash1", "hash1", "hash2"]) == set()
+
+    keys = table.meta.client.batch_get_item.call_args.kwargs["RequestItems"][
+        "stockara"
+    ]["Keys"]
+    assert keys == [
+        {"PK": "NEWS#hash1", "SK": "META"},
+        {"PK": "NEWS#hash2", "SK": "META"},
+    ]
+
+
 def test_put_market_signal_writes_ticker_date_type_item():
     table = MagicMock()
     store = _TestableDynamoStore(table)

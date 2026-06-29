@@ -432,12 +432,21 @@ def collect_news() -> dict[str, Any]:
     # Combine all articles
     all_articles = newsapi_articles + finnhub_articles
 
-    # Compute hashes for deduplication
-    article_hashes = []
+    # Compute hashes and discard duplicates within this provider batch before
+    # calling DynamoDB. BatchGetItem rejects repeated keys in one request.
+    seen_hashes: set[str] = set()
+    article_hashes: list[str] = []
+    unique_articles = []
     for article in all_articles:
         h = compute_title_source_hash(article["title"], article["source"])
         article["_hash"] = h
+        if h in seen_hashes:
+            continue
+        seen_hashes.add(h)
         article_hashes.append(h)
+        unique_articles.append(article)
+
+    duplicate_fetch_count = len(all_articles) - len(unique_articles)
 
     # Check existing articles in DB
     DatabasePool.initialize()
@@ -446,10 +455,15 @@ def collect_news() -> dict[str, Any]:
         existing_hashes = get_existing_hashes(conn, article_hashes)
 
         # Filter to new articles only
-        new_articles = [a for a in all_articles if a["_hash"] not in existing_hashes]
+        new_articles = [
+            article
+            for article in unique_articles
+            if article["_hash"] not in existing_hashes
+        ]
         logger.info(
             "Deduplication complete",
             total_fetched=len(all_articles),
+            duplicate_fetches=duplicate_fetch_count,
             already_exists=len(existing_hashes),
             new_articles=len(new_articles),
         )
@@ -499,7 +513,7 @@ def collect_news() -> dict[str, Any]:
         articles_processed=articles_stored,
         sources_available=sources_available,
         total_fetched=len(all_articles),
-        duplicates_skipped=len(all_articles) - len(new_articles),
+        duplicates_skipped=duplicate_fetch_count + len(existing_hashes),
         failed_sources=failed_sources,
         article_failures=article_failures,
     )
@@ -511,7 +525,7 @@ def collect_news() -> dict[str, Any]:
         "articles_processed": articles_stored,
         "sources_available": sources_available,
         "total_fetched": len(all_articles),
-        "duplicates_skipped": len(all_articles) - len(new_articles),
+        "duplicates_skipped": duplicate_fetch_count + len(existing_hashes),
         "collection_summary": summary,
     }
 

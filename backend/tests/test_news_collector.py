@@ -576,7 +576,7 @@ class TestCollectNews:
         # Setup DB pool mock
         mock_conn = MagicMock()
         mock_db_pool.initialize.return_value = None
-        mock_db_pool._pool.getconn.return_value = mock_conn
+        mock_db_pool.table.return_value = mock_conn
 
         # Setup OpenAI mock
         mock_client = MagicMock()
@@ -586,6 +586,51 @@ class TestCollectNews:
 
         assert result["status"] == "success"
         assert result["articles_processed"] == 0
+        assert result["duplicates_skipped"] == 1
+
+    @patch("backend.src.collectors.news_collector.emit_metrics")
+    @patch("backend.src.collectors.news_collector.store_article")
+    @patch("backend.src.collectors.news_collector.generate_summary")
+    @patch("backend.src.collectors.news_collector.OpenAI")
+    @patch("backend.src.collectors.news_collector.DatabasePool")
+    @patch("backend.src.collectors.news_collector.get_existing_hashes")
+    @patch("backend.src.collectors.news_collector.fetch_finnhub_articles")
+    @patch("backend.src.collectors.news_collector.fetch_newsapi_articles")
+    def test_deduplication_collapses_duplicate_fetched_articles(
+        self,
+        mock_newsapi,
+        mock_finnhub,
+        mock_get_hashes,
+        mock_db_pool,
+        mock_openai,
+        mock_generate,
+        mock_store,
+        mock_metrics,
+    ):
+        """Duplicate articles in the same provider batch are processed once."""
+        duplicate_article = {
+            "title": "Same Article",
+            "source": "Reuters",
+            "published_at": "2025-01-15T10:00:00Z",
+            "content": "Content",
+        }
+        mock_newsapi.return_value = [duplicate_article, dict(duplicate_article)]
+        mock_finnhub.return_value = []
+        mock_get_hashes.return_value = set()
+
+        mock_conn = MagicMock()
+        mock_db_pool.initialize.return_value = None
+        mock_db_pool.table.return_value = mock_conn
+        mock_openai.return_value = MagicMock()
+        mock_generate.return_value = {"summary": "Summary", "tickers": []}
+
+        result = collect_news()
+
+        expected_hash = compute_title_source_hash("Same Article", "Reuters")
+        mock_get_hashes.assert_called_once_with(mock_conn, [expected_hash])
+        mock_generate.assert_called_once()
+        mock_store.assert_called_once()
+        assert result["articles_processed"] == 1
         assert result["duplicates_skipped"] == 1
 
     @patch("backend.src.collectors.news_collector.emit_metrics")
