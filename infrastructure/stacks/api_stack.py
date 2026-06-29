@@ -74,6 +74,18 @@ class ApiStack(Stack):
             "OpenAiApiKeySecret",
             openai_api_key_secret_name,
         )
+        newsapi_key_secret_name = f"stockara/{deployment_stage}/newsapi-key-current"
+        newsapi_key_secret = secretsmanager.Secret.from_secret_name_v2(
+            self,
+            "NewsApiKeySecret",
+            newsapi_key_secret_name,
+        )
+        finnhub_key_secret_name = f"stockara/{deployment_stage}/finnhub-key-current"
+        finnhub_key_secret = secretsmanager.Secret.from_secret_name_v2(
+            self,
+            "FinnhubKeySecret",
+            finnhub_key_secret_name,
+        )
 
         api_role = iam.Role(
             self,
@@ -91,6 +103,10 @@ class ApiStack(Stack):
             "DEPLOYMENT_STAGE": deployment_stage,
         }
         openai_env = {"OPENAI_API_KEY_SECRET_NAME": openai_api_key_secret_name}
+        news_provider_env = {
+            "NEWSAPI_KEY_SECRET_NAME": newsapi_key_secret_name,
+            "FINNHUB_KEY_SECRET_NAME": finnhub_key_secret_name,
+        }
         backend_code = _lambda.Code.from_asset(
             BACKEND_ASSET_PATH,
             bundling=BundlingOptions(
@@ -209,6 +225,7 @@ class ApiStack(Stack):
             environment={
                 **common_env,
                 **openai_env,
+                **news_provider_env,
                 "OPENAI_NEWS_MODEL": "gpt-5.4-mini",
                 "POWERTOOLS_SERVICE_NAME": "news-collector",
             },
@@ -317,6 +334,8 @@ class ApiStack(Stack):
         )
         openai_api_key_secret.grant_read(self.news_collector_fn)
         openai_api_key_secret.grant_read(self.ai_analyzer_fn)
+        newsapi_key_secret.grant_read(self.news_collector_fn)
+        finnhub_key_secret.grant_read(self.news_collector_fn)
 
         watchlist_seed_provider = cr.Provider(
             self,

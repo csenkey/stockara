@@ -16,13 +16,11 @@ import structlog
 from openai import OpenAI
 
 from src.db.connection import DatabasePool, store
-from src.services.secrets import get_openai_api_key
+from src.services.secrets import get_openai_api_key, get_provider_api_key
 
 logger = structlog.get_logger(__name__)
 
 # Configuration from environment variables
-NEWSAPI_KEY = os.environ.get("NEWSAPI_KEY", "")
-FINNHUB_KEY = os.environ.get("FINNHUB_KEY", "")
 POLL_INTERVAL_MINUTES = int(os.environ.get("NEWS_POLL_INTERVAL_MINUTES", "15"))
 OPENAI_NEWS_MODEL = os.environ.get("OPENAI_NEWS_MODEL", "gpt-5.4-mini")
 
@@ -44,6 +42,24 @@ def compute_title_source_hash(title: str, source: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
+def _newsapi_key() -> str | None:
+    return get_provider_api_key(
+        "newsapi",
+        "NEWSAPI_KEY",
+        "NEWSAPI_KEY_SECRET_NAME",
+        supported_json_keys=("NEWSAPI_KEY", "newsapi_key", "api_key"),
+    )
+
+
+def _finnhub_key() -> str | None:
+    return get_provider_api_key(
+        "finnhub",
+        "FINNHUB_KEY",
+        "FINNHUB_KEY_SECRET_NAME",
+        supported_json_keys=("FINNHUB_KEY", "finnhub_key", "api_key"),
+    )
+
+
 def fetch_newsapi_articles() -> list[dict[str, Any]]:
     """Fetch recent stock-related articles from NewsAPI.
 
@@ -53,13 +69,18 @@ def fetch_newsapi_articles() -> list[dict[str, Any]]:
     """
     import requests
 
+    api_key = _newsapi_key()
+    if not api_key:
+        logger.error("NewsAPI fetch skipped", error="NEWSAPI key is not configured")
+        return []
+
     url = "https://newsapi.org/v2/everything"
     params = {
         "q": "stocks OR stock market OR earnings OR NYSE OR NASDAQ",
         "language": "en",
         "sortBy": "publishedAt",
         "pageSize": 50,
-        "apiKey": NEWSAPI_KEY,
+        "apiKey": api_key,
     }
 
     try:
@@ -100,11 +121,13 @@ def fetch_finnhub_articles() -> list[dict[str, Any]]:
     """
     import requests
 
+    api_key = _finnhub_key()
+    if not api_key:
+        logger.error("Finnhub fetch skipped", error="Finnhub key is not configured")
+        return []
+
     url = "https://finnhub.io/api/v1/news"
-    params = {
-        "category": "general",
-        "token": FINNHUB_KEY,
-    }
+    params = {"category": "general", "token": api_key}
 
     try:
         response = requests.get(url, params=params, timeout=30)

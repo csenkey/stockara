@@ -2,15 +2,17 @@
 
 from unittest.mock import MagicMock, patch
 
-from backend.src.services.secrets import get_openai_api_key
+from backend.src.services.secrets import get_openai_api_key, get_provider_api_key
 
 
 def setup_function():
     get_openai_api_key.cache_clear()
+    get_provider_api_key.cache_clear()
 
 
 def teardown_function():
     get_openai_api_key.cache_clear()
+    get_provider_api_key.cache_clear()
 
 
 def test_get_openai_api_key_prefers_direct_env(monkeypatch):
@@ -85,3 +87,27 @@ def test_get_openai_api_key_returns_none_when_secret_unavailable(monkeypatch):
 
     with patch("backend.src.services.secrets.boto3.client", return_value=secrets_client):
         assert get_openai_api_key() is None
+
+
+def test_get_provider_api_key_fetches_supported_json_field(monkeypatch):
+    monkeypatch.delenv("NEWSAPI_KEY", raising=False)
+    monkeypatch.setenv("NEWSAPI_KEY_SECRET_NAME", "stockara/prod/newsapi-key-current")
+    secrets_client = MagicMock()
+    secrets_client.get_secret_value.return_value = {
+        "SecretString": '{"newsapi_key": "news-secret"}'
+    }
+
+    with patch("backend.src.services.secrets.boto3.client", return_value=secrets_client):
+        assert (
+            get_provider_api_key(
+                "newsapi",
+                "NEWSAPI_KEY",
+                "NEWSAPI_KEY_SECRET_NAME",
+                supported_json_keys=("NEWSAPI_KEY", "newsapi_key", "api_key"),
+            )
+            == "news-secret"
+        )
+
+    secrets_client.get_secret_value.assert_called_once_with(
+        SecretId="stockara/prod/newsapi-key-current"
+    )

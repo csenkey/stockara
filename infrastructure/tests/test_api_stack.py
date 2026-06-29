@@ -36,6 +36,25 @@ def test_calendar_collector_lambdas_and_schedules_are_created():
     template.has_resource_properties(
         "AWS::Lambda::Function",
         {
+            "FunctionName": "stockara-codex-test-news-collector",
+            "Handler": "src.collectors.news_collector.handler",
+            "Environment": {
+                "Variables": assertions.Match.object_like(
+                    {
+                        "NEWSAPI_KEY_SECRET_NAME": (
+                            "stockara/codex-test/newsapi-key-current"
+                        ),
+                        "FINNHUB_KEY_SECRET_NAME": (
+                            "stockara/codex-test/finnhub-key-current"
+                        ),
+                    }
+                )
+            },
+        },
+    )
+    template.has_resource_properties(
+        "AWS::Lambda::Function",
+        {
             "FunctionName": "stockara-codex-test-earnings-collector",
             "Handler": "src.collectors.earnings_collector.handler",
             "Environment": {
