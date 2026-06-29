@@ -60,6 +60,11 @@ OPTIONAL_LIST_FIELDS = (
     "key_static_risks",
 )
 
+OPTIONAL_PROVIDER_SYMBOL_FIELDS = (
+    "provider_symbols",
+    "provider_symbol_sources",
+)
+
 SYNC_FIELDS = (
     "company_name",
     "sector",
@@ -71,6 +76,8 @@ SYNC_FIELDS = (
     "metadata_as_of",
     *OPTIONAL_TEXT_FIELDS,
     *OPTIONAL_LIST_FIELDS,
+    *OPTIONAL_PROVIDER_SYMBOL_FIELDS,
+    "provider_symbol_updated_at",
     "is_active",
     "is_sell_alert_watch",
 )
@@ -85,6 +92,19 @@ def _required(row: dict[str, str], field: str, ticker: str) -> str:
 
 def _split_list(value: str | None) -> list[str]:
     return [part.strip() for part in (value or "").split("|") if part.strip()]
+
+
+def _split_provider_map(value: str | None) -> dict[str, str]:
+    entries: dict[str, str] = {}
+    for part in _split_list(value):
+        if ":" not in part:
+            continue
+        provider, symbol = part.split(":", 1)
+        provider = provider.strip().lower()
+        symbol = symbol.strip()
+        if provider and symbol:
+            entries[provider] = symbol
+    return entries
 
 
 def _validate_header(fieldnames: list[str] | None) -> None:
@@ -135,6 +155,14 @@ def _build_stock_item(row: dict[str, str], sell_alert_tickers: set[str]) -> dict
         values = _split_list(row.get(field))
         if values:
             item[field] = values
+
+    for field in OPTIONAL_PROVIDER_SYMBOL_FIELDS:
+        values = _split_provider_map(row.get(field))
+        if values:
+            item[field] = values
+    provider_symbol_updated_at = (row.get("provider_symbol_updated_at") or "").strip()
+    if provider_symbol_updated_at:
+        item["provider_symbol_updated_at"] = provider_symbol_updated_at
 
     return item
 

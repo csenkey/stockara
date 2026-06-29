@@ -1,5 +1,7 @@
 """Dividend calendar collector for Phase 1 signals."""
 
+import os
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -10,12 +12,31 @@ import structlog
 import yfinance as yf
 
 from src.db.connection import DatabasePool, store
+from src.models.schemas import CollectionOutputCounts, CollectionTaskType
+from src.services.collection_manifest import (
+    complete_task,
+    find_task,
+    load_manifest,
+    mark_task_running,
+    write_manifest,
+)
 
 logger = structlog.get_logger(__name__)
 
 CLOUDWATCH_NAMESPACE = "StockMonitoring"
 DEFAULT_HISTORY_LIMIT = 10
 MAX_TICKERS_PER_RUN = 50
+COLLECTION_MANIFEST_BUCKET = os.environ.get(
+    "COLLECTION_MANIFEST_BUCKET",
+    os.environ.get("STOCKARA_ARTIFACT_BUCKET", ""),
+)
+
+
+@dataclass
+class ManifestTaskRun:
+    bucket: str
+    key: str
+    task_id: str
 
 
 def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
@@ -23,8 +44,10 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
     event = event or {}
     log = logger.bind(lambda_event=event)
     log.info("dividend_collector_started")
+    manifest_task_run: ManifestTaskRun | None = None
     DatabasePool.initialize()
     try:
+        manifest_task_run = _prepare_manifest_task_run(event, context)
         stocks = _select_stocks(store.active_stock_metadata(), event)
         stored_count = 0
         failed_tickers: list[str] = []
@@ -53,14 +76,26 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
             events_collected=stored_count,
             failed_ticker_count=len(failed_tickers),
         )
+        if manifest_task_run:
+            _complete_manifest_task_run(
+                manifest_task_run,
+                selected_ticker_count=len(stocks),
+                stored_count=stored_count,
+                failed_tickers=failed_tickers,
+            )
         return {
             "statusCode": 200,
             "body": {
+                "status": "partial" if failed_tickers else "success",
                 "events_collected": stored_count,
                 "selected_ticker_count": len(stocks),
                 "failed_tickers": failed_tickers,
             },
         }
+    except Exception as exc:
+        if manifest_task_run:
+            _fail_manifest_task_run(manifest_task_run, str(exc))
+        raise
     finally:
         DatabasePool.close()
 
@@ -71,6 +106,81 @@ def _select_stocks(stocks: list[dict[str, Any]], event: dict[str, Any]) -> list[
         stocks = [stock for stock in stocks if stock["ticker"] in requested]
     max_tickers = int(event.get("max_tickers", MAX_TICKERS_PER_RUN))
     return sorted(stocks, key=lambda stock: stock["ticker"])[:max_tickers]
+
+
+def _prepare_manifest_task_run(
+    event: dict[str, Any],
+    context: Any,
+) -> ManifestTaskRun | None:
+    if event.get("mode") != "manifest_task":
+        return None
+    bucket = str(event.get("manifest_bucket") or COLLECTION_MANIFEST_BUCKET).strip()
+    key = str(event.get("manifest_key") or "").strip()
+    task_id = str(event.get("task_id") or "").strip()
+    if not bucket or not key or not task_id:
+        raise ValueError("manifest_bucket, manifest_key, and task_id are required")
+
+    manifest = load_manifest(bucket, key)
+    task = find_task(manifest, task_id)
+    if task.task_type != CollectionTaskType.DIVIDEND:
+        raise ValueError(f"Task {task_id} is not a dividend collection task")
+    event["tickers"] = task.tickers
+    event["max_tickers"] = len(task.tickers)
+    lease_owner = getattr(context, "aws_request_id", None) if context else None
+    mark_task_running(manifest, task_id, lease_owner=lease_owner)
+    write_manifest(bucket, key, manifest)
+    return ManifestTaskRun(bucket=bucket, key=key, task_id=task_id)
+
+
+def _complete_manifest_task_run(
+    task_run: ManifestTaskRun,
+    selected_ticker_count: int,
+    stored_count: int,
+    failed_tickers: list[str],
+) -> None:
+    try:
+        failed_count = len(set(failed_tickers))
+        output_counts = CollectionOutputCounts(
+            records_fetched=stored_count,
+            records_written=stored_count,
+            failed_records=failed_count,
+            successful_tickers=max(selected_ticker_count - failed_count, 0),
+            failed_tickers=failed_count,
+        )
+        manifest = load_manifest(task_run.bucket, task_run.key)
+        complete_task(
+            manifest,
+            task_run.task_id,
+            output_counts,
+            failed=failed_count > 0,
+            failure_reason="partial_ticker_failure" if failed_count else None,
+        )
+        write_manifest(task_run.bucket, task_run.key, manifest)
+    except Exception as exc:
+        logger.warning(
+            "dividend_manifest_task_completion_failed",
+            task_id=task_run.task_id,
+            error=str(exc),
+        )
+
+
+def _fail_manifest_task_run(task_run: ManifestTaskRun, reason: str) -> None:
+    try:
+        manifest = load_manifest(task_run.bucket, task_run.key)
+        complete_task(
+            manifest,
+            task_run.task_id,
+            CollectionOutputCounts(),
+            failed=True,
+            failure_reason=reason,
+        )
+        write_manifest(task_run.bucket, task_run.key, manifest)
+    except Exception as exc:
+        logger.warning(
+            "dividend_manifest_task_failure_write_failed",
+            task_id=task_run.task_id,
+            error=str(exc),
+        )
 
 
 def fetch_dividend_events(

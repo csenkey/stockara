@@ -34,6 +34,9 @@ def _complete_row(**overrides):
         "website": "https://www.apple.com",
         "founded_year": "1976",
         "headquarters": "Cupertino, California",
+        "provider_symbols": "stooq:aapl.us|alpha_vantage:AAPL",
+        "provider_symbol_sources": "stooq:manual|alpha_vantage:canonical",
+        "provider_symbol_updated_at": "2026-06-20T00:00:00Z",
     }
     row.update(overrides)
     return row
@@ -62,6 +65,12 @@ def test_build_stock_item_includes_static_metadata():
         "Supply chain concentration",
         "Regulatory pressure",
     ]
+    assert item["provider_symbols"] == {
+        "stooq": "aapl.us",
+        "alpha_vantage": "AAPL",
+    }
+    assert item["provider_symbol_sources"]["stooq"] == "manual"
+    assert item["provider_symbol_updated_at"] == "2026-06-20T00:00:00Z"
     assert item["is_sell_alert_watch"] is True
 
 

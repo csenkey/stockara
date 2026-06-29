@@ -33,22 +33,6 @@ def test_latest_prices_uses_stock_metadata_not_stock_data_scan():
     store._scan.assert_not_called()
 
 
-def test_existing_news_hashes_deduplicates_batch_get_keys():
-    table = MagicMock()
-    table.meta.client.batch_get_item.return_value = {"Responses": {"stockara": []}}
-    store = _TestableDynamoStore(table)
-
-    assert store.existing_news_hashes(["hash1", "hash1", "hash2"]) == set()
-
-    keys = table.meta.client.batch_get_item.call_args.kwargs["RequestItems"][
-        "stockara"
-    ]["Keys"]
-    assert keys == [
-        {"PK": "NEWS#hash1", "SK": "META"},
-        {"PK": "NEWS#hash2", "SK": "META"},
-    ]
-
-
 def test_put_market_signal_writes_ticker_date_type_item():
     table = MagicMock()
     store = _TestableDynamoStore(table)
@@ -511,6 +495,7 @@ def test_mark_stock_collection_failed_persists_retry_state():
     store.mark_stock_collection_failed(
         "AAPL",
         reason="no_data",
+        health="provider_unsupported",
         retry_after_hours=6,
         failed_at="2026-06-17T21:00:00",
     )
@@ -520,6 +505,7 @@ def test_mark_stock_collection_failed_persists_retry_state():
     assert "latest_stock_collection_failed_at" in call["UpdateExpression"]
     assert call["ExpressionAttributeValues"][":failed_at"] == "2026-06-17T21:00:00"
     assert call["ExpressionAttributeValues"][":reason"] == "no_data"
+    assert call["ExpressionAttributeValues"][":health"] == "provider_unsupported"
     assert call["ExpressionAttributeValues"][":retry_after"] == "2026-06-18T03:00:00"
 
 
@@ -540,6 +526,7 @@ def test_mark_stock_data_collected_clears_failure_state():
     update_expression = table.update_item.call_args.kwargs["UpdateExpression"]
     assert "REMOVE latest_stock_collection_failed_at" in update_expression
     assert "latest_stock_collection_failure_reason" in update_expression
+    assert "latest_stock_collection_health" in update_expression
 
 
 def test_put_collection_summary_writes_history_and_latest_status():

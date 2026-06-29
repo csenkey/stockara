@@ -45,6 +45,11 @@ class MonitoringStack(Stack):
             "dividend_collector": resource_name(
                 deployment_stage, "stockara-dividend-collector", "dividend-collector"
             ),
+            "collection_distributor": resource_name(
+                deployment_stage,
+                "stockara-collection-distributor",
+                "collection-distributor",
+            ),
             "publisher": resource_name(
                 deployment_stage,
                 "stockara-phase1-analyzer-publisher",
@@ -186,6 +191,106 @@ class MonitoringStack(Stack):
             )
             alarm.add_alarm_action(cw_actions.SnsAction(self.alerts_topic))
 
+        manifest_health_alarms = [
+            (
+                "CollectionManifestStaleAlarm",
+                "stockara-collection-manifest-stale",
+                "collection-manifest-stale",
+                "collection_manifest_age_minutes",
+                "Maximum",
+                Duration.hours(1),
+                90,
+                cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+                "Daily collection manifest has not been refreshed recently",
+            ),
+            (
+                "CollectionManifestIncompleteAlarm",
+                "stockara-collection-manifest-incomplete",
+                "collection-manifest-incomplete",
+                "collection_manifest_incomplete_tasks",
+                "Minimum",
+                Duration.hours(4),
+                1,
+                cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                "Collection manifest has had incomplete tasks for multiple hours",
+            ),
+            (
+                "CollectionManifestRetryExhaustedAlarm",
+                "stockara-collection-manifest-retry-exhausted",
+                "collection-manifest-retry-exhausted",
+                "collection_manifest_retry_exhausted_tasks",
+                "Maximum",
+                Duration.hours(1),
+                1,
+                cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                "One or more collection tasks exhausted their retry budget",
+            ),
+            (
+                "CollectionManifestLowCoverageGatesAlarm",
+                "stockara-collection-manifest-low-coverage-gates",
+                "collection-manifest-low-coverage-gates",
+                "collection_manifest_low_coverage_gates",
+                "Minimum",
+                Duration.hours(4),
+                1,
+                cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                "Collection coverage gates have remained below threshold",
+            ),
+            (
+                "CollectionManifestLowCoveragePercentAlarm",
+                "stockara-collection-manifest-low-coverage-percent",
+                "collection-manifest-low-coverage-percent",
+                "collection_manifest_coverage_percent",
+                "Minimum",
+                Duration.hours(4),
+                90,
+                cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+                "Collection manifest coverage remained below 90%",
+            ),
+            (
+                "CollectionProviderFailuresAlarm",
+                "stockara-collection-provider-failures",
+                "collection-provider-failures",
+                "collection_provider_failure_tasks",
+                "Maximum",
+                Duration.hours(1),
+                1,
+                cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                "One or more collection tasks are blocked by provider failures",
+            ),
+        ]
+
+        for (
+            construct_id,
+            prod_alarm_name,
+            staged_alarm_name,
+            metric_name,
+            statistic,
+            period,
+            threshold,
+            comparison_operator,
+            description,
+        ) in manifest_health_alarms:
+            alarm = cloudwatch.Alarm(
+                self,
+                construct_id,
+                alarm_name=resource_name(
+                    deployment_stage, prod_alarm_name, staged_alarm_name
+                ),
+                alarm_description=description,
+                metric=cloudwatch.Metric(
+                    namespace="StockMonitoring",
+                    metric_name=metric_name,
+                    statistic=statistic,
+                    period=period,
+                ),
+                threshold=threshold,
+                evaluation_periods=1,
+                comparison_operator=comparison_operator,
+                treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+            )
+            alarm.add_alarm_action(cw_actions.SnsAction(self.alerts_topic))
+
         missing_metric_alarms = [
             (
                 "TopPicksMissingMetricAlarm",
@@ -222,6 +327,15 @@ class MonitoringStack(Stack):
                 "StockMonitoring",
                 Duration.hours(26),
                 "No news collection completeness metric has arrived in the expected window",
+            ),
+            (
+                "CollectionManifestMissingMetricAlarm",
+                "stockara-collection-manifest-missing-metric",
+                "collection-manifest-missing-metric",
+                "collection_manifest_incomplete_tasks",
+                "StockMonitoring",
+                Duration.hours(2),
+                "No collection manifest health metric has arrived in the expected window",
             ),
         ]
 
@@ -315,6 +429,43 @@ class MonitoringStack(Stack):
                         namespace="StockMonitoring",
                         metric_name="news_article_failures",
                         statistic="Sum",
+                        period=Duration.hours(1),
+                    ),
+                ],
+            ),
+            cloudwatch.GraphWidget(
+                title="Collection manifest health",
+                left=[
+                    cloudwatch.Metric(
+                        namespace="StockMonitoring",
+                        metric_name="collection_manifest_incomplete_tasks",
+                        statistic="Maximum",
+                        period=Duration.hours(1),
+                    ),
+                    cloudwatch.Metric(
+                        namespace="StockMonitoring",
+                        metric_name="collection_manifest_retry_exhausted_tasks",
+                        statistic="Maximum",
+                        period=Duration.hours(1),
+                    ),
+                    cloudwatch.Metric(
+                        namespace="StockMonitoring",
+                        metric_name="collection_provider_failure_tasks",
+                        statistic="Maximum",
+                        period=Duration.hours(1),
+                    ),
+                ],
+                right=[
+                    cloudwatch.Metric(
+                        namespace="StockMonitoring",
+                        metric_name="collection_manifest_coverage_percent",
+                        statistic="Minimum",
+                        period=Duration.hours(1),
+                    ),
+                    cloudwatch.Metric(
+                        namespace="StockMonitoring",
+                        metric_name="collection_manifest_age_minutes",
+                        statistic="Maximum",
                         period=Duration.hours(1),
                     ),
                 ],

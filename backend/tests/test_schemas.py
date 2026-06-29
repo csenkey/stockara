@@ -8,6 +8,15 @@ import pytest
 from src.models.schemas import (
     CandidateAnalysis,
     CandidateSignal,
+    CollectionCoverageGate,
+    CollectionManifest,
+    CollectionManifestSummary,
+    CollectionOutputCounts,
+    CollectionProviderAttempt,
+    CollectionTask,
+    CollectionTaskStatus,
+    CollectionTaskType,
+    CollectionTickerHealth,
     CompanySize,
     Recommendation,
     RiskLevel,
@@ -16,6 +25,7 @@ from src.models.schemas import (
     SignalType,
     Stock,
     StockData,
+    collection_manifest_s3_key,
 )
 
 
@@ -25,8 +35,10 @@ def test_stock_validates_sector_and_ticker():
         company_name="Apple Inc.",
         sector="Technology",
         company_size=CompanySize.BLUE_CHIP,
+        provider_symbols={"stooq": "aapl.us", "alpha_vantage": "AAPL"},
     )
     assert stock.ticker == "AAPL"
+    assert stock.provider_symbols["stooq"] == "aapl.us"
 
 
 def test_stock_accepts_static_business_metadata():
@@ -120,3 +132,117 @@ def test_candidate_analysis_models_shortlisted_ai_result():
         negative_score=10,
     )
     assert analysis.recommendation == Recommendation.BUY
+
+
+def test_collection_manifest_s3_key_uses_daily_partition():
+    assert (
+        collection_manifest_s3_key(date(2026, 6, 20))
+        == "collection_manifest/2026-06-20.json"
+    )
+
+
+def test_collection_task_normalizes_tickers_and_tracks_attempt_output():
+    now = datetime(2026, 6, 20, 8, 0, 0)
+
+    task = CollectionTask(
+        task_id="price-AAPL-MSFT",
+        task_type=CollectionTaskType.PRICE,
+        status=CollectionTaskStatus.RETRY_WAIT,
+        tickers=["aapl", "msft"],
+        ticker_range_start="aapl",
+        ticker_range_end="msft",
+        provider="alpha_vantage",
+        provider_attempts=[
+            CollectionProviderAttempt(
+                provider="yfinance",
+                provider_symbol="AAPL",
+                status=CollectionTaskStatus.FAILED,
+                health=CollectionTickerHealth.RATE_LIMITED,
+                attempted_at=now,
+                completed_at=now,
+                failure_reason="rate_limited",
+            )
+        ],
+        ticker_health={"aapl": CollectionTickerHealth.RATE_LIMITED},
+        attempts=1,
+        max_attempts=3,
+        next_retry_at=datetime(2026, 6, 20, 9, 0, 0),
+        created_at=now,
+        updated_at=now,
+        failure_reason="rate_limited",
+        output_counts=CollectionOutputCounts(
+            records_fetched=2,
+            records_written=1,
+            duplicate_records=1,
+            successful_tickers=1,
+            failed_tickers=1,
+        ),
+    )
+
+    assert task.tickers == ["AAPL", "MSFT"]
+    assert task.ticker_range_start == "AAPL"
+    assert task.output_counts.records_written == 1
+    assert task.ticker_health["aapl"] == CollectionTickerHealth.RATE_LIMITED
+    assert task.provider_attempts[0].health == CollectionTickerHealth.RATE_LIMITED
+    assert task.provider_attempts[0].failure_reason == "rate_limited"
+
+
+def test_collection_manifest_serializes_json_contract():
+    generated_at = datetime(2026, 6, 20, 7, 30, 0)
+    manifest = CollectionManifest(
+        manifest_date=date(2026, 6, 20),
+        generated_at=generated_at,
+        updated_at=generated_at,
+        analysis_not_before=datetime(2026, 6, 20, 22, 0, 0),
+        active_ticker_count=1000,
+        task_types=[
+            CollectionTaskType.PRICE,
+            CollectionTaskType.NEWS,
+            CollectionTaskType.EARNINGS,
+            CollectionTaskType.DIVIDEND,
+        ],
+        tasks=[
+            CollectionTask(
+                task_id="news-general-0001",
+                task_type=CollectionTaskType.NEWS,
+                created_at=generated_at,
+                updated_at=generated_at,
+            )
+        ],
+        summary=CollectionManifestSummary(
+            total_tasks=1,
+            pending_tasks=1,
+            total_tickers=1000,
+            successful_tickers=0,
+            coverage_ratio=Decimal("0"),
+            coverage_gates=[
+                CollectionCoverageGate(
+                    name="price_freshness",
+                    passed=False,
+                    observed_value=Decimal("0.0"),
+                    required_value=Decimal("0.9"),
+                    unit="ratio",
+                    message="At least 90% of active tickers need fresh prices.",
+                )
+            ],
+        ),
+    )
+
+    payload = manifest.model_dump(mode="json")
+
+    assert manifest.s3_key == "collection_manifest/2026-06-20.json"
+    assert payload["manifest_date"] == "2026-06-20"
+    assert payload["task_types"] == ["price", "news", "earnings", "dividend"]
+    assert payload["tasks"][0]["status"] == "pending"
+    assert payload["summary"]["coverage_gates"][0]["required_value"] == "0.9"
+
+
+def test_collection_manifest_rejects_invalid_ticker():
+    with pytest.raises(ValueError, match="Ticker must contain only"):
+        CollectionTask(
+            task_id="bad",
+            task_type=CollectionTaskType.PRICE,
+            tickers=["AAPL!"],
+            created_at=datetime(2026, 6, 20, 7, 30, 0),
+            updated_at=datetime(2026, 6, 20, 7, 30, 0),
+        )

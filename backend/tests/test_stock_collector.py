@@ -6,7 +6,7 @@ duplicate detection, and malformed data handling.
 Requirements: 1.3, 1.6, 1.7
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
@@ -45,6 +45,8 @@ from backend.src.collectors.stock_collector import (
     _stooq_symbol,
     _store_stooq_backfill_records,
 )
+from src.collectors.collection_distributor import build_manifest
+from src.models.schemas import CollectionTaskStatus, CollectionTaskType
 
 
 class _RemainingTimeContext:
@@ -417,6 +419,37 @@ class TestDueStockSelection:
 
         assert [stock["ticker"] for stock in selected] == ["AAPL", "NVDA"]
 
+    def test_select_due_stocks_does_not_let_failed_tickers_starve_healthy_tickers(self):
+        stocks = [
+            {
+                "ticker": "BROKEN",
+                "latest_stock_collection_failed_at": "2026-06-19T00:00:00+00:00",
+                "latest_stock_data_date": "2026-06-10",
+            },
+            {"ticker": "AAPL"},
+            {"ticker": "NVDA", "latest_stock_data_date": "2026-06-14"},
+        ]
+
+        selected = _select_due_stocks(stocks, {"max_tickers": 2})
+
+        assert [stock["ticker"] for stock in selected] == ["AAPL", "NVDA"]
+
+    def test_select_due_stocks_skips_failed_tickers_until_retry_window(self):
+        stocks = [
+            {
+                "ticker": "BROKEN",
+                "latest_stock_collection_failed_at": (
+                    datetime.now(timezone.utc).isoformat()
+                ),
+                "latest_stock_data_date": "2026-06-10",
+            },
+            {"ticker": "AAPL"},
+        ]
+
+        selected = _select_due_stocks(stocks, {"max_tickers": 25})
+
+        assert [stock["ticker"] for stock in selected] == ["AAPL"]
+
     def test_select_due_stocks_honors_explicit_tickers(self):
         stocks = [
             {"ticker": "MSFT", "latest_stock_data_date": "2026-06-15"},
@@ -470,12 +503,13 @@ class TestDueStockSelection:
 
             result = handler({"max_tickers": 10}, context)
 
-        assert result["statusCode"] == 200
-        assert "5 deferred" in result["body"]
-        process_batch.assert_called_once()
-        summary = record_summary.call_args.args[0]
-        assert summary["selected_ticker_count"] == 5
-        assert summary["successful_ticker_count"] == 5
+            assert result["statusCode"] == 200
+            assert "5 deferred" in result["body"]["message"]
+            assert result["body"]["deferred_ticker_count"] == 5
+            process_batch.assert_called_once()
+            summary = record_summary.call_args.args[0]
+            assert summary["selected_ticker_count"] == 5
+            assert summary["successful_ticker_count"] == 5
 
     def test_historical_backfill_restores_s3_archive_without_provider_fetch(self):
         stocks = [{"ticker": "AAPL"}]
@@ -1174,11 +1208,13 @@ class TestCollectionSummary:
         mock_store.mark_stock_collection_failed.assert_any_call(
             "MSFT",
             reason="malformed",
+            health="transient_failure",
             retry_after_hours=6,
         )
         mock_store.mark_stock_collection_failed.assert_any_call(
             "NVDA",
             reason="no_data",
+            health="provider_unsupported",
             retry_after_hours=6,
         )
 
@@ -1287,9 +1323,10 @@ class TestAlphaVantageFallback:
 
     @patch("backend.src.collectors.stock_collector._store_records")
     @patch("backend.src.collectors.stock_collector._fetch_alpha_vantage_with_retry")
-    @patch("backend.src.collectors.stock_collector.ALPHA_VANTAGE_API_KEY", "test-key")
-    def test_fallback_success(self, mock_fetch_av, mock_store):
+    @patch("backend.src.collectors.stock_collector._alpha_vantage_api_key")
+    def test_fallback_success(self, mock_api_key, mock_fetch_av, mock_store):
         """Fallback collects data for failed tickers."""
+        mock_api_key.return_value = "test-key"
         mock_fetch_av.return_value = [{"ticker": "AAPL"}]
         mock_store.return_value = StoreResult(inserted_records=1)
 
@@ -1297,19 +1334,21 @@ class TestAlphaVantageFallback:
         assert result == 2
         assert mock_fetch_av.call_count == 2
 
+    @patch("backend.src.collectors.stock_collector._alpha_vantage_api_key")
     @patch("backend.src.collectors.stock_collector._fetch_alpha_vantage_with_retry")
-    @patch("backend.src.collectors.stock_collector.ALPHA_VANTAGE_API_KEY", "")
-    def test_fallback_no_api_key(self, mock_fetch_av):
+    def test_fallback_no_api_key(self, mock_fetch_av, mock_api_key):
         """Returns 0 when no API key is configured."""
+        mock_api_key.return_value = None
         result = _alpha_vantage_fallback(["AAPL"])
         assert result == 0
         mock_fetch_av.assert_not_called()
 
     @patch("backend.src.collectors.stock_collector._store_records")
     @patch("backend.src.collectors.stock_collector._fetch_alpha_vantage_with_retry")
-    @patch("backend.src.collectors.stock_collector.ALPHA_VANTAGE_API_KEY", "test-key")
-    def test_fallback_partial_success(self, mock_fetch_av, mock_store):
+    @patch("backend.src.collectors.stock_collector._alpha_vantage_api_key")
+    def test_fallback_partial_success(self, mock_api_key, mock_fetch_av, mock_store):
         """Some tickers succeed via fallback, some fail."""
+        mock_api_key.return_value = "test-key"
         mock_fetch_av.side_effect = [
             [{"ticker": "AAPL"}],  # AAPL succeeds
             None,                   # MSFT fails
@@ -1327,7 +1366,6 @@ class TestFetchAlphaVantageWithRetry:
 
     @patch("backend.src.collectors.stock_collector.time.sleep")
     @patch("backend.src.collectors.stock_collector.requests.get")
-    @patch("backend.src.collectors.stock_collector.ALPHA_VANTAGE_API_KEY", "test-key")
     def test_success_first_attempt(self, mock_get, mock_sleep):
         """Returns records on first successful attempt."""
         mock_response = MagicMock()
@@ -1343,12 +1381,13 @@ class TestFetchAlphaVantageWithRetry:
         mock_response.raise_for_status = MagicMock()
         mock_get.return_value = mock_response
 
-        result = _fetch_alpha_vantage_with_retry("AAPL")
+        result = _fetch_alpha_vantage_with_retry("AAPL", api_key="test-key")
         assert result is not None
         assert len(result) == 1
         assert result[0]["ticker"] == "AAPL"
         assert result[0]["close_price"] == Decimal("153.0")
         assert result[0]["data_provider"] == "alpha_vantage"
+        assert result[0]["provider_symbol"] == "AAPL"
         assert result[0]["provider_priority"] == "fallback"
         assert result[0]["price_adjustment"] == "unadjusted"
         assert result[0]["fetch_period"] == "compact"
@@ -1360,7 +1399,34 @@ class TestFetchAlphaVantageWithRetry:
 
     @patch("backend.src.collectors.stock_collector.time.sleep")
     @patch("backend.src.collectors.stock_collector.requests.get")
-    @patch("backend.src.collectors.stock_collector.ALPHA_VANTAGE_API_KEY", "test-key")
+    def test_alpha_vantage_uses_provider_symbol_mapping(self, mock_get, mock_sleep):
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "Time Series (Daily)": {
+                "2025-01-15": {
+                    "1. open": "150.0", "2. high": "155.0",
+                    "3. low": "149.0", "4. close": "153.0",
+                    "5. volume": "1000000",
+                }
+            }
+        }
+        mock_response.raise_for_status = MagicMock()
+        mock_get.return_value = mock_response
+
+        result = _fetch_alpha_vantage_with_retry(
+            "BRK.B",
+            api_key="test-key",
+            stock_metadata={"provider_symbols": {"alpha_vantage": "BRK-B"}},
+        )
+
+        assert result is not None
+        assert result[0]["ticker"] == "BRK.B"
+        assert result[0]["provider_symbol"] == "BRK-B"
+        assert mock_get.call_args.kwargs["params"]["symbol"] == "BRK-B"
+        mock_sleep.assert_not_called()
+
+    @patch("backend.src.collectors.stock_collector.time.sleep")
+    @patch("backend.src.collectors.stock_collector.requests.get")
     def test_alpha_vantage_records_include_metadata_exchange_currency(
         self, mock_get, mock_sleep
     ):
@@ -1380,6 +1446,7 @@ class TestFetchAlphaVantageWithRetry:
 
         result = _fetch_alpha_vantage_with_retry(
             "AAPL",
+            api_key="test-key",
             stock_metadata={"exchange": "NASDAQ", "currency": "USD"},
         )
 
@@ -1390,7 +1457,6 @@ class TestFetchAlphaVantageWithRetry:
 
     @patch("backend.src.collectors.stock_collector.time.sleep")
     @patch("backend.src.collectors.stock_collector.requests.get")
-    @patch("backend.src.collectors.stock_collector.ALPHA_VANTAGE_API_KEY", "test-key")
     def test_retry_on_request_exception(self, mock_get, mock_sleep):
         """Retries on request exception with backoff."""
         import requests as req
@@ -1410,25 +1476,23 @@ class TestFetchAlphaVantageWithRetry:
             mock_response,
         ]
 
-        result = _fetch_alpha_vantage_with_retry("AAPL")
+        result = _fetch_alpha_vantage_with_retry("AAPL", api_key="test-key")
         assert result is not None
         mock_sleep.assert_called_once_with(2)
 
     @patch("backend.src.collectors.stock_collector.time.sleep")
     @patch("backend.src.collectors.stock_collector.requests.get")
-    @patch("backend.src.collectors.stock_collector.ALPHA_VANTAGE_API_KEY", "test-key")
     def test_all_retries_exhausted(self, mock_get, mock_sleep):
         """Returns None after all retries fail."""
         import requests as req
         mock_get.side_effect = req.exceptions.ConnectionError("failed")
 
-        result = _fetch_alpha_vantage_with_retry("AAPL")
+        result = _fetch_alpha_vantage_with_retry("AAPL", api_key="test-key")
         assert result is None
         assert mock_sleep.call_count == 2
 
     @patch("backend.src.collectors.stock_collector.time.sleep")
     @patch("backend.src.collectors.stock_collector.requests.get")
-    @patch("backend.src.collectors.stock_collector.ALPHA_VANTAGE_API_KEY", "test-key")
     def test_api_error_message_triggers_retry(self, mock_get, mock_sleep):
         """API error response triggers retry."""
         error_response = MagicMock()
@@ -1448,7 +1512,7 @@ class TestFetchAlphaVantageWithRetry:
         success_response.raise_for_status = MagicMock()
         mock_get.side_effect = [error_response, success_response]
 
-        result = _fetch_alpha_vantage_with_retry("AAPL")
+        result = _fetch_alpha_vantage_with_retry("AAPL", api_key="test-key")
         assert result is not None
         mock_sleep.assert_called_once_with(2)
 
@@ -1531,12 +1595,20 @@ class TestNoKeyMarketDataFallbacks:
         mock_response.raise_for_status = MagicMock()
         mock_get.return_value = mock_response
 
-        result = _fetch_nasdaq_with_retry("AAPL", {"exchange": "NASDAQ"})
+        result = _fetch_nasdaq_with_retry(
+            "BRK.B",
+            {
+                "exchange": "NYSE",
+                "provider_symbols": {"nasdaq": "BRK.B"},
+            },
+        )
 
         assert result is not None
-        assert result[0]["ticker"] == "AAPL"
+        assert result[0]["ticker"] == "BRK.B"
         assert result[0]["data_provider"] == "nasdaq"
+        assert result[0]["provider_symbol"] == "BRK.B"
         mock_get.assert_called_once()
+        assert "BRK.B" in mock_get.call_args.args[0]
         assert mock_get.call_args.kwargs["params"]["assetclass"] == "stocks"
         assert mock_get.call_args.kwargs["headers"]["Accept"] == "application/json"
         mock_sleep.assert_not_called()
@@ -1555,6 +1627,12 @@ class TestNoKeyMarketDataFallbacks:
     def test_stooq_symbol_uses_us_suffix_for_us_exchanges(self):
         assert _stooq_symbol("AAPL", {"exchange": "NASDAQ"}) == "aapl.us"
         assert _stooq_symbol("BRK.B", {"exchange": "NYSE"}) == "brk-b.us"
+
+    def test_stooq_symbol_prefers_provider_symbol_mapping(self):
+        assert (
+            _stooq_symbol("BRK.B", {"provider_symbols": {"stooq": "brk.b.us"}})
+            == "brk.b.us"
+        )
 
     def test_parse_stooq_csv_rejects_challenge_page(self):
         result = _parse_stooq_csv(
@@ -1726,7 +1804,8 @@ class TestHandler:
 
         result = handler({}, None)
         assert result["statusCode"] == 200
-        assert "2" in result["body"]
+        assert "2" in result["body"]["message"]
+        assert result["body"]["collection_summary"]["successful_ticker_count"] == 2
         mock_metric.assert_any_call("stocks_collected", 2)
         mock_metric.assert_any_call("market_movement_signals_collected", 2)
         mock_movement.assert_called_once_with({"AAPL", "MSFT"})
@@ -1779,6 +1858,68 @@ class TestHandler:
             },
         )
         mock_movement.assert_called_once_with({"AAPL", "MSFT"})
+
+    @patch("backend.src.collectors.stock_collector.write_manifest")
+    @patch("backend.src.collectors.stock_collector.load_manifest")
+    @patch("backend.src.collectors.stock_collector._emit_metric")
+    @patch("backend.src.collectors.stock_collector._compute_and_store_movement_signals")
+    @patch("backend.src.collectors.stock_collector._record_failed_ticker_state")
+    @patch("backend.src.collectors.stock_collector._record_collection_summary")
+    @patch("backend.src.collectors.stock_collector._alpha_vantage_fallback_with_details")
+    @patch("backend.src.collectors.stock_collector._process_batch")
+    @patch("backend.src.collectors.stock_collector._fetch_watchlist")
+    @patch("backend.src.collectors.stock_collector.DatabasePool")
+    def test_handler_processes_manifest_price_task(
+        self,
+        mock_pool,
+        mock_watchlist,
+        mock_batch,
+        mock_fallback,
+        mock_summary,
+        mock_failure_state,
+        mock_movement,
+        mock_metric,
+        mock_load_manifest,
+        mock_write_manifest,
+    ):
+        generated_at = datetime(2026, 6, 20, 7, 30, tzinfo=timezone.utc)
+        manifest = build_manifest(
+            [{"ticker": "AAPL"}, {"ticker": "MSFT"}],
+            manifest_date=date(2026, 6, 20),
+            generated_at=generated_at,
+        )
+        price_task = next(
+            task
+            for task in manifest.tasks
+            if task.task_type == CollectionTaskType.PRICE
+        )
+        mock_load_manifest.return_value = manifest
+        mock_watchlist.return_value = [{"ticker": "AAPL"}, {"ticker": "MSFT"}]
+        mock_batch.return_value = BatchResult(
+            records_inserted=2,
+            collected_tickers={"AAPL", "MSFT"},
+        )
+        mock_movement.return_value = 2
+
+        result = handler(
+            {
+                "mode": "manifest_task",
+                "manifest_bucket": "stockara-artifacts",
+                "manifest_key": "collection_manifest/2026-06-20.json",
+                "task_id": price_task.task_id,
+            },
+            None,
+        )
+
+        assert result["statusCode"] == 200
+        assert result["body"]["collection_summary"]["successful_ticker_count"] == 2
+        assert mock_write_manifest.call_count == 2
+        assert price_task.status == CollectionTaskStatus.SUCCEEDED
+        assert price_task.attempts == 1
+        assert price_task.output_counts.records_written == 2
+        assert manifest.summary.succeeded_tasks == 1
+        mock_batch.assert_called_once()
+        assert mock_batch.call_args.args[0] == ["AAPL", "MSFT"]
 
     @patch("backend.src.collectors.stock_collector._emit_metric")
     @patch("backend.src.collectors.stock_collector._fetch_watchlist")

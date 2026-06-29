@@ -104,7 +104,11 @@ def _extract_secret_string(
         if isinstance(value, str) and value.strip():
             return value.strip()
 
-    string_values = [value.strip() for value in payload.values() if isinstance(value, str) and value.strip()]
+    string_values = [
+        value.strip()
+        for value in payload.values()
+        if isinstance(value, str) and value.strip()
+    ]
     if len(string_values) == 1:
         logger.warning("openai_api_key_secret_used_single_custom_json_field")
         return string_values[0]

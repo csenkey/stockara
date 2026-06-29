@@ -36,6 +36,22 @@ def test_calendar_collector_lambdas_and_schedules_are_created():
     template.has_resource_properties(
         "AWS::Lambda::Function",
         {
+            "FunctionName": "stockara-codex-test-stock-collector",
+            "Handler": "src.collectors.stock_collector.handler",
+            "Environment": {
+                "Variables": assertions.Match.object_like(
+                    {
+                        "ALPHA_VANTAGE_API_KEY_SECRET_NAME": (
+                            "stockara/codex-test/alpha-vantage-api-key-current"
+                        )
+                    }
+                )
+            },
+        },
+    )
+    template.has_resource_properties(
+        "AWS::Lambda::Function",
+        {
             "FunctionName": "stockara-codex-test-news-collector",
             "Handler": "src.collectors.news_collector.handler",
             "Environment": {
@@ -50,6 +66,31 @@ def test_calendar_collector_lambdas_and_schedules_are_created():
                     }
                 )
             },
+        },
+    )
+    template.has_resource_properties(
+        "AWS::Lambda::Function",
+        {
+            "FunctionName": "stockara-codex-test-collection-distributor",
+            "Handler": "src.collectors.collection_distributor.handler",
+            "Environment": {
+                "Variables": assertions.Match.object_like(
+                    {
+                        "POWERTOOLS_SERVICE_NAME": "collection-distributor",
+                        "COLLECTION_PRICE_TASK_CHUNK_SIZE": "10",
+                        "COLLECTION_NEWS_TASK_CHUNK_SIZE": "50",
+                        "COLLECTION_CALENDAR_TASK_CHUNK_SIZE": "50",
+                        "COLLECTION_MAX_TASKS_PER_RUN": "1",
+                    }
+                )
+            },
+        },
+    )
+    template.has_resource_properties(
+        "AWS::Events::Rule",
+        {
+            "Name": "stockara-codex-test-collection-distributor",
+            "ScheduleExpression": "rate(5 minutes)",
         },
     )
     template.has_resource_properties(

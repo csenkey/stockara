@@ -12,6 +12,7 @@ import structlog
 import yfinance as yf
 
 from src.db.connection import DatabasePool, store
+from src.models.schemas import CollectionManifest, collection_manifest_s3_key
 from src.services.secrets import get_openai_api_key
 
 logger = structlog.get_logger(__name__)
@@ -24,6 +25,7 @@ OPENAI_REVIEW_MODEL = os.environ.get("OPENAI_REVIEW_MODEL", "gpt-5.4")
 ARTIFACT_BUCKET = os.environ.get("STOCKARA_ARTIFACT_BUCKET", "")
 SHORTLIST_SIZE = int(os.environ.get("PHASE1_SHORTLIST_SIZE", "50"))
 TOP_PICK_COUNT = int(os.environ.get("PHASE1_TOP_PICK_COUNT", "10"))
+ANALYSIS_BATCH_SIZE = int(os.environ.get("PHASE1_ANALYSIS_BATCH_SIZE", "5"))
 STOCK_FRESHNESS_MAX_AGE_DAYS = int(os.environ.get("PHASE1_STOCK_FRESHNESS_MAX_AGE_DAYS", "3"))
 MIN_HISTORY_CALENDAR_DAYS = int(os.environ.get("PHASE1_MIN_HISTORY_CALENDAR_DAYS", "30"))
 MIN_HISTORY_ROWS = int(os.environ.get("PHASE1_MIN_HISTORY_ROWS", "20"))
@@ -95,6 +97,8 @@ def run_phase1_pipeline(event: dict | None = None) -> dict[str, Any]:
             return _run_analyze_batch_phase(event, run_date)
         if mode == "publish":
             return _run_publish_phase(run_date)
+        if mode == "daily":
+            return _run_daily_orchestration_phase(event, run_date)
         if mode != "full":
             return {"statusCode": 400, "body": f"Unsupported Phase 1 mode: {mode}"}
         return _run_full_phase(run_date)
@@ -103,6 +107,10 @@ def run_phase1_pipeline(event: dict | None = None) -> dict[str, Any]:
 
 
 def _run_full_phase(run_date: date) -> dict[str, Any]:
+    gate_response = _collection_gate_response(run_date)
+    if gate_response:
+        return gate_response
+
     context = _eligible_context(run_date)
     if context.get("response"):
         return context["response"]
@@ -117,7 +125,10 @@ def _run_full_phase(run_date: date) -> dict[str, Any]:
         scores,
         eligible_stocks,
         run_date,
-        data_quality=publication_data_quality(freshness),
+        data_quality=_with_collection_manifest_quality(
+            publication_data_quality(freshness),
+            run_date,
+        ),
         upcoming_earnings=upcoming_earnings_summary(run_date),
         upcoming_dividends=upcoming_dividends_summary(run_date),
     )
@@ -138,6 +149,10 @@ def _run_full_phase(run_date: date) -> dict[str, Any]:
 
 
 def _run_score_phase(run_date: date) -> dict[str, Any]:
+    gate_response = _collection_gate_response(run_date)
+    if gate_response:
+        return gate_response
+
     context = _eligible_context(run_date)
     if context.get("response"):
         return context["response"]
@@ -201,18 +216,96 @@ def _run_analyze_batch_phase(event: dict[str, Any], run_date: date) -> dict[str,
     }
 
 
+def _run_daily_orchestration_phase(
+    event: dict[str, Any],
+    run_date: date,
+) -> dict[str, Any]:
+    """Advance the daily pipeline once collection gates are open.
+
+    This mode is safe for frequent EventBridge invocation: it gates on the
+    manifest, scores once, analyzes only missing shortlisted candidates in
+    bounded batches, publishes once, then no-ops for the rest of the day.
+    """
+    gate_response = _collection_gate_response(run_date)
+    if gate_response:
+        return gate_response
+
+    if _publication_exists_for_date(run_date):
+        return {
+            "statusCode": 200,
+            "body": {
+                "mode": "daily",
+                "stage": "already_published",
+                "publication_date": run_date.isoformat(),
+            },
+        }
+
+    context = _eligible_context(run_date)
+    if context.get("response"):
+        return context["response"]
+
+    scores = store.candidate_scores_for_date(run_date)
+    if not scores:
+        scores = score_candidates(context["eligible_stocks"], run_date)
+        shortlist = select_shortlist(scores)
+        _emit_metric("candidates_scored", len(scores))
+        return {
+            "statusCode": 200,
+            "body": {
+                "mode": "daily",
+                "stage": "scored",
+                "candidate_count": len(scores),
+                "shortlist_count": len(shortlist),
+                "shortlisted_tickers": [score["ticker"] for score in shortlist],
+            },
+        }
+
+    shortlist = select_shortlist(scores)
+    existing_analyses = store.candidate_analysis_for_date(run_date)
+    remaining = _remaining_shortlist_scores(shortlist, existing_analyses)
+    if remaining:
+        batch_size = int(event.get("batch_size", ANALYSIS_BATCH_SIZE))
+        batch = remaining[: max(batch_size, 1)]
+        analyses = analyze_shortlist(batch, context["eligible_stocks"], run_date)
+        _emit_metric("ai_candidates_analyzed", len(analyses))
+        return {
+            "statusCode": 200,
+            "body": {
+                "mode": "daily",
+                "stage": "analyzed_batch",
+                "batch_size": len(batch),
+                "analyzed_count": len(analyses),
+                "remaining_shortlist_count": max(len(remaining) - len(batch), 0),
+                "analyzed_tickers": [analysis["ticker"] for analysis in analyses],
+            },
+        }
+
+    return _publish_from_stored_state(run_date, context, scores, existing_analyses)
+
+
 def _run_publish_phase(run_date: date) -> dict[str, Any]:
+    gate_response = _collection_gate_response(run_date)
+    if gate_response:
+        return gate_response
+
     context = _eligible_context(run_date)
     if context.get("response"):
         return context["response"]
 
     scores = store.candidate_scores_for_date(run_date)
     analyses = store.candidate_analysis_for_date(run_date)
+    return _publish_from_stored_state(run_date, context, scores, analyses)
+
+
+def _publish_from_stored_state(
+    run_date: date,
+    context: dict[str, Any],
+    scores: list[dict[str, Any]],
+    analyses: list[dict[str, Any]],
+) -> dict[str, Any]:
     shortlist_tickers = {score["ticker"] for score in select_shortlist(scores)}
     analyses = [
-        analysis
-        for analysis in analyses
-        if analysis.get("ticker") in shortlist_tickers
+        analysis for analysis in analyses if analysis.get("ticker") in shortlist_tickers
     ]
     if not analyses:
         logger.warning("phase1_publication_suppressed_no_candidate_analyses")
@@ -228,7 +321,10 @@ def _run_publish_phase(run_date: date) -> dict[str, Any]:
         scores,
         context["eligible_stocks"],
         run_date,
-        data_quality=publication_data_quality(freshness),
+        data_quality=_with_collection_manifest_quality(
+            publication_data_quality(freshness),
+            run_date,
+        ),
         upcoming_earnings=upcoming_earnings_summary(run_date),
         upcoming_dividends=upcoming_dividends_summary(run_date),
     )
@@ -242,6 +338,91 @@ def _run_publish_phase(run_date: date) -> dict[str, Any]:
             f"Published {len(payload['top_picks'])} top picks and "
             f"{len(payload['sell_alerts'])} sell alerts"
         ),
+    }
+
+
+def _remaining_shortlist_scores(
+    shortlist: list[dict[str, Any]],
+    analyses: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    analyzed_tickers = {analysis.get("ticker") for analysis in analyses}
+    return [score for score in shortlist if score.get("ticker") not in analyzed_tickers]
+
+
+def _publication_exists_for_date(run_date: date) -> bool:
+    last_publication = _parse_datetime(store.last_publication())
+    return bool(last_publication and last_publication.date() == run_date)
+
+
+def _collection_gate_response(run_date: date) -> dict[str, Any] | None:
+    if not ARTIFACT_BUCKET:
+        return None
+    manifest = _load_collection_manifest(run_date)
+    if manifest is None:
+        logger.warning("phase1_collection_manifest_missing", run_date=run_date.isoformat())
+        _emit_metric("publication_suppressed", 1)
+        return {
+            "statusCode": 200,
+            "body": "Publication suppressed: collection manifest is missing",
+        }
+    failed_gates = [gate for gate in manifest.summary.coverage_gates if not gate.passed]
+    if not failed_gates:
+        return None
+    logger.warning(
+        "phase1_collection_gates_failed",
+        failed_gates=[gate.name for gate in failed_gates],
+        manifest_key=manifest.s3_key,
+    )
+    _emit_metric("publication_suppressed", 1)
+    return {
+        "statusCode": 200,
+        "body": {
+            "status": "suppressed",
+            "reason": "collection_coverage_gates_failed",
+            "manifest_key": manifest.s3_key,
+            "failed_gates": [
+                {
+                    "name": gate.name,
+                    "observed_value": str(gate.observed_value),
+                    "required_value": str(gate.required_value),
+                    "unit": gate.unit,
+                    "message": gate.message,
+                }
+                for gate in failed_gates
+            ],
+        },
+    }
+
+
+def _load_collection_manifest(run_date: date) -> CollectionManifest | None:
+    key = collection_manifest_s3_key(run_date)
+    try:
+        response = boto3.client("s3").get_object(Bucket=ARTIFACT_BUCKET, Key=key)
+        payload = json.loads(response["Body"].read().decode("utf-8"))
+        return CollectionManifest.model_validate(payload)
+    except Exception as exc:
+        logger.warning("collection_manifest_load_failed", key=key, error=str(exc))
+        return None
+
+
+def _with_collection_manifest_quality(
+    data_quality: dict[str, Any],
+    run_date: date,
+) -> dict[str, Any]:
+    if not ARTIFACT_BUCKET:
+        return data_quality
+    manifest = _load_collection_manifest(run_date)
+    if manifest is None:
+        return data_quality
+    return {
+        **data_quality,
+        "collection_manifest": {
+            "manifest_key": manifest.s3_key,
+            "manifest_date": manifest.manifest_date.isoformat(),
+            "updated_at": manifest.updated_at.isoformat(),
+            "active_ticker_count": manifest.active_ticker_count,
+            "summary": manifest.summary.model_dump(mode="json"),
+        },
     }
 
 

@@ -20,11 +20,21 @@ import structlog
 import yfinance as yf
 
 from src.db.connection import DatabasePool, store
+from src.models.schemas import CollectionTaskType
+from src.services.collection_manifest import (
+    complete_task,
+    find_task,
+    load_manifest,
+    mark_task_running,
+    stock_output_counts_from_summary,
+    write_manifest,
+)
+from src.services.provider_health import classify_collection_health
+from src.services.secrets import get_provider_api_key
 
 logger = structlog.get_logger(__name__)
 
 # Configuration
-ALPHA_VANTAGE_API_KEY = os.environ.get("ALPHA_VANTAGE_API_KEY", "")
 ALPHA_VANTAGE_BASE_URL = "https://www.alphavantage.co/query"
 NASDAQ_HISTORICAL_BASE_URL = os.environ.get(
     "NASDAQ_HISTORICAL_BASE_URL",
@@ -77,6 +87,10 @@ STOCK_COLLECTOR_MIN_REMAINING_SECONDS = int(
 MAX_RETRIES = 3
 INITIAL_BACKOFF_SECONDS = 2
 CLOUDWATCH_NAMESPACE = "StockMonitoring"
+COLLECTION_MANIFEST_BUCKET = os.environ.get(
+    "COLLECTION_MANIFEST_BUCKET",
+    os.environ.get("STOCKARA_ARTIFACT_BUCKET", ""),
+)
 
 
 @dataclass
@@ -103,17 +117,27 @@ class BatchResult:
     collected_tickers: set[str] = field(default_factory=set)
 
 
+@dataclass
+class ManifestTaskRun:
+    bucket: str
+    key: str
+    task_id: str
+
+
 def handler(event: dict, context: Any) -> dict:
     """Lambda handler for stock data collection.
 
     Triggered by EventBridge daily after market close.
     Fetches OHLCV data for all active stocks in the watchlist.
     """
+    event = event or {}
     log = logger.bind(lambda_event=event)
     log.info("stock_collector_started")
+    manifest_task_run: ManifestTaskRun | None = None
 
     try:
         DatabasePool.initialize()
+        manifest_task_run = _prepare_manifest_task_run(event, context)
         stocks = _fetch_watchlist()
 
         if not stocks:
@@ -266,6 +290,15 @@ def handler(event: dict, context: Any) -> dict:
         )
         _record_collection_summary(summary)
         _record_failed_ticker_state(summary)
+        if manifest_task_run:
+            _complete_manifest_task_run(
+                manifest_task_run,
+                summary,
+                failed=(
+                    summary["status"] in {"failed", "degraded"}
+                    or deferred_count > 0
+                ),
+            )
 
         # Emit CloudWatch metric
         _emit_metric("stocks_collected", collected_count)
@@ -286,15 +319,22 @@ def handler(event: dict, context: Any) -> dict:
 
         return {
             "statusCode": 200,
-            "body": (
-                f"Collected {collected_count} new records for "
-                f"{attempted_count} attempted ticker(s); "
-                f"{deferred_count} deferred for a later run"
-            ),
+            "body": {
+                "message": (
+                    f"Collected {collected_count} new records for "
+                    f"{attempted_count} attempted ticker(s); "
+                    f"{deferred_count} deferred for a later run"
+                ),
+                "collection_summary": summary,
+                "deferred_ticker_count": deferred_count,
+                "stopped_for_time": stopped_for_time,
+            },
         }
 
     except Exception as e:
         log.error("stock_collector_failed", error=str(e), exc_info=True)
+        if manifest_task_run:
+            _fail_manifest_task_run(manifest_task_run, str(e))
         _emit_metric("stocks_collected", 0)
         raise
     finally:
@@ -304,6 +344,85 @@ def handler(event: dict, context: Any) -> dict:
 def _fetch_watchlist() -> list[dict[str, Any]]:
     """Fetch active stock metadata from the stocks watchlist table."""
     return store.active_stock_metadata()
+
+
+def _prepare_manifest_task_run(
+    event: dict[str, Any],
+    context: Any,
+) -> ManifestTaskRun | None:
+    if event.get("mode") != "manifest_task":
+        return None
+    bucket = str(event.get("manifest_bucket") or COLLECTION_MANIFEST_BUCKET).strip()
+    key = str(event.get("manifest_key") or "").strip()
+    task_id = str(event.get("task_id") or "").strip()
+    if not bucket or not key or not task_id:
+        raise ValueError("manifest_bucket, manifest_key, and task_id are required")
+
+    manifest = load_manifest(bucket, key)
+    task = find_task(manifest, task_id)
+    if task.task_type != CollectionTaskType.PRICE:
+        raise ValueError(f"Task {task_id} is not a price collection task")
+    event["tickers"] = task.tickers
+    event["max_tickers"] = len(task.tickers)
+    lease_owner = getattr(context, "aws_request_id", None) if context else None
+    mark_task_running(manifest, task_id, lease_owner=lease_owner)
+    write_manifest(bucket, key, manifest)
+    return ManifestTaskRun(bucket=bucket, key=key, task_id=task_id)
+
+
+def _complete_manifest_task_run(
+    task_run: ManifestTaskRun,
+    summary: dict[str, Any],
+    failed: bool = False,
+) -> None:
+    try:
+        manifest = load_manifest(task_run.bucket, task_run.key)
+        complete_task(
+            manifest,
+            task_run.task_id,
+            stock_output_counts_from_summary(summary),
+            failed=failed,
+            failure_reason=None if not failed else str(summary.get("status")),
+        )
+        write_manifest(task_run.bucket, task_run.key, manifest)
+    except Exception as exc:
+        logger.warning(
+            "manifest_task_completion_failed",
+            task_id=task_run.task_id,
+            error=str(exc),
+        )
+
+
+def _fail_manifest_task_run(task_run: ManifestTaskRun, reason: str) -> None:
+    try:
+        manifest = load_manifest(task_run.bucket, task_run.key)
+        complete_task(
+            manifest,
+            task_run.task_id,
+            stock_output_counts_from_summary({}),
+            failed=True,
+            failure_reason=reason,
+        )
+        write_manifest(task_run.bucket, task_run.key, manifest)
+    except Exception as exc:
+        logger.warning(
+            "manifest_task_failure_write_failed",
+            task_id=task_run.task_id,
+            error=str(exc),
+        )
+
+
+def _alpha_vantage_api_key() -> str | None:
+    return get_provider_api_key(
+        "alpha_vantage",
+        "ALPHA_VANTAGE_API_KEY",
+        "ALPHA_VANTAGE_API_KEY_SECRET_NAME",
+        supported_json_keys=(
+            "ALPHA_VANTAGE_API_KEY",
+            "alpha_vantage_api_key",
+            "api_key",
+        ),
+    )
 
 
 def _run_historical_backfill(
@@ -1198,14 +1317,21 @@ def _select_due_stocks(stocks: list[dict[str, Any]], event: dict[str, Any]) -> l
     requested = {ticker.upper() for ticker in event.get("tickers", [])}
     if requested:
         stocks = [stock for stock in stocks if stock["ticker"] in requested]
+    else:
+        stocks = [
+            stock
+            for stock in stocks
+            if not _has_active_collection_failure(stock) or _failed_retry_due(stock)
+        ]
 
     max_tickers = int(event.get("max_tickers", MAX_TICKERS_PER_RUN))
     ordered = sorted(
         stocks,
         key=lambda stock: (
-            not _failed_retry_due(stock),
+            _collection_failure_priority(stock),
             stock.get("latest_stock_data_date") is not None,
             stock.get("latest_stock_data_date") or "",
+            stock.get("latest_stock_collection_failure_count", 0) or 0,
             stock["ticker"],
         ),
     )
@@ -1235,6 +1361,16 @@ def _failed_retry_due(stock: dict[str, Any], now: datetime | None = None) -> boo
     if failed_time.tzinfo is None:
         failed_time = failed_time.replace(tzinfo=timezone.utc)
     return now - failed_time >= timedelta(hours=STOCK_FAILED_RETRY_AFTER_HOURS)
+
+
+def _has_active_collection_failure(stock: dict[str, Any]) -> bool:
+    return bool(stock.get("latest_stock_collection_failed_at"))
+
+
+def _collection_failure_priority(stock: dict[str, Any]) -> int:
+    if not _has_active_collection_failure(stock):
+        return 0
+    return 1
 
 
 def _build_collection_summary(
@@ -1314,9 +1450,11 @@ def _record_failed_ticker_state(summary: dict[str, Any]) -> None:
         else:
             reason = "all_providers_failed"
         try:
+            health = classify_collection_health(reason)
             store.mark_stock_collection_failed(
                 ticker,
                 reason=reason,
+                health=health.value,
                 retry_after_hours=STOCK_FAILED_RETRY_AFTER_HOURS,
             )
         except Exception as exc:
@@ -1907,7 +2045,8 @@ def _alpha_vantage_fallback_with_details(
     stock_metadata_by_ticker: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[StoreResult, set[str]]:
     """Attempt Alpha Vantage fallback and return collected records plus successful tickers."""
-    if not ALPHA_VANTAGE_API_KEY:
+    api_key = _alpha_vantage_api_key()
+    if not api_key:
         logger.warning("alpha_vantage_api_key_not_configured")
         return StoreResult(), set()
 
@@ -1917,6 +2056,7 @@ def _alpha_vantage_fallback_with_details(
     for ticker in tickers:
         records = _fetch_alpha_vantage_with_retry(
             ticker,
+            api_key=api_key,
             stock_metadata=(stock_metadata_by_ticker or {}).get(ticker),
         )
         if records:
@@ -1980,23 +2120,34 @@ def _stooq_fallback_with_details(
 
 def _fetch_alpha_vantage_with_retry(
     ticker: str,
+    api_key: str | None = None,
     stock_metadata: dict[str, Any] | None = None,
 ) -> list[dict] | None:
     """Fetch daily data for a single ticker from Alpha Vantage with retry."""
+    api_key = api_key or _alpha_vantage_api_key()
+    if not api_key:
+        logger.warning("alpha_vantage_api_key_not_configured", ticker=ticker)
+        return None
     backoff = INITIAL_BACKOFF_SECONDS
+    provider_symbol = _provider_symbol(ticker, "alpha_vantage", stock_metadata)
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            log = logger.bind(ticker=ticker, attempt=attempt, provider="alpha_vantage")
+            log = logger.bind(
+                ticker=ticker,
+                provider_symbol=provider_symbol,
+                attempt=attempt,
+                provider="alpha_vantage",
+            )
             log.info("alpha_vantage_fetch_attempt")
 
             response = requests.get(
                 ALPHA_VANTAGE_BASE_URL,
                 params={
                     "function": "TIME_SERIES_DAILY",
-                    "symbol": ticker,
+                    "symbol": provider_symbol,
                     "outputsize": "compact",
-                    "apikey": ALPHA_VANTAGE_API_KEY,
+                    "apikey": api_key,
                 },
                 timeout=30,
             )
@@ -2025,6 +2176,7 @@ def _fetch_alpha_vantage_with_retry(
                     date_str,
                     values,
                     stock_metadata=stock_metadata,
+                    provider_symbol=provider_symbol,
                 )
                 if record:
                     records.append(record)
@@ -2063,11 +2215,17 @@ def _fetch_nasdaq_with_retry(
     today = end_date or date.today()
     from_date = start_date or (today - timedelta(days=120))
     record_limit = max_records or NASDAQ_MAX_RECORDS_PER_TICKER
-    url = NASDAQ_HISTORICAL_BASE_URL.format(ticker=ticker.upper())
+    provider_symbol = _provider_symbol(ticker, "nasdaq", stock_metadata)
+    url = NASDAQ_HISTORICAL_BASE_URL.format(ticker=provider_symbol.upper())
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            log = logger.bind(ticker=ticker, attempt=attempt, provider="nasdaq")
+            log = logger.bind(
+                ticker=ticker,
+                provider_symbol=provider_symbol,
+                attempt=attempt,
+                provider="nasdaq",
+            )
             log.info("nasdaq_fetch_attempt")
             response = requests.get(
                 url,
@@ -2088,6 +2246,7 @@ def _fetch_nasdaq_with_retry(
                 ticker,
                 response.json(),
                 stock_metadata=stock_metadata,
+                provider_symbol=provider_symbol,
                 max_records=record_limit,
                 fetch_period=fetch_period,
                 fetch_window_start=from_date,
@@ -2119,6 +2278,7 @@ def _parse_nasdaq_response(
     ticker: str,
     data: dict[str, Any],
     stock_metadata: dict[str, Any] | None = None,
+    provider_symbol: str | None = None,
     max_records: int = NASDAQ_MAX_RECORDS_PER_TICKER,
     fetch_period: str = "nasdaq_recent",
     fetch_window_start: date | None = None,
@@ -2136,6 +2296,7 @@ def _parse_nasdaq_response(
             ticker,
             row,
             stock_metadata=stock_metadata,
+            provider_symbol=provider_symbol,
             fetch_period=fetch_period,
             fetch_window_start=fetch_window_start,
             fetch_window_end=fetch_window_end,
@@ -2149,6 +2310,7 @@ def _parse_nasdaq_record(
     ticker: str,
     values: dict[str, Any],
     stock_metadata: dict[str, Any] | None = None,
+    provider_symbol: str | None = None,
     fetch_period: str = "nasdaq_recent",
     fetch_window_start: date | None = None,
     fetch_window_end: date | None = None,
@@ -2194,7 +2356,7 @@ def _parse_nasdaq_record(
             "close_price": close_price,
             "volume": volume,
             "data_provider": "nasdaq",
-            "provider_symbol": ticker.upper(),
+            "provider_symbol": provider_symbol or ticker.upper(),
             "provider_endpoint": "api/quote/{ticker}/historical",
             "provider_priority": "fallback",
             "price_adjustment": "unadjusted",
@@ -2293,11 +2455,31 @@ def _fetch_stooq_with_retry(
 
 
 def _stooq_symbol(ticker: str, stock_metadata: dict[str, Any] | None = None) -> str:
+    mapped = _provider_symbol(ticker, "stooq", stock_metadata, default="")
+    if mapped:
+        return mapped
     exchange = _metadata_value(stock_metadata, "exchange", "").upper()
     normalized = ticker.lower().replace(".", "-")
     if exchange in {"NYSE", "NASDAQ", "NYSEARCA", "NYSEAMERICAN", "AMEX", ""}:
         return f"{normalized}.us"
     return normalized
+
+
+def _provider_symbol(
+    ticker: str,
+    provider: str,
+    stock_metadata: dict[str, Any] | None = None,
+    default: str | None = None,
+) -> str:
+    provider_symbols = (
+        stock_metadata.get("provider_symbols", {}) if stock_metadata else {}
+    )
+    if isinstance(provider_symbols, dict):
+        for key in (provider, provider.lower(), provider.upper()):
+            symbol = provider_symbols.get(key)
+            if symbol:
+                return str(symbol).strip()
+    return default if default is not None else ticker.upper()
 
 
 def _parse_stooq_csv(
@@ -2589,6 +2771,7 @@ def _parse_alpha_vantage_record(
     date_str: str,
     values: dict,
     stock_metadata: dict[str, Any] | None = None,
+    provider_symbol: str | None = None,
 ) -> dict | None:
     """Parse a single Alpha Vantage daily record."""
     try:
@@ -2624,7 +2807,7 @@ def _parse_alpha_vantage_record(
             "close_price": close_price,
             "volume": volume,
             "data_provider": "alpha_vantage",
-            "provider_symbol": ticker,
+            "provider_symbol": provider_symbol or ticker,
             "provider_endpoint": "TIME_SERIES_DAILY",
             "provider_priority": "fallback",
             "price_adjustment": "unadjusted",

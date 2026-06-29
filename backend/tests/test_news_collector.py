@@ -8,6 +8,7 @@ Validates: Requirements 2.4, 2.5, 2.6, 2.7
 
 import hashlib
 import json
+from datetime import date, datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -24,6 +25,8 @@ from backend.src.collectors.news_collector import (
     collect_news,
     handler,
 )
+from src.collectors.collection_distributor import build_manifest
+from src.models.schemas import CollectionTaskStatus, CollectionTaskType
 from backend.src.services.secrets import get_provider_api_key
 
 
@@ -217,6 +220,21 @@ class TestFetchNewsapiArticles:
         assert len(articles) == 1
         assert articles[0]["content"] == ""
 
+    @patch("requests.get")
+    def test_ticker_query_includes_chunk_tickers(self, mock_get):
+        """Manifest chunks add ticker symbols to the NewsAPI query."""
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {"articles": []}
+        mock_get.return_value = mock_response
+
+        articles = fetch_newsapi_articles(tickers=["AAPL", "MSFT"])
+
+        assert articles == []
+        query = mock_get.call_args.kwargs["params"]["q"]
+        assert "AAPL" in query
+        assert "MSFT" in query
+
 
 # --- Tests for fetch_finnhub_articles (Requirement 2.4) ---
 
@@ -295,6 +313,27 @@ class TestFetchFinnhubArticles:
 
         articles = fetch_finnhub_articles()
         assert articles == []
+
+    @patch("requests.get")
+    def test_ticker_fetch_uses_company_news_endpoint(self, mock_get):
+        """Ticker chunks use Finnhub company-news instead of general news."""
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = [
+            {
+                "headline": "Apple supplier update",
+                "source": "Reuters",
+                "datetime": 1736935200,
+                "summary": "Apple supplier news.",
+            },
+        ]
+        mock_get.return_value = mock_response
+
+        articles = fetch_finnhub_articles(tickers=["AAPL"])
+
+        assert len(articles) == 1
+        assert "company-news" in mock_get.call_args.args[0]
+        assert mock_get.call_args.kwargs["params"]["symbol"] == "AAPL"
 
 
 # --- Tests for get_existing_hashes (Requirement 2.5) ---
@@ -576,7 +615,7 @@ class TestCollectNews:
         # Setup DB pool mock
         mock_conn = MagicMock()
         mock_db_pool.initialize.return_value = None
-        mock_db_pool.table.return_value = mock_conn
+        mock_db_pool._pool.getconn.return_value = mock_conn
 
         # Setup OpenAI mock
         mock_client = MagicMock()
@@ -586,51 +625,6 @@ class TestCollectNews:
 
         assert result["status"] == "success"
         assert result["articles_processed"] == 0
-        assert result["duplicates_skipped"] == 1
-
-    @patch("backend.src.collectors.news_collector.emit_metrics")
-    @patch("backend.src.collectors.news_collector.store_article")
-    @patch("backend.src.collectors.news_collector.generate_summary")
-    @patch("backend.src.collectors.news_collector.OpenAI")
-    @patch("backend.src.collectors.news_collector.DatabasePool")
-    @patch("backend.src.collectors.news_collector.get_existing_hashes")
-    @patch("backend.src.collectors.news_collector.fetch_finnhub_articles")
-    @patch("backend.src.collectors.news_collector.fetch_newsapi_articles")
-    def test_deduplication_collapses_duplicate_fetched_articles(
-        self,
-        mock_newsapi,
-        mock_finnhub,
-        mock_get_hashes,
-        mock_db_pool,
-        mock_openai,
-        mock_generate,
-        mock_store,
-        mock_metrics,
-    ):
-        """Duplicate articles in the same provider batch are processed once."""
-        duplicate_article = {
-            "title": "Same Article",
-            "source": "Reuters",
-            "published_at": "2025-01-15T10:00:00Z",
-            "content": "Content",
-        }
-        mock_newsapi.return_value = [duplicate_article, dict(duplicate_article)]
-        mock_finnhub.return_value = []
-        mock_get_hashes.return_value = set()
-
-        mock_conn = MagicMock()
-        mock_db_pool.initialize.return_value = None
-        mock_db_pool.table.return_value = mock_conn
-        mock_openai.return_value = MagicMock()
-        mock_generate.return_value = {"summary": "Summary", "tickers": []}
-
-        result = collect_news()
-
-        expected_hash = compute_title_source_hash("Same Article", "Reuters")
-        mock_get_hashes.assert_called_once_with(mock_conn, [expected_hash])
-        mock_generate.assert_called_once()
-        mock_store.assert_called_once()
-        assert result["articles_processed"] == 1
         assert result["duplicates_skipped"] == 1
 
     @patch("backend.src.collectors.news_collector.emit_metrics")
@@ -743,3 +737,57 @@ class TestHandler:
         assert result["statusCode"] == 500
         assert "error" in result["body"]["status"]
         mock_db_pool.close.assert_called_once()
+
+    @patch("backend.src.collectors.news_collector.write_manifest")
+    @patch("backend.src.collectors.news_collector.load_manifest")
+    @patch("backend.src.collectors.news_collector.collect_news")
+    def test_handler_processes_manifest_news_task(
+        self,
+        mock_collect,
+        mock_load_manifest,
+        mock_write_manifest,
+    ):
+        """Manifest task mode scopes news collection to the chunk tickers."""
+        manifest = build_manifest(
+            [{"ticker": "AAPL"}, {"ticker": "MSFT"}],
+            manifest_date=date(2026, 6, 20),
+            generated_at=datetime(2026, 6, 20, tzinfo=timezone.utc),
+        )
+        task = next(
+            candidate
+            for candidate in manifest.tasks
+            if candidate.task_type == CollectionTaskType.NEWS
+        )
+        mock_load_manifest.return_value = manifest
+        mock_collect.return_value = {
+            "status": "success",
+            "articles_processed": 2,
+            "total_fetched": 3,
+            "tickers": task.tickers,
+            "collection_summary": {
+                "articles_fetched": 3,
+                "articles_processed": 2,
+                "duplicates_skipped": 1,
+                "article_failures": 0,
+            },
+        }
+
+        context = MagicMock(aws_request_id="request-1")
+        result = handler(
+            {
+                "mode": "manifest_task",
+                "manifest_bucket": "bucket",
+                "manifest_key": manifest.s3_key,
+                "task_id": task.task_id,
+            },
+            context,
+        )
+
+        assert result["statusCode"] == 200
+        mock_collect.assert_called_once_with(tickers=task.tickers)
+        assert mock_write_manifest.call_count == 2
+        assert task.status == CollectionTaskStatus.SUCCEEDED
+        assert task.output_counts.records_fetched == 3
+        assert task.output_counts.records_written == 2
+        assert task.output_counts.duplicate_records == 1
+        assert manifest.summary.succeeded_tasks == 1

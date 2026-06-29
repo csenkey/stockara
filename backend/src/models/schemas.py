@@ -54,6 +54,32 @@ class SignalType(str, Enum):
     SECTOR_RELATIVE = "sector_relative"
 
 
+class CollectionTaskType(str, Enum):
+    PRICE = "price"
+    NEWS = "news"
+    EARNINGS = "earnings"
+    DIVIDEND = "dividend"
+
+
+class CollectionTaskStatus(str, Enum):
+    PENDING = "pending"
+    LEASED = "leased"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    RETRY_WAIT = "retry_wait"
+    SKIPPED = "skipped"
+
+
+class CollectionTickerHealth(str, Enum):
+    HEALTHY = "healthy"
+    TRANSIENT_FAILURE = "transient_failure"
+    RATE_LIMITED = "rate_limited"
+    PROVIDER_UNSUPPORTED = "provider_unsupported"
+    SYMBOL_MAPPING_NEEDED = "symbol_mapping_needed"
+    INACTIVE_OR_DELISTED = "inactive_or_delisted"
+
+
 VALID_SECTORS = [
     "Technology",
     "Healthcare",
@@ -81,6 +107,11 @@ def validate_ticker(value: str) -> str:
     return value
 
 
+def collection_manifest_s3_key(manifest_date: date) -> str:
+    """Return the canonical S3 key for a daily collection manifest."""
+    return f"collection_manifest/{manifest_date.isoformat()}.json"
+
+
 class Stock(BaseModel):
     ticker: str = Field(..., max_length=10)
     company_name: str = Field(..., min_length=1, max_length=255)
@@ -106,6 +137,9 @@ class Stock(BaseModel):
     headquarters: Optional[str] = Field(default=None, max_length=255)
     ipo_year: Optional[int] = Field(default=None, ge=1600, le=2200)
     market_cap: Optional[str] = Field(default=None, max_length=50)
+    provider_symbols: dict[str, str] = Field(default_factory=dict)
+    provider_symbol_sources: dict[str, str] = Field(default_factory=dict)
+    provider_symbol_updated_at: Optional[datetime] = None
     added_at: Optional[datetime] = None
     is_active: bool = True
     is_sell_alert_watch: bool = False
@@ -330,3 +364,107 @@ class PublishedTopPicks(BaseModel):
     candidate_count: int
     analyzed_count: int
     data_warnings: list[str] = Field(default_factory=list)
+
+
+class CollectionProviderAttempt(BaseModel):
+    provider: str = Field(..., min_length=1, max_length=100)
+    provider_symbol: Optional[str] = Field(default=None, max_length=50)
+    status: CollectionTaskStatus
+    health: Optional[CollectionTickerHealth] = None
+    attempted_at: datetime
+    completed_at: Optional[datetime] = None
+    failure_reason: Optional[str] = Field(default=None, max_length=500)
+    records_fetched: int = Field(default=0, ge=0)
+    records_written: int = Field(default=0, ge=0)
+
+
+class CollectionOutputCounts(BaseModel):
+    records_fetched: int = Field(default=0, ge=0)
+    records_written: int = Field(default=0, ge=0)
+    duplicate_records: int = Field(default=0, ge=0)
+    malformed_records: int = Field(default=0, ge=0)
+    failed_records: int = Field(default=0, ge=0)
+    successful_tickers: int = Field(default=0, ge=0)
+    failed_tickers: int = Field(default=0, ge=0)
+    skipped_tickers: int = Field(default=0, ge=0)
+
+
+class CollectionTask(BaseModel):
+    task_id: str = Field(..., min_length=1, max_length=160)
+    task_type: CollectionTaskType
+    status: CollectionTaskStatus = CollectionTaskStatus.PENDING
+    tickers: list[str] = Field(default_factory=list)
+    ticker_range_start: Optional[str] = Field(default=None, max_length=10)
+    ticker_range_end: Optional[str] = Field(default=None, max_length=10)
+    provider: Optional[str] = Field(default=None, max_length=100)
+    provider_attempts: list[CollectionProviderAttempt] = Field(default_factory=list)
+    ticker_health: dict[str, CollectionTickerHealth] = Field(default_factory=dict)
+    attempts: int = Field(default=0, ge=0)
+    max_attempts: int = Field(default=3, ge=1)
+    lease_owner: Optional[str] = Field(default=None, max_length=160)
+    lease_expires_at: Optional[datetime] = None
+    next_retry_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    failure_reason: Optional[str] = Field(default=None, max_length=500)
+    output_counts: CollectionOutputCounts = Field(
+        default_factory=CollectionOutputCounts
+    )
+
+    @field_validator("tickers")
+    @classmethod
+    def validate_tickers(cls, value: list[str]) -> list[str]:
+        return [validate_ticker(ticker) for ticker in value]
+
+    @field_validator("ticker_range_start", "ticker_range_end")
+    @classmethod
+    def validate_ticker_range(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        return validate_ticker(value)
+
+
+class CollectionCoverageGate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    passed: bool
+    observed_value: Decimal = Field(..., ge=0)
+    required_value: Decimal = Field(..., ge=0)
+    unit: str = Field(..., min_length=1, max_length=50)
+    message: Optional[str] = Field(default=None, max_length=500)
+
+
+class CollectionManifestSummary(BaseModel):
+    total_tasks: int = Field(default=0, ge=0)
+    pending_tasks: int = Field(default=0, ge=0)
+    leased_tasks: int = Field(default=0, ge=0)
+    running_tasks: int = Field(default=0, ge=0)
+    succeeded_tasks: int = Field(default=0, ge=0)
+    failed_tasks: int = Field(default=0, ge=0)
+    retry_wait_tasks: int = Field(default=0, ge=0)
+    skipped_tasks: int = Field(default=0, ge=0)
+    total_tickers: int = Field(default=0, ge=0)
+    successful_tickers: int = Field(default=0, ge=0)
+    failed_tickers: int = Field(default=0, ge=0)
+    coverage_ratio: Decimal = Field(default=Decimal("0"), ge=0, le=1)
+    coverage_gates: list[CollectionCoverageGate] = Field(default_factory=list)
+
+
+class CollectionManifest(BaseModel):
+    manifest_date: date
+    schema_version: str = "1.0"
+    generated_at: datetime
+    updated_at: datetime
+    analysis_not_before: Optional[datetime] = None
+    active_ticker_count: int = Field(..., ge=0)
+    task_types: list[CollectionTaskType] = Field(default_factory=list)
+    tasks: list[CollectionTask] = Field(default_factory=list)
+    summary: CollectionManifestSummary = Field(
+        default_factory=CollectionManifestSummary
+    )
+    notes: list[str] = Field(default_factory=list)
+
+    @property
+    def s3_key(self) -> str:
+        return collection_manifest_s3_key(self.manifest_date)

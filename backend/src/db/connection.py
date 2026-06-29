@@ -36,6 +36,9 @@ STOCK_STATIC_METADATA_FIELDS = (
     "headquarters",
     "ipo_year",
     "market_cap",
+    "provider_symbols",
+    "provider_symbol_sources",
+    "provider_symbol_updated_at",
 )
 
 
@@ -414,6 +417,7 @@ class DynamoStore:
         update_expression += (
             " REMOVE latest_stock_collection_failed_at, "
             "latest_stock_collection_failure_reason, "
+            "latest_stock_collection_health, "
             "latest_stock_collection_retry_after, "
             "latest_stock_collection_failure_count"
         )
@@ -435,6 +439,7 @@ class DynamoStore:
         ticker: str,
         reason: str,
         retry_after_hours: int,
+        health: str | None = None,
         failed_at: str | None = None,
     ) -> None:
         failed_at = failed_at or _now()
@@ -446,6 +451,7 @@ class DynamoStore:
             UpdateExpression=(
                 "SET latest_stock_collection_failed_at = :failed_at, "
                 "latest_stock_collection_failure_reason = :reason, "
+                "latest_stock_collection_health = :health, "
                 "latest_stock_collection_retry_after = :retry_after, "
                 "latest_stock_collection_failure_count = "
                 "if_not_exists(latest_stock_collection_failure_count, :zero) + :one"
@@ -453,6 +459,7 @@ class DynamoStore:
             ExpressionAttributeValues={
                 ":failed_at": failed_at,
                 ":reason": reason,
+                ":health": health or reason,
                 ":retry_after": retry_after,
                 ":zero": 0,
                 ":one": 1,
@@ -465,6 +472,7 @@ class DynamoStore:
             UpdateExpression=(
                 "REMOVE latest_stock_collection_failed_at, "
                 "latest_stock_collection_failure_reason, "
+                "latest_stock_collection_health, "
                 "latest_stock_collection_retry_after, "
                 "latest_stock_collection_failure_count"
             ),
@@ -699,10 +707,7 @@ class DynamoStore:
 
     def existing_news_hashes(self, hashes: Iterable[str]) -> set[str]:
         result: set[str] = set()
-        keys = [
-            {"PK": f"NEWS#{hash_value}", "SK": "META"}
-            for hash_value in dict.fromkeys(hashes)
-        ]
+        keys = [{"PK": f"NEWS#{hash_value}", "SK": "META"} for hash_value in hashes]
         for i in range(0, len(keys), 100):
             response = self.table.meta.client.batch_get_item(
                 RequestItems={TABLE_NAME: {"Keys": keys[i : i + 100]}}

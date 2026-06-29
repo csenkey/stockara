@@ -6,6 +6,9 @@ from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
+from src.collectors.collection_distributor import build_manifest
+from src.models.schemas import CollectionTaskStatus, CollectionTaskType
+
 from backend.src.collectors.dividend_collector import (
     enrich_price_reaction,
     fetch_dividend_events,
@@ -86,3 +89,55 @@ def test_handler_collects_and_stores_events(mock_store, mock_pool, mock_fetch, m
     mock_store.put_dividend_event.assert_called_once()
     mock_metric.assert_any_call("dividend_events_collected", 1)
 
+
+@patch("backend.src.collectors.dividend_collector.write_manifest")
+@patch("backend.src.collectors.dividend_collector.load_manifest")
+@patch("backend.src.collectors.dividend_collector._emit_metric")
+@patch("backend.src.collectors.dividend_collector.fetch_dividend_events")
+@patch("backend.src.collectors.dividend_collector.DatabasePool")
+@patch("backend.src.collectors.dividend_collector.store")
+def test_handler_processes_manifest_dividend_task(
+    mock_store,
+    mock_pool,
+    mock_fetch,
+    mock_metric,
+    mock_load_manifest,
+    mock_write_manifest,
+):
+    manifest = build_manifest(
+        [{"ticker": "AAPL"}, {"ticker": "MSFT"}],
+        manifest_date=date(2026, 6, 20),
+        generated_at=datetime(2026, 6, 20, tzinfo=timezone.utc),
+    )
+    task = next(
+        candidate
+        for candidate in manifest.tasks
+        if candidate.task_type == CollectionTaskType.DIVIDEND
+    )
+    mock_load_manifest.return_value = manifest
+    mock_store.active_stock_metadata.return_value = [
+        {"ticker": "AAPL", "company_name": "Apple"},
+        {"ticker": "MSFT", "company_name": "Microsoft"},
+        {"ticker": "NVDA", "company_name": "NVIDIA"},
+    ]
+    mock_fetch.return_value = [
+        {"ticker": "AAPL", "ex_dividend_date": date(2026, 8, 15), "is_upcoming": True}
+    ]
+
+    result = handler(
+        {
+            "mode": "manifest_task",
+            "manifest_bucket": "bucket",
+            "manifest_key": manifest.s3_key,
+            "task_id": task.task_id,
+        },
+        MagicMock(aws_request_id="request-1"),
+    )
+
+    assert result["statusCode"] == 200
+    assert result["body"]["selected_ticker_count"] == len(task.tickers)
+    assert mock_fetch.call_count == len(task.tickers)
+    assert mock_write_manifest.call_count == 2
+    assert task.status == CollectionTaskStatus.SUCCEEDED
+    assert task.output_counts.records_written == len(task.tickers)
+    assert task.output_counts.successful_tickers == len(task.tickers)

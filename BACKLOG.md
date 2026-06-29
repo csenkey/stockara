@@ -1,5 +1,57 @@
 # Backlog
 
+## Immediate Priority: Rock-Solid Data Collection
+
+Status: Proposed
+
+Requirement: Make Stockara's data collection reliable enough that the daily analysis pipeline can trust the input coverage, freshness, and provider provenance before publishing any recommendations.
+
+Rationale:
+
+- The current Phase 1 product depends on decision-grade inputs, not just a Lambda invocation that returns `200`.
+- News, daily OHLCV, earnings calendar, and dividend calendar must be collected for the full tracked universe before the once-daily analysis run.
+- Provider failures, missing credentials, throttling, unsupported tickers, stale data, and partial coverage must be explicit and measurable.
+- The collector system should tolerate several hours of small Lambda runs instead of depending on one long batch completing perfectly.
+- Daily analysis should run once after collection has reached defined coverage thresholds: filters -> AI analysis -> stronger AI review -> publish.
+
+Target operating model:
+
+- Data collection runs continuously or frequently throughout the day.
+- A distributor Lambda owns a daily collection manifest stored in S3, split by task type and ticker chunks.
+- Worker Lambdas claim bounded chunks for price, news, earnings, dividend, and future signal sources.
+- Every task records status, attempt count, provider used, failure reason, next retry time, and output coverage.
+- The analyzer starts only when the manifest meets minimum coverage gates or publishes with explicit partial-coverage warnings.
+
+Execution tasks:
+
+- [x] Wire NewsAPI, Finnhub, and Alpha Vantage provider credentials through AWS Secrets Manager-backed Lambda configuration.
+- [x] Prevent failed stock tickers from starving healthy/stale tickers in repeated short stock-collector runs.
+- [x] Update deployed smoke tests and GitHub Actions manual runs to fail when collector responses contain `status=failed`, `status=error`, zero useful records, or completeness below configured thresholds.
+- [x] Add a `collection_manifest/{date}.json` S3 schema covering task type, ticker range, status, attempts, provider, timestamps, failure reason, and output counts.
+- [x] Implement a collection distributor Lambda that creates the daily manifest and schedules or invokes bounded worker tasks across the full active watchlist.
+- [x] Refactor stock price collection into idempotent chunk workers that update manifest task state after each run.
+- [x] Refactor news collection into chunkable ticker-aware collection, including general market news plus ticker/company-specific searches.
+- [x] Add earnings-calendar task chunks for the full active watchlist with provider throttling and retry state.
+- [x] Add dividend-calendar task chunks for the full active watchlist with provider throttling and retry state.
+- [x] Introduce provider/ticker health state: `healthy`, `transient_failure`, `rate_limited`, `provider_unsupported`, `symbol_mapping_needed`, `inactive_or_delisted`.
+- [x] Add symbol-mapping/provenance fields so provider symbols like Yahoo, Nasdaq, Stooq, Alpha Vantage, NewsAPI, and Finnhub can differ from canonical ticker when needed.
+- [x] Add rate-limit aware backoff policies per provider, including daily quota budgeting for free-tier APIs.
+- [x] Add collection coverage gates before daily analysis: price freshness, news freshness, earnings coverage, dividend coverage, and minimum active-universe percentage.
+- [ ] Update the analyzer/publisher so daily analysis runs once after collection gates: cheap filters -> AI analysis -> stronger AI review -> publish.
+- [x] Publish collection coverage metadata with every daily artifact so partial universe coverage is visible to users and later diagnostics.
+- [x] Add CloudWatch metrics and alarms for manifest age, incomplete manifest tasks, provider failures, retry exhaustion, low coverage, and stale inputs.
+- [x] Add a collector runbook covering secret setup, first daily run, manual retry, provider outage triage, and how to quarantine bad tickers.
+- [x] Add integration tests with mocked providers for manifest creation, task claiming, retry behavior, partial provider failure, and analysis gating.
+
+Acceptance criteria:
+
+- A full active watchlist collection can complete through multiple short Lambda runs without duplicate writes or lost tasks.
+- News, price, earnings, and dividend collection expose per-source success/failure and coverage metrics.
+- A few bad tickers or provider-specific unsupported symbols cannot block collection for the rest of the universe.
+- Daily analysis does not publish normal recommendations when required input freshness or coverage gates fail.
+- Partial coverage, when allowed, is explicitly visible in published artifacts and health output.
+- GitHub Actions/manual smoke workflows fail on collection-quality failures, not only on Lambda runtime errors.
+
 ## Product Roadmap
 
 ### Define Phased Shipping Plan

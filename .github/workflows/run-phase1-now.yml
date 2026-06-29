@@ -76,6 +76,9 @@ jobs:
       id-token: write
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Validate inputs
         shell: bash
         run: |
@@ -169,6 +172,9 @@ jobs:
             python -c "import json, sys; meta=json.load(open('stock-invoke-${batch_index}.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
             cat "stock-response-${batch_index}.json"
             python -m json.tool "stock-response-${batch_index}.json"
+            python scripts/validate_lambda_response.py \
+              --component stock \
+              --response-file "stock-response-${batch_index}.json"
           done
 
       - name: Invoke news collector
@@ -187,6 +193,9 @@ jobs:
           python -c "import json, sys; meta=json.load(open('news-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
           cat news-response.json
           python -m json.tool news-response.json
+          python scripts/validate_lambda_response.py \
+            --component news \
+            --response-file news-response.json
 
       - name: Invoke earnings collector
         if: ${{ !inputs.historical_backfill }}
@@ -204,6 +213,9 @@ jobs:
           python -c "import json, sys; meta=json.load(open('earnings-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
           cat earnings-response.json
           python -m json.tool earnings-response.json
+          python scripts/validate_lambda_response.py \
+            --component earnings \
+            --response-file earnings-response.json
 
       - name: Invoke dividend collector
         if: ${{ !inputs.historical_backfill }}
@@ -221,6 +233,9 @@ jobs:
           python -c "import json, sys; meta=json.load(open('dividend-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
           cat dividend-response.json
           python -m json.tool dividend-response.json
+          python scripts/validate_lambda_response.py \
+            --component dividend \
+            --response-file dividend-response.json
 
       - name: Score Phase 1 candidates
         if: ${{ inputs.publish_after_collection && !inputs.historical_backfill }}

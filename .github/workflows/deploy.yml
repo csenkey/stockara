@@ -130,7 +130,40 @@ jobs:
       - name: Smoke test deployed API
         run: |
           api_url="$(python -c "import json; data=json.load(open('cdk-outputs.json')); print(next(outputs['ApiUrl'] for outputs in data.values() if 'ApiUrl' in outputs))")"
-          curl --fail --silent --show-error "${api_url%/}/api/health"
+          curl --fail --silent --show-error "${api_url%/}/api/health" > health-response.json
+          python -m json.tool health-response.json
+          python - <<'PY'
+          import json
+          import sys
+
+          payload = json.load(open("health-response.json"))
+          failures = []
+
+          stock = payload.get("last_stock_collection_summary")
+          if stock:
+              status = str(stock.get("status", "")).lower()
+              if status in {"failed", "error", "degraded"}:
+                  failures.append(f"latest stock collection status is {status}")
+              if stock.get("completeness_threshold_met") is False:
+                  failures.append("latest stock collection is below completeness threshold")
+              if int(stock.get("selected_ticker_count", 0) or 0) > 0 and int(stock.get("successful_ticker_count", 0) or 0) == 0:
+                  failures.append("latest stock collection has zero successful tickers")
+
+          news = payload.get("last_news_collection_summary")
+          if news:
+              status = str(news.get("status", "")).lower()
+              if status in {"failed", "error"}:
+                  failures.append(f"latest news collection status is {status}")
+              if float(news.get("completeness_ratio", 0) or 0) < 1.0:
+                  failures.append("latest news collection did not reach all configured sources")
+              if int(news.get("articles_fetched", 0) or 0) == 0:
+                  failures.append("latest news collection fetched zero articles")
+
+          if failures:
+              for failure in failures:
+                  print(f"::error::{failure}", file=sys.stderr)
+              sys.exit(1)
+          PY
         working-directory: infrastructure
 
       - name: Smoke test static artifacts when present

@@ -86,6 +86,14 @@ class ApiStack(Stack):
             "FinnhubKeySecret",
             finnhub_key_secret_name,
         )
+        alpha_vantage_key_secret_name = (
+            f"stockara/{deployment_stage}/alpha-vantage-api-key-current"
+        )
+        alpha_vantage_key_secret = secretsmanager.Secret.from_secret_name_v2(
+            self,
+            "AlphaVantageApiKeySecret",
+            alpha_vantage_key_secret_name,
+        )
 
         api_role = iam.Role(
             self,
@@ -103,6 +111,9 @@ class ApiStack(Stack):
             "DEPLOYMENT_STAGE": deployment_stage,
         }
         openai_env = {"OPENAI_API_KEY_SECRET_NAME": openai_api_key_secret_name}
+        market_data_env = {
+            "ALPHA_VANTAGE_API_KEY_SECRET_NAME": alpha_vantage_key_secret_name,
+        }
         news_provider_env = {
             "NEWSAPI_KEY_SECRET_NAME": newsapi_key_secret_name,
             "FINNHUB_KEY_SECRET_NAME": finnhub_key_secret_name,
@@ -136,6 +147,7 @@ class ApiStack(Stack):
             role=batch_role,
             environment={
                 **common_env,
+                **market_data_env,
                 "POWERTOOLS_SERVICE_NAME": "stock-collector",
                 "STOCKARA_STOCK_HISTORY_BUCKET": artifact_bucket.bucket_name,
                 "STOCK_COLLECTOR_BATCH_SIZE": "5",
@@ -274,6 +286,36 @@ class ApiStack(Stack):
             description="Collects dividend calendar events and historical reactions",
         )
 
+        self.collection_distributor_fn = _lambda.Function(
+            self,
+            "CollectionDistributorFunction",
+            function_name=resource_name(
+                deployment_stage,
+                "stockara-collection-distributor",
+                "collection-distributor",
+            ),
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            handler="src.collectors.collection_distributor.handler",
+            code=backend_code,
+            memory_size=256,
+            timeout=Duration.minutes(5),
+            role=batch_role,
+            environment={
+                **common_env,
+                "POWERTOOLS_SERVICE_NAME": "collection-distributor",
+                "PRICE_COLLECTOR_FUNCTION_NAME": self.stock_collector_fn.function_name,
+                "NEWS_COLLECTOR_FUNCTION_NAME": self.news_collector_fn.function_name,
+                "EARNINGS_COLLECTOR_FUNCTION_NAME": self.earnings_collector_fn.function_name,
+                "DIVIDEND_COLLECTOR_FUNCTION_NAME": self.dividend_collector_fn.function_name,
+                "COLLECTION_PRICE_TASK_CHUNK_SIZE": "10",
+                "COLLECTION_NEWS_TASK_CHUNK_SIZE": "50",
+                "COLLECTION_CALENDAR_TASK_CHUNK_SIZE": "50",
+                "COLLECTION_MAX_TASKS_PER_RUN": "1",
+                "COLLECTION_ANALYSIS_HOUR_UTC": "22",
+            },
+            description="Creates the daily S3 manifest for bounded collector work",
+        )
+
         self.ai_analyzer_fn = _lambda.Function(
             self,
             "Phase1AnalyzerPublisherFunction",
@@ -320,11 +362,13 @@ class ApiStack(Stack):
         data_table.grant_read_write_data(self.news_collector_fn)
         data_table.grant_read_write_data(self.earnings_collector_fn)
         data_table.grant_read_write_data(self.dividend_collector_fn)
+        data_table.grant_read_data(self.collection_distributor_fn)
         data_table.grant_read_write_data(self.ai_analyzer_fn)
         data_table.grant_read_write_data(self.watchlist_seed_fn)
         data_table.grant_read_data(self.api_handler_fn)
         artifact_bucket.grant_read_write(self.stock_collector_fn)
         artifact_bucket.grant_read_write(self.stooq_zip_extractor_fn)
+        artifact_bucket.grant_read_write(self.collection_distributor_fn)
         artifact_bucket.grant_put(self.ai_analyzer_fn)
         batch_role.add_to_policy(
             iam.PolicyStatement(
@@ -336,6 +380,7 @@ class ApiStack(Stack):
         openai_api_key_secret.grant_read(self.ai_analyzer_fn)
         newsapi_key_secret.grant_read(self.news_collector_fn)
         finnhub_key_secret.grant_read(self.news_collector_fn)
+        alpha_vantage_key_secret.grant_read(self.stock_collector_fn)
 
         watchlist_seed_provider = cr.Provider(
             self,
@@ -391,6 +436,20 @@ class ApiStack(Stack):
             ],
         )
         stock_collection_rule.node.add_dependency(self.watchlist_seed)
+
+        collection_manifest_rule = events.Rule(
+            self,
+            "CollectionDistributorSchedule",
+            rule_name=resource_name(
+                deployment_stage,
+                "stockara-collection-distributor",
+                "collection-distributor",
+            ),
+            description="Refreshes the daily collection manifest and dispatches one task",
+            schedule=events.Schedule.rate(Duration.minutes(5)),
+            targets=[targets.LambdaFunction(self.collection_distributor_fn)],
+        )
+        collection_manifest_rule.node.add_dependency(self.watchlist_seed)
 
         events.Rule(
             self,

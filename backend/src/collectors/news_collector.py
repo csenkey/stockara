@@ -8,7 +8,8 @@ Triggered by EventBridge every 15 minutes (configurable).
 
 import hashlib
 import os
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import boto3
@@ -16,6 +17,17 @@ import structlog
 from openai import OpenAI
 
 from src.db.connection import DatabasePool, store
+from src.models.schemas import (
+    CollectionOutputCounts,
+    CollectionTaskType,
+)
+from src.services.collection_manifest import (
+    complete_task,
+    find_task,
+    load_manifest,
+    mark_task_running,
+    write_manifest,
+)
 from src.services.secrets import get_openai_api_key, get_provider_api_key
 
 logger = structlog.get_logger(__name__)
@@ -23,9 +35,23 @@ logger = structlog.get_logger(__name__)
 # Configuration from environment variables
 POLL_INTERVAL_MINUTES = int(os.environ.get("NEWS_POLL_INTERVAL_MINUTES", "15"))
 OPENAI_NEWS_MODEL = os.environ.get("OPENAI_NEWS_MODEL", "gpt-5.4-mini")
+COLLECTION_MANIFEST_BUCKET = os.environ.get(
+    "COLLECTION_MANIFEST_BUCKET",
+    os.environ.get("STOCKARA_ARTIFACT_BUCKET", ""),
+)
+FINNHUB_TICKER_NEWS_MAX_TICKERS = int(
+    os.environ.get("FINNHUB_TICKER_NEWS_MAX_TICKERS", "10")
+)
 
 # CloudWatch metrics client
 cloudwatch = boto3.client("cloudwatch")
+
+
+@dataclass
+class ManifestTaskRun:
+    bucket: str
+    key: str
+    task_id: str
 
 
 def compute_title_source_hash(title: str, source: str) -> str:
@@ -60,7 +86,7 @@ def _finnhub_key() -> str | None:
     )
 
 
-def fetch_newsapi_articles() -> list[dict[str, Any]]:
+def fetch_newsapi_articles(tickers: list[str] | None = None) -> list[dict[str, Any]]:
     """Fetch recent stock-related articles from NewsAPI.
 
     Returns:
@@ -76,7 +102,7 @@ def fetch_newsapi_articles() -> list[dict[str, Any]]:
 
     url = "https://newsapi.org/v2/everything"
     params = {
-        "q": "stocks OR stock market OR earnings OR NYSE OR NASDAQ",
+        "q": _newsapi_query(tickers),
         "language": "en",
         "sortBy": "publishedAt",
         "pageSize": 50,
@@ -104,7 +130,7 @@ def fetch_newsapi_articles() -> list[dict[str, Any]]:
                 "content": article.get("description", "") or article.get("content", "") or "",
             })
 
-        logger.info("NewsAPI articles fetched", count=len(articles))
+        logger.info("NewsAPI articles fetched", count=len(articles), tickers=tickers or [])
         return articles
 
     except Exception as e:
@@ -112,7 +138,7 @@ def fetch_newsapi_articles() -> list[dict[str, Any]]:
         return []
 
 
-def fetch_finnhub_articles() -> list[dict[str, Any]]:
+def fetch_finnhub_articles(tickers: list[str] | None = None) -> list[dict[str, Any]]:
     """Fetch recent market news from Finnhub.
 
     Returns:
@@ -125,6 +151,9 @@ def fetch_finnhub_articles() -> list[dict[str, Any]]:
     if not api_key:
         logger.error("Finnhub fetch skipped", error="Finnhub key is not configured")
         return []
+
+    if tickers:
+        return _fetch_finnhub_company_news(tickers, api_key)
 
     url = "https://finnhub.io/api/v1/news"
     params = {"category": "general", "token": api_key}
@@ -161,6 +190,62 @@ def fetch_finnhub_articles() -> list[dict[str, Any]]:
     except Exception as e:
         logger.error("Finnhub fetch failed", error=str(e))
         return []
+
+
+def _newsapi_query(tickers: list[str] | None = None) -> str:
+    base = "stocks OR stock market OR earnings OR NYSE OR NASDAQ"
+    if not tickers:
+        return base
+    ticker_query = " OR ".join(tickers[:50])
+    return f"({base}) OR ({ticker_query})"
+
+
+def _fetch_finnhub_company_news(
+    tickers: list[str],
+    api_key: str,
+) -> list[dict[str, Any]]:
+    import requests
+
+    articles: list[dict[str, Any]] = []
+    to_date = date.today()
+    from_date = to_date - timedelta(days=7)
+    for ticker in tickers[:FINNHUB_TICKER_NEWS_MAX_TICKERS]:
+        url = "https://finnhub.io/api/v1/company-news"
+        params = {
+            "symbol": ticker,
+            "from": from_date.isoformat(),
+            "to": to_date.isoformat(),
+            "token": api_key,
+        }
+        try:
+            response = requests.get(url, params=params, timeout=30)
+            response.raise_for_status()
+            for article in response.json():
+                title = article.get("headline", "").strip()
+                source = article.get("source", "").strip()
+                published_at_ts = article.get("datetime")
+                if not title or not source or not published_at_ts:
+                    continue
+                published_at = datetime.fromtimestamp(
+                    published_at_ts, tz=timezone.utc
+                ).isoformat()
+                articles.append(
+                    {
+                        "title": title,
+                        "source": source,
+                        "published_at": published_at,
+                        "content": article.get("summary", "") or "",
+                    }
+                )
+        except Exception as e:
+            logger.error(
+                "Finnhub company news fetch failed",
+                ticker=ticker,
+                error=str(e),
+            )
+            continue
+    logger.info("Finnhub company news fetched", count=len(articles), tickers=tickers)
+    return articles
 
 
 def get_existing_hashes(conn, hashes: list[str]) -> set[str]:
@@ -382,7 +467,7 @@ def emit_news_collection_summary_metrics(summary: dict[str, Any]) -> None:
         logger.warning("news_collection_summary_metrics_failed", error=str(e))
 
 
-def collect_news() -> dict[str, Any]:
+def collect_news(tickers: list[str] | None = None) -> dict[str, Any]:
     """Main news collection logic.
 
     Polls all configured sources, deduplicates, summarizes, and stores articles.
@@ -390,11 +475,15 @@ def collect_news() -> dict[str, Any]:
     Returns:
         Dict with collection statistics.
     """
-    logger.info("Starting news collection", poll_interval_minutes=POLL_INTERVAL_MINUTES)
+    logger.info(
+        "Starting news collection",
+        poll_interval_minutes=POLL_INTERVAL_MINUTES,
+        tickers=tickers or [],
+    )
 
     # Fetch from all sources
-    newsapi_articles = fetch_newsapi_articles()
-    finnhub_articles = fetch_finnhub_articles()
+    newsapi_articles = fetch_newsapi_articles(tickers=tickers)
+    finnhub_articles = fetch_finnhub_articles(tickers=tickers)
 
     # Track source availability
     sources_available = 0
@@ -426,27 +515,19 @@ def collect_news() -> dict[str, Any]:
             "message": "All news sources unavailable",
             "articles_processed": 0,
             "sources_available": 0,
+            "tickers": tickers or [],
             "collection_summary": summary,
         }
 
     # Combine all articles
     all_articles = newsapi_articles + finnhub_articles
 
-    # Compute hashes and discard duplicates within this provider batch before
-    # calling DynamoDB. BatchGetItem rejects repeated keys in one request.
-    seen_hashes: set[str] = set()
-    article_hashes: list[str] = []
-    unique_articles = []
+    # Compute hashes for deduplication
+    article_hashes = []
     for article in all_articles:
         h = compute_title_source_hash(article["title"], article["source"])
         article["_hash"] = h
-        if h in seen_hashes:
-            continue
-        seen_hashes.add(h)
         article_hashes.append(h)
-        unique_articles.append(article)
-
-    duplicate_fetch_count = len(all_articles) - len(unique_articles)
 
     # Check existing articles in DB
     DatabasePool.initialize()
@@ -455,15 +536,10 @@ def collect_news() -> dict[str, Any]:
         existing_hashes = get_existing_hashes(conn, article_hashes)
 
         # Filter to new articles only
-        new_articles = [
-            article
-            for article in unique_articles
-            if article["_hash"] not in existing_hashes
-        ]
+        new_articles = [a for a in all_articles if a["_hash"] not in existing_hashes]
         logger.info(
             "Deduplication complete",
             total_fetched=len(all_articles),
-            duplicate_fetches=duplicate_fetch_count,
             already_exists=len(existing_hashes),
             new_articles=len(new_articles),
         )
@@ -513,7 +589,7 @@ def collect_news() -> dict[str, Any]:
         articles_processed=articles_stored,
         sources_available=sources_available,
         total_fetched=len(all_articles),
-        duplicates_skipped=duplicate_fetch_count + len(existing_hashes),
+        duplicates_skipped=len(all_articles) - len(new_articles),
         failed_sources=failed_sources,
         article_failures=article_failures,
     )
@@ -525,7 +601,8 @@ def collect_news() -> dict[str, Any]:
         "articles_processed": articles_stored,
         "sources_available": sources_available,
         "total_fetched": len(all_articles),
-        "duplicates_skipped": duplicate_fetch_count + len(existing_hashes),
+        "duplicates_skipped": len(all_articles) - len(new_articles),
+        "tickers": tickers or [],
         "collection_summary": summary,
     }
 
@@ -542,10 +619,21 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     Returns:
         Dict with execution results.
     """
+    event = event or {}
     logger.info("News collector Lambda invoked", lambda_event=event)
+    manifest_task_run: ManifestTaskRun | None = None
 
     try:
-        result = collect_news()
+        manifest_task_run, tickers = _prepare_manifest_task_run(event, context)
+        if tickers is None:
+            tickers = _event_tickers(event)
+        result = collect_news(tickers=tickers)
+        if manifest_task_run:
+            _complete_manifest_task_run(
+                manifest_task_run,
+                result,
+                failed=str(result.get("status", "")).lower() != "success",
+            )
         logger.info("News collector completed", result=result)
         return {
             "statusCode": 200,
@@ -553,9 +641,108 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         }
     except Exception as e:
         logger.error("News collector Lambda failed", error=str(e))
+        if manifest_task_run:
+            _fail_manifest_task_run(manifest_task_run, str(e))
         return {
             "statusCode": 500,
             "body": {"status": "error", "message": str(e)},
         }
     finally:
         DatabasePool.close()
+
+
+def _event_tickers(event: dict[str, Any]) -> list[str] | None:
+    tickers = event.get("tickers")
+    if not tickers:
+        return None
+    return [str(ticker).strip().upper() for ticker in tickers if str(ticker).strip()]
+
+
+def _prepare_manifest_task_run(
+    event: dict[str, Any],
+    context: Any,
+) -> tuple[ManifestTaskRun | None, list[str] | None]:
+    if event.get("mode") != "manifest_task":
+        return None, None
+    bucket = str(event.get("manifest_bucket") or COLLECTION_MANIFEST_BUCKET).strip()
+    key = str(event.get("manifest_key") or "").strip()
+    task_id = str(event.get("task_id") or "").strip()
+    if not bucket or not key or not task_id:
+        raise ValueError("manifest_bucket, manifest_key, and task_id are required")
+
+    manifest = load_manifest(bucket, key)
+    task = find_task(manifest, task_id)
+    if task.task_type != CollectionTaskType.NEWS:
+        raise ValueError(f"Task {task_id} is not a news collection task")
+    lease_owner = getattr(context, "aws_request_id", None) if context else None
+    mark_task_running(manifest, task_id, lease_owner=lease_owner)
+    write_manifest(bucket, key, manifest)
+    return ManifestTaskRun(bucket=bucket, key=key, task_id=task_id), task.tickers
+
+
+def _complete_manifest_task_run(
+    task_run: ManifestTaskRun,
+    result: dict[str, Any],
+    failed: bool = False,
+) -> None:
+    try:
+        manifest = load_manifest(task_run.bucket, task_run.key)
+        complete_task(
+            manifest,
+            task_run.task_id,
+            _news_output_counts(result),
+            failed=failed,
+            failure_reason=None if not failed else str(result.get("status")),
+        )
+        write_manifest(task_run.bucket, task_run.key, manifest)
+    except Exception as exc:
+        logger.warning(
+            "news_manifest_task_completion_failed",
+            task_id=task_run.task_id,
+            error=str(exc),
+        )
+
+
+def _fail_manifest_task_run(task_run: ManifestTaskRun, reason: str) -> None:
+    try:
+        manifest = load_manifest(task_run.bucket, task_run.key)
+        complete_task(
+            manifest,
+            task_run.task_id,
+            CollectionOutputCounts(),
+            failed=True,
+            failure_reason=reason,
+        )
+        write_manifest(task_run.bucket, task_run.key, manifest)
+    except Exception as exc:
+        logger.warning(
+            "news_manifest_task_failure_write_failed",
+            task_id=task_run.task_id,
+            error=str(exc),
+        )
+
+
+def _news_output_counts(result: dict[str, Any]) -> CollectionOutputCounts:
+    summary = result.get("collection_summary") or {}
+    articles_fetched = int(
+        result.get("total_fetched")
+        or summary.get("articles_fetched")
+        or 0
+    )
+    articles_processed = int(
+        result.get("articles_processed")
+        or summary.get("articles_processed")
+        or 0
+    )
+    return CollectionOutputCounts(
+        records_fetched=articles_fetched,
+        records_written=articles_processed,
+        duplicate_records=int(summary.get("duplicates_skipped", 0) or 0),
+        failed_records=int(summary.get("article_failures", 0) or 0),
+        successful_tickers=len(result.get("tickers") or []),
+        failed_tickers=(
+            0
+            if str(result.get("status", "")).lower() == "success"
+            else len(result.get("tickers") or [])
+        ),
+    )

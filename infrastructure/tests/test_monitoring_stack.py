@@ -28,6 +28,28 @@ def test_collector_completeness_alarms_are_created():
         )
 
 
+def test_collection_manifest_health_alarms_are_created():
+    app = cdk.App()
+    stack = MonitoringStack(app, "TestManifestMonitoring", deployment_stage="codex-test")
+    template = assertions.Template.from_stack(stack)
+
+    for metric_name in [
+        "collection_manifest_age_minutes",
+        "collection_manifest_incomplete_tasks",
+        "collection_manifest_retry_exhausted_tasks",
+        "collection_manifest_low_coverage_gates",
+        "collection_manifest_coverage_percent",
+        "collection_provider_failure_tasks",
+    ]:
+        template.has_resource_properties(
+            "AWS::CloudWatch::Alarm",
+            {
+                "Namespace": "StockMonitoring",
+                "MetricName": metric_name,
+            },
+        )
+
+
 def test_missing_collector_metric_alarms_breach_on_missing_data():
     app = cdk.App()
     stack = MonitoringStack(app, "TestMissingMetricMonitoring", deployment_stage="codex-test")
@@ -36,6 +58,7 @@ def test_missing_collector_metric_alarms_breach_on_missing_data():
     for metric_name in [
         "stock_collection_completeness_percent",
         "news_collection_completeness_percent",
+        "collection_manifest_incomplete_tasks",
     ]:
         template.has_resource_properties(
             "AWS::CloudWatch::Alarm",

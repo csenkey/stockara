@@ -833,6 +833,101 @@ def test_run_phase1_pipeline_suppresses_publication_when_no_ticker_is_eligible()
     score_candidates.assert_not_called()
 
 
+def test_run_phase1_pipeline_suppresses_when_collection_gates_fail():
+    run_date = date(2026, 6, 17)
+    manifest_payload = {
+        "manifest_date": run_date.isoformat(),
+        "generated_at": "2026-06-17T07:30:00Z",
+        "updated_at": "2026-06-17T08:00:00Z",
+        "active_ticker_count": 1,
+        "task_types": ["price", "news", "earnings", "dividend"],
+        "tasks": [],
+        "summary": {
+            "total_tasks": 0,
+            "coverage_gates": [
+                {
+                    "name": "price_freshness",
+                    "passed": False,
+                    "observed_value": "0.5",
+                    "required_value": "0.9",
+                    "unit": "ratio",
+                    "message": "Not enough fresh prices.",
+                }
+            ],
+        },
+    }
+    mock_s3 = patch("src.analysis.phase1_pipeline.boto3.client").start()
+    mock_s3.return_value.get_object.return_value = {
+        "Body": SimpleNamespace(
+            read=lambda: phase1_pipeline.json.dumps(manifest_payload).encode("utf-8")
+        )
+    }
+    try:
+        with (
+            patch("src.analysis.phase1_pipeline.DatabasePool"),
+            patch("src.analysis.phase1_pipeline.ARTIFACT_BUCKET", "artifact-bucket"),
+            patch("src.analysis.phase1_pipeline.score_candidates") as score_candidates,
+            patch("src.analysis.phase1_pipeline.publish_payload") as publish_payload,
+            patch("src.analysis.phase1_pipeline._emit_metric"),
+            patch.object(phase1_pipeline, "date", _fixed_date(run_date)),
+        ):
+            result = run_phase1_pipeline()
+    finally:
+        patch.stopall()
+
+    assert result["statusCode"] == 200
+    assert result["body"]["status"] == "suppressed"
+    assert result["body"]["failed_gates"][0]["name"] == "price_freshness"
+    score_candidates.assert_not_called()
+    publish_payload.assert_not_called()
+
+
+def test_collection_manifest_quality_metadata_is_added_when_available():
+    run_date = date(2026, 6, 17)
+    manifest_payload = {
+        "manifest_date": run_date.isoformat(),
+        "generated_at": "2026-06-17T07:30:00Z",
+        "updated_at": "2026-06-17T08:00:00Z",
+        "active_ticker_count": 1000,
+        "task_types": ["price", "news", "earnings", "dividend"],
+        "tasks": [],
+        "summary": {
+            "total_tasks": 4,
+            "succeeded_tasks": 4,
+            "total_tickers": 1000,
+            "successful_tickers": 1000,
+            "coverage_ratio": "1.0",
+            "coverage_gates": [
+                {
+                    "name": "price_freshness",
+                    "passed": True,
+                    "observed_value": "1.0",
+                    "required_value": "0.9",
+                    "unit": "ratio",
+                }
+            ],
+        },
+    }
+    body = SimpleNamespace(
+        read=lambda: phase1_pipeline.json.dumps(manifest_payload).encode("utf-8")
+    )
+    with (
+        patch("src.analysis.phase1_pipeline.ARTIFACT_BUCKET", "artifact-bucket"),
+        patch("src.analysis.phase1_pipeline.boto3.client") as client,
+    ):
+        client.return_value.get_object.return_value = {"Body": body}
+        quality = phase1_pipeline._with_collection_manifest_quality(
+            {"coverage_status": "complete"},
+            run_date,
+        )
+
+    assert quality["coverage_status"] == "complete"
+    assert quality["collection_manifest"]["manifest_key"] == (
+        "collection_manifest/2026-06-17.json"
+    )
+    assert quality["collection_manifest"]["summary"]["coverage_gates"][0]["passed"] is True
+
+
 def test_run_phase1_pipeline_scores_only_eligible_tickers_when_coverage_is_partial():
     run_date = date(2026, 6, 17)
     stocks = [
