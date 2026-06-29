@@ -40,8 +40,21 @@ Execution tasks:
 - [ ] Update the analyzer/publisher so daily analysis runs once after collection gates: cheap filters -> AI analysis -> stronger AI review -> publish.
 - [x] Publish collection coverage metadata with every daily artifact so partial universe coverage is visible to users and later diagnostics.
 - [x] Add CloudWatch metrics and alarms for manifest age, incomplete manifest tasks, provider failures, retry exhaustion, low coverage, and stale inputs.
+- [x] Add a stock price gap scanner that detects missing recent trading-day OHLCV rows per active ticker.
+- [x] Queue missing stock-price ranges as date-bounded manifest tasks instead of introducing a separate task table.
+- [x] Teach the stock collector to execute date-bounded gap backfill tasks through existing yfinance, Nasdaq, and Stooq provider logic.
+- [x] Schedule the stock gap scanner after market close and normal collection, with CloudWatch metrics for detected gaps and inserted backfill records.
+- [x] Add tests for gap detection, manifest task creation, collector gap-backfill execution, and CDK wiring.
 - [x] Add a collector runbook covering secret setup, first daily run, manual retry, provider outage triage, and how to quarantine bad tickers.
 - [x] Add integration tests with mocked providers for manifest creation, task claiming, retry behavior, partial provider failure, and analysis gating.
+
+Nice-to-have follow-up:
+
+- [ ] Rework one-time 5-year historical OHLCV restoration to avoid Lambda recursive-loop detection.
+  - Context: AWS reported recursive invocation termination on 2026-06-19, likely from the chained Stooq/historical backfill path. That may explain why roughly one year of stock history loaded instead of the intended five years.
+  - Prefer Step Functions, SQS, or EventBridge Scheduler over Lambda self-invocation for long backfill runs.
+  - Keep the recent 90-day gap scanner separate; it protects current analysis freshness but intentionally does not restore older multi-year history.
+  - Current analyzer mainly uses recent OHLCV windows: 30-day minimum history, about 45-day freshness validation, 60-day price/volume context, and short sector-relative windows. A 5-year restore is useful for completeness, future backtesting, and archive quality, not an urgent blocker for daily recommendations.
 
 Acceptance criteria:
 
