@@ -122,6 +122,8 @@ class ManifestTaskRun:
     bucket: str
     key: str
     task_id: str
+    start_date: date | None = None
+    end_date: date | None = None
 
 
 def handler(event: dict, context: Any) -> dict:
@@ -156,6 +158,13 @@ def handler(event: dict, context: Any) -> dict:
             return _run_historical_backfill(stocks, event or {}, context)
         if (event or {}).get("mode") == "stooq_s3_backfill":
             return _run_stooq_s3_backfill(stocks, event or {}, context)
+        if manifest_task_run and manifest_task_run.start_date and manifest_task_run.end_date:
+            return _run_price_gap_backfill(
+                stocks,
+                event or {},
+                context,
+                manifest_task_run,
+            )
 
         selected_stocks = _select_due_stocks(stocks, event or {})
         if not selected_stocks:
@@ -364,10 +373,19 @@ def _prepare_manifest_task_run(
         raise ValueError(f"Task {task_id} is not a price collection task")
     event["tickers"] = task.tickers
     event["max_tickers"] = len(task.tickers)
+    if task.start_date and task.end_date:
+        event["price_backfill_start_date"] = task.start_date.isoformat()
+        event["price_backfill_end_date"] = task.end_date.isoformat()
     lease_owner = getattr(context, "aws_request_id", None) if context else None
     mark_task_running(manifest, task_id, lease_owner=lease_owner)
     write_manifest(bucket, key, manifest)
-    return ManifestTaskRun(bucket=bucket, key=key, task_id=task_id)
+    return ManifestTaskRun(
+        bucket=bucket,
+        key=key,
+        task_id=task_id,
+        start_date=task.start_date,
+        end_date=task.end_date,
+    )
 
 
 def _complete_manifest_task_run(
@@ -835,6 +853,160 @@ def _invoke_next_stooq_s3_backfill(
     except Exception as exc:
         logger.warning("stooq_s3_backfill_continue_invoke_failed", error=str(exc))
         return False
+
+
+def _run_price_gap_backfill(
+    stocks: list[dict[str, Any]],
+    event: dict[str, Any],
+    context: Any,
+    manifest_task_run: ManifestTaskRun | None = None,
+) -> dict[str, Any]:
+    start_date = date.fromisoformat(str(event["price_backfill_start_date"]))
+    end_date = date.fromisoformat(str(event["price_backfill_end_date"]))
+    requested = {
+        str(ticker).strip().upper()
+        for ticker in event.get("tickers", [])
+        if str(ticker).strip()
+    }
+    stock_by_ticker = {str(stock["ticker"]).upper(): stock for stock in stocks}
+    tickers = sorted(requested & set(stock_by_ticker))
+
+    inserted_records = 0
+    duplicate_records = 0
+    failed_records = 0
+    failed_tickers: list[str] = []
+    no_data_tickers: list[str] = []
+    collected_tickers: set[str] = set()
+
+    for ticker in tickers:
+        if _should_stop_for_time(context):
+            failed_tickers.append(ticker)
+            continue
+        records = _fetch_price_backfill_records(
+            ticker,
+            stock_by_ticker[ticker],
+            start_date,
+            end_date,
+        )
+        if not records:
+            failed_tickers.append(ticker)
+            no_data_tickers.append(ticker)
+            continue
+        stored = _store_records(records)
+        inserted_records += stored.inserted_records
+        duplicate_records += stored.duplicate_records
+        failed_records += stored.failed_records
+        if stored.inserted_records > 0 or stored.duplicate_records > 0:
+            collected_tickers.add(ticker)
+        else:
+            failed_tickers.append(ticker)
+
+    summary = _build_collection_summary(
+        active_ticker_count=len(stocks),
+        selected_ticker_count=len(tickers),
+        records_collected=inserted_records,
+        duplicate_records=duplicate_records,
+        failed_tickers=failed_tickers,
+        no_data_tickers=no_data_tickers,
+        recovered_tickers=sorted(collected_tickers),
+    )
+    summary["mode"] = "price_gap_backfill"
+    summary["backfill_start_date"] = start_date.isoformat()
+    summary["backfill_end_date"] = end_date.isoformat()
+    summary["failed_record_count"] = failed_records
+    _record_collection_summary(summary)
+    _record_failed_ticker_state(summary)
+    _emit_metric("stock_price_backfill_records_inserted", inserted_records)
+    _emit_collection_summary_metrics(summary)
+    if collected_tickers:
+        movement_signal_count = _compute_and_store_movement_signals(collected_tickers)
+        _emit_metric("market_movement_signals_collected", movement_signal_count)
+
+    failed = summary["status"] in {"failed", "degraded"} or failed_records > 0
+    if manifest_task_run:
+        _complete_manifest_task_run(manifest_task_run, summary, failed=failed)
+
+    logger.info(
+        "price_gap_backfill_completed",
+        ticker_count=len(tickers),
+        start_date=start_date.isoformat(),
+        end_date=end_date.isoformat(),
+        inserted_records=inserted_records,
+        duplicate_records=duplicate_records,
+        failed_ticker_count=len(set(failed_tickers)),
+    )
+    return {
+        "statusCode": 200,
+        "body": {
+            "mode": "price_gap_backfill",
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "tickers": tickers,
+            "records_inserted": inserted_records,
+            "duplicate_records": duplicate_records,
+            "failed_records": failed_records,
+            "failed_tickers": sorted(set(failed_tickers)),
+            "collection_summary": summary,
+        },
+    }
+
+
+def _fetch_price_backfill_records(
+    ticker: str,
+    stock_metadata: dict[str, Any],
+    start_date: date,
+    end_date: date,
+) -> list[dict[str, Any]]:
+    fetch_end = end_date + timedelta(days=1)
+    data = _fetch_yfinance_with_retry(
+        [ticker],
+        period="custom",
+        start=start_date,
+        end=fetch_end,
+    )
+    if data is not None:
+        extract = _extract_ticker_data_result(
+            data,
+            ticker,
+            period=f"{(fetch_end - start_date).days}d",
+            stock_metadata=stock_metadata,
+        )
+        records = _records_in_range(extract.records, start_date, end_date)
+        if records:
+            return records
+
+    fallback_records = _fetch_nasdaq_with_retry(
+        ticker,
+        stock_metadata=stock_metadata,
+        start_date=start_date,
+        end_date=end_date,
+        max_records=NASDAQ_HISTORICAL_MAX_RECORDS_PER_TICKER,
+        fetch_period="nasdaq_gap_backfill",
+    )
+    if fallback_records:
+        records = _records_in_range(fallback_records, start_date, end_date)
+        if records:
+            return records
+
+    fallback_records = _fetch_stooq_with_retry(
+        ticker,
+        stock_metadata=stock_metadata,
+        max_records=STOOQ_HISTORICAL_MAX_RECORDS_PER_TICKER,
+        fetch_period="stooq_gap_backfill",
+    )
+    return _records_in_range(fallback_records or [], start_date, end_date)
+
+
+def _records_in_range(
+    records: list[dict[str, Any]],
+    start_date: date,
+    end_date: date,
+) -> list[dict[str, Any]]:
+    return [
+        record
+        for record in records
+        if start_date <= _record_date(record["trading_date"]) <= end_date
+    ]
 
 
 def _select_historical_backfill_stocks(

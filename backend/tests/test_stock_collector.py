@@ -1921,6 +1921,84 @@ class TestHandler:
         mock_batch.assert_called_once()
         assert mock_batch.call_args.args[0] == ["AAPL", "MSFT"]
 
+    @patch("backend.src.collectors.stock_collector.write_manifest")
+    @patch("backend.src.collectors.stock_collector.load_manifest")
+    @patch("backend.src.collectors.stock_collector._emit_metric")
+    @patch("backend.src.collectors.stock_collector._compute_and_store_movement_signals")
+    @patch("backend.src.collectors.stock_collector._record_failed_ticker_state")
+    @patch("backend.src.collectors.stock_collector._record_collection_summary")
+    @patch("backend.src.collectors.stock_collector._store_records")
+    @patch("backend.src.collectors.stock_collector._fetch_price_backfill_records")
+    @patch("backend.src.collectors.stock_collector._process_batch")
+    @patch("backend.src.collectors.stock_collector._fetch_watchlist")
+    @patch("backend.src.collectors.stock_collector.DatabasePool")
+    def test_handler_processes_manifest_price_gap_backfill_task(
+        self,
+        mock_pool,
+        mock_watchlist,
+        mock_batch,
+        mock_fetch_backfill,
+        mock_store_records,
+        mock_summary,
+        mock_failure_state,
+        mock_movement,
+        mock_metric,
+        mock_load_manifest,
+        mock_write_manifest,
+    ):
+        generated_at = datetime(2026, 6, 20, 7, 30, tzinfo=timezone.utc)
+        manifest = build_manifest(
+            [{"ticker": "AAPL"}],
+            manifest_date=date(2026, 6, 20),
+            generated_at=generated_at,
+        )
+        price_task = next(
+            task
+            for task in manifest.tasks
+            if task.task_type == CollectionTaskType.PRICE
+        )
+        price_task.task_id = "price-backfill-AAPL-2026-06-16-2026-06-17"
+        price_task.start_date = date(2026, 6, 16)
+        price_task.end_date = date(2026, 6, 17)
+        mock_load_manifest.return_value = manifest
+        mock_watchlist.return_value = [{"ticker": "AAPL"}]
+        mock_fetch_backfill.return_value = [
+            {
+                "ticker": "AAPL",
+                "trading_date": date(2026, 6, 16),
+                "open_price": Decimal("10"),
+                "high_price": Decimal("11"),
+                "low_price": Decimal("9"),
+                "close_price": Decimal("10.5"),
+                "volume": 100,
+            }
+        ]
+        mock_store_records.return_value = StoreResult(inserted_records=1)
+        mock_movement.return_value = 1
+
+        result = handler(
+            {
+                "mode": "manifest_task",
+                "manifest_bucket": "stockara-artifacts",
+                "manifest_key": "collection_manifest/2026-06-20.json",
+                "task_id": price_task.task_id,
+            },
+            None,
+        )
+
+        assert result["statusCode"] == 200
+        assert result["body"]["mode"] == "price_gap_backfill"
+        assert price_task.status == CollectionTaskStatus.SUCCEEDED
+        assert price_task.output_counts.records_written == 1
+        mock_batch.assert_not_called()
+        mock_fetch_backfill.assert_called_once_with(
+            "AAPL",
+            {"ticker": "AAPL"},
+            date(2026, 6, 16),
+            date(2026, 6, 17),
+        )
+        mock_store_records.assert_called_once()
+
     @patch("backend.src.collectors.stock_collector._emit_metric")
     @patch("backend.src.collectors.stock_collector._fetch_watchlist")
     @patch("backend.src.collectors.stock_collector.DatabasePool")

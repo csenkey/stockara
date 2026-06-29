@@ -396,6 +396,9 @@ class CollectionTask(BaseModel):
     tickers: list[str] = Field(default_factory=list)
     ticker_range_start: Optional[str] = Field(default=None, max_length=10)
     ticker_range_end: Optional[str] = Field(default=None, max_length=10)
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    reason: Optional[str] = Field(default=None, max_length=120)
     provider: Optional[str] = Field(default=None, max_length=100)
     provider_attempts: list[CollectionProviderAttempt] = Field(default_factory=list)
     ticker_health: dict[str, CollectionTickerHealth] = Field(default_factory=dict)

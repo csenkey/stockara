@@ -190,6 +190,30 @@ class ApiStack(Stack):
             description="Extracts uploaded Stooq zip files to S3 for one-time backfill",
         )
 
+        self.stock_gap_scanner_fn = _lambda.Function(
+            self,
+            "StockGapScannerFunction",
+            function_name=resource_name(
+                deployment_stage,
+                "stockara-stock-gap-scanner",
+                "stock-gap-scanner",
+            ),
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            handler="src.collectors.stock_gap_scanner.handler",
+            code=backend_code,
+            memory_size=256,
+            timeout=Duration.minutes(5),
+            role=batch_role,
+            environment={
+                **common_env,
+                "POWERTOOLS_SERVICE_NAME": "stock-gap-scanner",
+                "STOCK_GAP_SCAN_LOOKBACK_DAYS": "90",
+                "STOCK_GAP_SCAN_MAX_TASKS": "250",
+                "STOCK_GAP_TASK_MAX_RANGE_DAYS": "14",
+            },
+            description="Scans recent OHLCV history for gaps and queues price backfill tasks",
+        )
+
         self.watchlist_seed_fn = _lambda.Function(
             self,
             "WatchlistSeedFunction",
@@ -363,12 +387,14 @@ class ApiStack(Stack):
         data_table.grant_read_write_data(self.earnings_collector_fn)
         data_table.grant_read_write_data(self.dividend_collector_fn)
         data_table.grant_read_data(self.collection_distributor_fn)
+        data_table.grant_read_data(self.stock_gap_scanner_fn)
         data_table.grant_read_write_data(self.ai_analyzer_fn)
         data_table.grant_read_write_data(self.watchlist_seed_fn)
         data_table.grant_read_data(self.api_handler_fn)
         artifact_bucket.grant_read_write(self.stock_collector_fn)
         artifact_bucket.grant_read_write(self.stooq_zip_extractor_fn)
         artifact_bucket.grant_read_write(self.collection_distributor_fn)
+        artifact_bucket.grant_read_write(self.stock_gap_scanner_fn)
         artifact_bucket.grant_put(self.ai_analyzer_fn)
         batch_role.add_to_policy(
             iam.PolicyStatement(
@@ -450,6 +476,20 @@ class ApiStack(Stack):
             targets=[targets.LambdaFunction(self.collection_distributor_fn)],
         )
         collection_manifest_rule.node.add_dependency(self.watchlist_seed)
+
+        stock_gap_scan_rule = events.Rule(
+            self,
+            "StockGapScanSchedule",
+            rule_name=resource_name(
+                deployment_stage,
+                "stockara-stock-gap-scan",
+                "stock-gap-scan",
+            ),
+            description="Scans for missing recent OHLCV rows and enqueues backfill tasks",
+            schedule=events.Schedule.cron(minute="15", hour="23"),
+            targets=[targets.LambdaFunction(self.stock_gap_scanner_fn)],
+        )
+        stock_gap_scan_rule.node.add_dependency(self.watchlist_seed)
 
         events.Rule(
             self,

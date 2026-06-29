@@ -147,6 +147,31 @@ def test_calendar_collector_lambdas_and_schedules_are_created():
         },
     )
     template.has_resource_properties(
+        "AWS::Lambda::Function",
+        {
+            "FunctionName": "stockara-codex-test-stock-gap-scanner",
+            "Handler": "src.collectors.stock_gap_scanner.handler",
+            "Timeout": 300,
+            "Environment": {
+                "Variables": assertions.Match.object_like(
+                    {
+                        "POWERTOOLS_SERVICE_NAME": "stock-gap-scanner",
+                        "STOCK_GAP_SCAN_LOOKBACK_DAYS": "90",
+                        "STOCK_GAP_SCAN_MAX_TASKS": "250",
+                        "STOCK_GAP_TASK_MAX_RANGE_DAYS": "14",
+                    }
+                )
+            },
+        },
+    )
+    template.has_resource_properties(
+        "AWS::Events::Rule",
+        {
+            "Name": "stockara-codex-test-stock-gap-scan",
+            "ScheduleExpression": "cron(15 23 * * ? *)",
+        },
+    )
+    template.has_resource_properties(
         "AWS::Events::Rule",
         {
             "Name": "stockara-codex-test-dividend-collection",
