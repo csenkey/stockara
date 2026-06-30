@@ -16,6 +16,7 @@ from src.models.schemas import (
     collection_manifest_s3_key,
 )
 from src.services.collection_manifest import recompute_summary, write_manifest
+from src.services.static_artifacts import safe_publish_json_artifact
 
 logger = structlog.get_logger(__name__)
 
@@ -83,6 +84,16 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
         recompute_summary(manifest)
         if tasks:
             write_manifest(bucket, key, manifest)
+        _publish_price_gaps_artifact(
+            bucket,
+            manifest_key=key,
+            manifest_date=manifest_date,
+            scan_start=scan_start,
+            scan_end=scan_end,
+            active_ticker_count=len(stocks),
+            tasks=tasks,
+            generated_at=now,
+        )
     finally:
         DatabasePool.close()
 
@@ -323,6 +334,68 @@ def _emit_metric(name: str, value: float) -> None:
         )
     except Exception:
         return
+
+
+def _publish_price_gaps_artifact(
+    bucket: str,
+    manifest_key: str,
+    manifest_date: date,
+    scan_start: date,
+    scan_end: date,
+    active_ticker_count: int,
+    tasks: list[CollectionTask],
+    generated_at: datetime,
+) -> None:
+    gaps_by_ticker: dict[str, list[dict[str, Any]]] = {}
+    for task in tasks:
+        ticker = task.tickers[0] if task.tickers else task.ticker_range_start
+        if not ticker:
+            continue
+        gaps_by_ticker.setdefault(str(ticker), []).append(
+            {
+                "start_date": task.start_date,
+                "end_date": task.end_date,
+                "task_id": task.task_id,
+                "status": task.status.value,
+                "reason": task.reason,
+                "trading_day_count": len(
+                    _trading_days(task.start_date, task.end_date)
+                    if task.start_date and task.end_date
+                    else []
+                ),
+            }
+        )
+
+    ticker_rows = [
+        {
+            "ticker": ticker,
+            "gap_count": len(gaps),
+            "missing_trading_days": sum(gap["trading_day_count"] for gap in gaps),
+            "gaps": gaps,
+        }
+        for ticker, gaps in gaps_by_ticker.items()
+    ]
+    ticker_rows.sort(key=lambda item: item["missing_trading_days"], reverse=True)
+    payload = {
+        "generated_at": generated_at.isoformat(),
+        "manifest_date": manifest_date.isoformat(),
+        "manifest_key": manifest_key,
+        "scan_start_date": scan_start.isoformat(),
+        "scan_end_date": scan_end.isoformat(),
+        "active_ticker_count": active_ticker_count,
+        "gap_ticker_count": len(ticker_rows),
+        "gap_count": len(tasks),
+        "missing_trading_days": sum(
+            row["missing_trading_days"] for row in ticker_rows
+        ),
+        "by_ticker": ticker_rows,
+    }
+    safe_publish_json_artifact(bucket, "price-gaps/latest.json", payload)
+    safe_publish_json_artifact(
+        bucket,
+        f"price-gaps/history/{manifest_date.isoformat()}.json",
+        payload,
+    )
 
 
 def _response(status_code: int, body: dict[str, Any]) -> dict[str, Any]:

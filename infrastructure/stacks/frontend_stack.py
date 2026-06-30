@@ -82,7 +82,13 @@ class FrontendStack(Stack):
                 destination_bucket=self.site_bucket,
                 distribution=self.distribution,
                 distribution_paths=["/*"],
-                exclude=["top-picks/*", "sell-alerts/*"],
+                exclude=[
+                    "top-picks/*",
+                    "sell-alerts/*",
+                    "data-health/*",
+                    "news/*",
+                    "price-gaps/*",
+                ],
                 prune=False,
             )
 

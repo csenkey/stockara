@@ -29,6 +29,7 @@ from src.services.collection_manifest import (
     write_manifest,
 )
 from src.services.secrets import get_openai_api_key, get_provider_api_key
+from src.services.static_artifacts import safe_publish_json_artifact
 
 logger = structlog.get_logger(__name__)
 
@@ -39,8 +40,14 @@ COLLECTION_MANIFEST_BUCKET = os.environ.get(
     "COLLECTION_MANIFEST_BUCKET",
     os.environ.get("STOCKARA_ARTIFACT_BUCKET", ""),
 )
+ARTIFACT_BUCKET = os.environ.get("STOCKARA_ARTIFACT_BUCKET", "")
 FINNHUB_TICKER_NEWS_MAX_TICKERS = int(
     os.environ.get("FINNHUB_TICKER_NEWS_MAX_TICKERS", "10")
+)
+NEWS_ARTIFACT_LOOKBACK_DAYS = int(os.environ.get("NEWS_ARTIFACT_LOOKBACK_DAYS", "30"))
+NEWS_ARTIFACT_MAX_TICKERS = int(os.environ.get("NEWS_ARTIFACT_MAX_TICKERS", "250"))
+NEWS_ARTIFACT_MAX_ARTICLES_PER_TICKER = int(
+    os.environ.get("NEWS_ARTIFACT_MAX_ARTICLES_PER_TICKER", "10")
 )
 
 # CloudWatch metrics client
@@ -510,7 +517,7 @@ def collect_news(tickers: list[str] | None = None) -> dict[str, Any]:
         )
         record_news_collection_summary(summary)
         emit_news_collection_summary_metrics(summary)
-        return {
+        result = {
             "status": "error",
             "message": "All news sources unavailable",
             "articles_processed": 0,
@@ -518,6 +525,8 @@ def collect_news(tickers: list[str] | None = None) -> dict[str, Any]:
             "tickers": tickers or [],
             "collection_summary": summary,
         }
+        _publish_news_dashboard_artifact(ARTIFACT_BUCKET, result)
+        return result
 
     # Combine all articles
     all_articles = newsapi_articles + finnhub_articles
@@ -596,7 +605,7 @@ def collect_news(tickers: list[str] | None = None) -> dict[str, Any]:
     record_news_collection_summary(summary)
     emit_news_collection_summary_metrics(summary)
 
-    return {
+    result = {
         "status": "success",
         "articles_processed": articles_stored,
         "sources_available": sources_available,
@@ -604,6 +613,93 @@ def collect_news(tickers: list[str] | None = None) -> dict[str, Any]:
         "duplicates_skipped": len(all_articles) - len(new_articles),
         "tickers": tickers or [],
         "collection_summary": summary,
+    }
+    _publish_news_dashboard_artifact(ARTIFACT_BUCKET, result)
+    return result
+
+
+def _publish_news_dashboard_artifact(
+    bucket: str,
+    result: dict[str, Any],
+) -> None:
+    if not bucket:
+        return
+    generated_at = datetime.now(timezone.utc)
+    end_date = generated_at.date()
+    start_date = end_date - timedelta(days=NEWS_ARTIFACT_LOOKBACK_DAYS)
+    by_ticker = _recent_news_by_ticker(start_date, end_date)
+    summary = result.get("collection_summary") or {}
+    total_recent_articles = sum(item["article_count"] for item in by_ticker)
+    payload = {
+        "generated_at": generated_at.isoformat(),
+        "lookback_days": NEWS_ARTIFACT_LOOKBACK_DAYS,
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "last_run": {
+            "status": result.get("status"),
+            "articles_fetched": summary.get(
+                "articles_fetched", result.get("total_fetched", 0)
+            ),
+            "articles_processed": result.get(
+                "articles_processed", summary.get("articles_processed", 0)
+            ),
+            "duplicates_skipped": result.get(
+                "duplicates_skipped", summary.get("duplicates_skipped", 0)
+            ),
+            "sources_available": result.get(
+                "sources_available", summary.get("sources_available", 0)
+            ),
+            "sources_total": summary.get("sources_total", 2),
+            "failed_sources": summary.get("failed_sources", []),
+            "tickers": result.get("tickers", []),
+        },
+        "recent_article_count": total_recent_articles,
+        "ticker_count_with_news": len(by_ticker),
+        "by_ticker": by_ticker,
+    }
+    safe_publish_json_artifact(bucket, "news/latest.json", payload)
+
+
+def _recent_news_by_ticker(start_date: date, end_date: date) -> list[dict[str, Any]]:
+    try:
+        stocks = store.active_stock_metadata()
+    except Exception as exc:
+        logger.warning("news_dashboard_active_tickers_failed", error=str(exc))
+        return []
+
+    rows: list[dict[str, Any]] = []
+    for stock in stocks[:NEWS_ARTIFACT_MAX_TICKERS]:
+        ticker = str(stock.get("ticker", "")).strip().upper()
+        if not ticker:
+            continue
+        try:
+            articles = store.news_for_ticker(ticker, start_date, end_date)
+        except Exception as exc:
+            logger.warning("news_dashboard_ticker_query_failed", ticker=ticker, error=str(exc))
+            continue
+        if not articles:
+            continue
+        rows.append(
+            {
+                "ticker": ticker,
+                "company_name": stock.get("name") or stock.get("company_name") or ticker,
+                "article_count": len(articles),
+                "articles": [
+                    _news_article_row(article)
+                    for article in articles[:NEWS_ARTIFACT_MAX_ARTICLES_PER_TICKER]
+                ],
+            }
+        )
+    return sorted(rows, key=lambda item: item["article_count"], reverse=True)
+
+
+def _news_article_row(article: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "title": article.get("title", ""),
+        "source": article.get("source", ""),
+        "published_at": article.get("published_at"),
+        "summary": article.get("summary", ""),
+        "sentiment": article.get("sentiment", "neutral"),
     }
 
 

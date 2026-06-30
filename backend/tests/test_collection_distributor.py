@@ -83,13 +83,26 @@ def test_handler_writes_manifest_to_s3(mock_pool, mock_active_stocks, mock_boto_
     assert response["body"]["task_count"] == 4
     assert response["body"]["dispatched_task_count"] == 1
     assert s3.put_object.called
-    call = s3.put_object.call_args.kwargs
+    call = next(
+        item.kwargs
+        for item in s3.put_object.call_args_list
+        if item.kwargs["Key"] == "collection_manifest/2026-06-20.json"
+    )
     assert call["Bucket"] == "stockara-artifacts"
     assert call["Key"] == "collection_manifest/2026-06-20.json"
     payload = json.loads(call["Body"].decode("utf-8"))
     assert payload["active_ticker_count"] == 2
     assert payload["tasks"][0]["tickers"] == ["AAPL", "MSFT"]
     assert payload["tasks"][0]["status"] == CollectionTaskStatus.LEASED
+    health_call = next(
+        item.kwargs
+        for item in s3.put_object.call_args_list
+        if item.kwargs["Key"] == "data-health/latest.json"
+    )
+    health_payload = json.loads(health_call["Body"].decode("utf-8"))
+    assert health_payload["manifest_key"] == "collection_manifest/2026-06-20.json"
+    assert health_payload["task_counts"]["total"] == 4
+    assert health_payload["tasks_by_type"]["price"]["leased"] == 1
     lambda_client.invoke.assert_called_once()
 
 

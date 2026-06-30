@@ -24,6 +24,7 @@ from src.models.schemas import (
     collection_manifest_s3_key,
 )
 from src.services.collection_manifest import emit_manifest_metrics, recompute_summary
+from src.services.static_artifacts import safe_publish_json_artifact
 
 logger = structlog.get_logger(__name__)
 
@@ -77,6 +78,7 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
     recompute_summary(manifest)
     if not dispatched:
         _put_manifest(bucket, key, manifest)
+    _publish_data_health_artifact(bucket, key, manifest, now)
     log.info(
         "collection_manifest_refreshed",
         bucket=bucket,
@@ -320,6 +322,106 @@ def _put_manifest(bucket: str, key: str, manifest: CollectionManifest) -> None:
         ContentType="application/json",
     )
     emit_manifest_metrics(manifest)
+
+
+def _publish_data_health_artifact(
+    bucket: str,
+    manifest_key: str,
+    manifest: CollectionManifest,
+    generated_at: datetime,
+) -> None:
+    summary = manifest.summary.model_dump(mode="json") if manifest.summary else {}
+    payload = {
+        "generated_at": generated_at.isoformat(),
+        "manifest_date": manifest.manifest_date.isoformat(),
+        "manifest_key": manifest_key,
+        "active_ticker_count": manifest.active_ticker_count,
+        "analysis_not_before": (
+            manifest.analysis_not_before.isoformat()
+            if manifest.analysis_not_before
+            else None
+        ),
+        "task_counts": {
+            "total": summary.get("total_tasks", 0),
+            "pending": summary.get("pending_tasks", 0),
+            "leased": summary.get("leased_tasks", 0),
+            "running": summary.get("running_tasks", 0),
+            "succeeded": summary.get("succeeded_tasks", 0),
+            "failed": summary.get("failed_tasks", 0),
+            "retry_wait": summary.get("retry_wait_tasks", 0),
+            "retry_exhausted": summary.get("retry_exhausted_tasks", 0),
+        },
+        "output_counts": summary.get("output_counts", {}),
+        "coverage_ratio": summary.get("coverage_ratio", 0),
+        "coverage_gates": summary.get("coverage_gates", []),
+        "tasks_by_type": _task_counts_by_type(manifest),
+        "failed_tasks": _task_rows(manifest, failed_only=True),
+        "recent_tasks": _task_rows(manifest, failed_only=False)[:50],
+    }
+    safe_publish_json_artifact(bucket, "data-health/latest.json", payload)
+    safe_publish_json_artifact(
+        bucket,
+        f"data-health/history/{manifest.manifest_date.isoformat()}.json",
+        payload,
+    )
+
+
+def _task_counts_by_type(manifest: CollectionManifest) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {}
+    for task in manifest.tasks:
+        type_counts = counts.setdefault(
+            task.task_type.value,
+            {
+                "total": 0,
+                "pending": 0,
+                "leased": 0,
+                "running": 0,
+                "succeeded": 0,
+                "failed": 0,
+                "retry_wait": 0,
+                "retry_exhausted": 0,
+            },
+        )
+        type_counts["total"] += 1
+        type_counts[task.status.value] = type_counts.get(task.status.value, 0) + 1
+    return counts
+
+
+def _task_rows(
+    manifest: CollectionManifest,
+    failed_only: bool,
+) -> list[dict[str, Any]]:
+    rows = []
+    for task in sorted(
+        manifest.tasks,
+        key=lambda item: item.updated_at or item.created_at,
+        reverse=True,
+    ):
+        if failed_only and task.status != CollectionTaskStatus.FAILED:
+            continue
+        rows.append(
+            {
+                "task_id": task.task_id,
+                "task_type": task.task_type.value,
+                "status": task.status.value,
+                "ticker_count": len(task.tickers),
+                "ticker_range_start": task.ticker_range_start,
+                "ticker_range_end": task.ticker_range_end,
+                "start_date": task.start_date,
+                "end_date": task.end_date,
+                "reason": task.reason,
+                "failure_reason": task.failure_reason,
+                "attempts": task.attempts,
+                "max_attempts": task.max_attempts,
+                "updated_at": task.updated_at,
+                "output_counts": (
+                    task.output_counts.model_dump(mode="json")
+                    if task.output_counts
+                    else {}
+                ),
+            }
+        )
+    return rows
 
 
 def _response(status_code: int, body: dict[str, Any]) -> dict[str, Any]:

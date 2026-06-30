@@ -105,7 +105,11 @@ function formatDate(value: string) {
   }).format(new Date(value));
 }
 
-export default function Dashboard() {
+interface DashboardProps {
+  onNavigate?: (view: "top-picks" | "data-health") => void;
+}
+
+export default function Dashboard({ onNavigate }: DashboardProps) {
   const [payload, setPayload] = useState<TopPicksPayload | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -149,12 +153,22 @@ export default function Dashboard() {
               from static Phase 1 artifacts.
             </p>
           </div>
-          <button
-            onClick={loadTopPicks}
-            className="inline-flex h-10 items-center justify-center gap-2 rounded border border-slate-700 bg-slate-800 px-3 text-sm font-medium text-slate-100 hover:bg-slate-700"
-          >
-            Refresh
-          </button>
+          <div className="flex flex-wrap gap-2">
+            {onNavigate && (
+              <button
+                onClick={() => onNavigate("data-health")}
+                className="inline-flex h-10 items-center justify-center rounded border border-slate-700 bg-slate-900 px-3 text-sm font-medium text-slate-200 hover:bg-slate-800"
+              >
+                Data Freshness
+              </button>
+            )}
+            <button
+              onClick={loadTopPicks}
+              className="inline-flex h-10 items-center justify-center rounded border border-slate-700 bg-slate-800 px-3 text-sm font-medium text-slate-100 hover:bg-slate-700"
+            >
+              Refresh
+            </button>
+          </div>
         </div>
       </section>
 

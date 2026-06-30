@@ -105,8 +105,20 @@ def test_handler_appends_gap_tasks_to_existing_manifest(
 
     assert response["statusCode"] == 200
     assert response["body"]["tasks_created"] == 1
-    put_call = s3.put_object.call_args.kwargs
+    put_call = next(
+        item.kwargs
+        for item in s3.put_object.call_args_list
+        if item.kwargs["Key"] == "collection_manifest/2026-06-19.json"
+    )
     assert put_call["Key"] == "collection_manifest/2026-06-19.json"
     payload = put_call["Body"].decode("utf-8")
     assert "price-backfill-AAPL-2026-06-16-2026-06-16" in payload
+    gap_call = next(
+        item.kwargs
+        for item in s3.put_object.call_args_list
+        if item.kwargs["Key"] == "price-gaps/latest.json"
+    )
+    gap_payload = gap_call["Body"].decode("utf-8")
+    assert '"gap_ticker_count": 1' in gap_payload
+    assert "price-backfill-AAPL-2026-06-16-2026-06-16" in gap_payload
     mock_metric.assert_called_once_with("stock_price_gaps_detected", 1)

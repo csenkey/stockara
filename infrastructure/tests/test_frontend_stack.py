@@ -82,7 +82,13 @@ def test_frontend_deployment_does_not_prune_bucket_data():
         "Custom::CDKBucketDeployment",
         {
             "Prune": False,
-            "Exclude": ["top-picks/*", "sell-alerts/*"],
+            "Exclude": [
+                "top-picks/*",
+                "sell-alerts/*",
+                "data-health/*",
+                "news/*",
+                "price-gaps/*",
+            ],
         },
     )
 
