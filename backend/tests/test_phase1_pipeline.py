@@ -150,6 +150,60 @@ def test_price_volume_signals_prefer_stored_market_signals():
     assert signals[0]["source"]["raw"]["price_change_percent"] == 6
 
 
+def test_price_volume_signals_include_stored_evidence_signals():
+    with patch("src.analysis.phase1_pipeline.store") as mock_store:
+        mock_store.market_signals_for_ticker.return_value = [
+            {
+                "ticker": "NVDA",
+                "signal_date": "2026-06-17",
+                "signal_type": "sec_filing",
+                "direction": "positive",
+                "score": 22,
+                "title": "Recent SEC 8-K filing",
+                "summary": "NVDA filed an 8-K with the SEC.",
+                "source": {
+                    "provider": "sec",
+                    "raw": {"form": "8-K", "accession_number": "000123-26-000001"},
+                },
+            },
+            {
+                "ticker": "NVDA",
+                "signal_date": "2026-06-17",
+                "signal_type": "analyst_action",
+                "direction": "positive",
+                "score": 30,
+                "title": "Bullish analyst consensus",
+                "summary": "NVDA analyst recommendation mix is constructive.",
+                "source": {
+                    "provider": "finnhub",
+                    "raw": {"strong_buy": 4, "buy": 10, "hold": 2, "coverage": 16},
+                },
+            },
+            {
+                "ticker": "NVDA",
+                "signal_date": "2026-06-17",
+                "signal_type": "unsupported",
+                "direction": "positive",
+                "score": 99,
+                "title": "Ignored signal",
+                "summary": "Unsupported stored signal type.",
+            },
+        ]
+
+        signals = _price_volume_signals("NVDA", date(2026, 6, 17))
+
+    signal_types = {signal["signal_type"] for signal in signals}
+    assert signal_types == {"sec_filing", "analyst_action"}
+    sec_signal = next(signal for signal in signals if signal["signal_type"] == "sec_filing")
+    analyst_signal = next(
+        signal for signal in signals if signal["signal_type"] == "analyst_action"
+    )
+    assert sec_signal["source"]["provider"] == "sec"
+    assert sec_signal["source"]["raw"]["form"] == "8-K"
+    assert analyst_signal["source"]["provider"] == "finnhub"
+    assert analyst_signal["source"]["raw"]["coverage"] == 16
+
+
 def test_price_volume_signals_add_multi_day_market_context():
     run_date = date(2026, 6, 17)
     rows = _market_context_rows(

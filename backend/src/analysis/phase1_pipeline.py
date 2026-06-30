@@ -83,6 +83,13 @@ POSITIVE_KEYWORDS = (
     "buyback",
 )
 
+STORED_SIGNAL_TYPES = {
+    "price_move",
+    "volume_move",
+    "sec_filing",
+    "analyst_action",
+}
+
 
 def run_phase1_pipeline(event: dict | None = None) -> dict[str, Any]:
     """Run the daily top-picks pipeline and publish static artifacts."""
@@ -1409,26 +1416,31 @@ def _stored_market_signals(ticker: str, run_date: date) -> list[dict[str, Any]]:
 
     signals = []
     for row in rows:
-        if row.get("signal_type") not in {"price_move", "volume_move"}:
+        signal_type = row.get("signal_type")
+        if signal_type not in STORED_SIGNAL_TYPES:
             continue
+        source = row.get("source") if isinstance(row.get("source"), dict) else {}
+        raw = source.get("raw") if isinstance(source.get("raw"), dict) else {}
+        raw = {
+            **raw,
+            "signal_date": row.get("signal_date"),
+            "price_change_percent": _jsonable_value(row.get("price_change_percent")),
+            "volume_ratio": _jsonable_value(row.get("volume_ratio")),
+            "close_price": _jsonable_value(row.get("close_price")),
+            "previous_close_price": _jsonable_value(row.get("previous_close_price")),
+            "volume": row.get("volume"),
+            "average_volume": _jsonable_value(row.get("average_volume")),
+        }
         signals.append(
             _signal(
                 ticker,
-                row["signal_type"],
+                signal_type,
                 row["direction"],
                 int(row["score"]),
                 row["title"],
                 row["summary"],
-                "stock_collector",
-                {
-                    "signal_date": row.get("signal_date"),
-                    "price_change_percent": _jsonable_value(row.get("price_change_percent")),
-                    "volume_ratio": _jsonable_value(row.get("volume_ratio")),
-                    "close_price": _jsonable_value(row.get("close_price")),
-                    "previous_close_price": _jsonable_value(row.get("previous_close_price")),
-                    "volume": row.get("volume"),
-                    "average_volume": _jsonable_value(row.get("average_volume")),
-                },
+                str(source.get("provider") or "stock_collector"),
+                {key: value for key, value in raw.items() if value is not None},
             )
         )
     return signals

@@ -1,0 +1,122 @@
+name: Run Evidence Collection Now
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_stage:
+        description: "Deployment stage to run"
+        required: true
+        default: "prod"
+        type: choice
+        options:
+          - prod
+      tickers_csv:
+        description: "Optional comma-separated tickers to target"
+        required: false
+        default: ""
+      max_tickers:
+        description: "Maximum active tickers to scan when tickers_csv is empty"
+        required: true
+        default: "100"
+
+concurrency:
+  group: run-evidence-collection-now-${{ inputs.deployment_stage }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+jobs:
+  collect:
+    name: Invoke deployed evidence collector
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check AWS OIDC role configuration
+        run: |
+          if [[ -z "${{ secrets.AWS_ROLE_TO_ASSUME }}" ]]; then
+            echo "Missing GitHub secret AWS_ROLE_TO_ASSUME."
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: stockara-evidence-collection-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve function
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="${{ inputs.deployment_stage }}"
+          if [[ "$stage" == "prod" ]]; then
+            echo "EVIDENCE_COLLECTOR_FN=stockara-evidence-collector" >> "$GITHUB_ENV"
+          else
+            echo "Unsupported deployment stage: $stage"
+            exit 1
+          fi
+
+      - name: Build invocation payload
+        shell: bash
+        env:
+          TICKERS_CSV: ${{ inputs.tickers_csv }}
+          MAX_TICKERS: ${{ inputs.max_tickers }}
+        run: |
+          set -euo pipefail
+          python - <<'PY' > evidence-payload.json
+          import json
+          import os
+
+          tickers = [
+              ticker.strip().upper()
+              for ticker in os.environ["TICKERS_CSV"].split(",")
+              if ticker.strip()
+          ]
+          max_tickers = int(os.environ["MAX_TICKERS"])
+          payload = {"tickers": tickers} if tickers else {"max_tickers": max_tickers}
+          print(json.dumps(payload))
+          PY
+          cat evidence-payload.json
+
+      - name: Invoke evidence collector
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws lambda invoke \
+            --function-name "$EVIDENCE_COLLECTOR_FN" \
+            --payload file://evidence-payload.json \
+            --log-type Tail \
+            --cli-read-timeout 900 \
+            --cli-binary-format raw-in-base64-out \
+            evidence-response.json > evidence-invoke.json
+          python -c "import base64, json; meta=json.load(open('evidence-invoke.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
+          python -c "import json, sys; meta=json.load(open('evidence-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
+          cat evidence-response.json
+          python -m json.tool evidence-response.json
+          python - <<'PY'
+          import json
+          import sys
+
+          payload = json.load(open("evidence-response.json"))
+          if payload.get("statusCode") != 200:
+              print(f"Evidence collector failed with statusCode={payload.get('statusCode')}")
+              sys.exit(1)
+          body = payload.get("body", {})
+          if body.get("status") not in {"success", "partial"}:
+              print(f"Evidence collector failed: {body}")
+              sys.exit(1)
+          print(
+              "Evidence summary: "
+              f"status={body.get('status')} "
+              f"tickers_processed={body.get('tickers_processed')} "
+              f"sec_signals_written={body.get('sec_signals_written')} "
+              f"analyst_signals_written={body.get('analyst_signals_written')} "
+              f"failed_tickers={len(body.get('failed_tickers', []))}"
+          )
+          PY

@@ -269,6 +269,34 @@ Phase 1 is a reliable stock analyzer for real business and investment decisions,
 - [x] 20. Final checkpoint - Ensure full system deploys and all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
+- [ ] 21. Expand high-signal evidence feeds for Phase 1 scoring
+  - [x] 21.1 Add SEC filings and analyst actions as stored market signals
+    - Collect material SEC filings such as 8-K, 10-Q, 10-K, registration statements, and ownership disclosures for active tickers
+    - Collect analyst recommendation actions from Finnhub with yfinance fallback
+    - Store both feeds as `sec_filing` and `analyst_action` market signals that Phase 1 can score without slow provider calls during analysis
+    - Add a manual GitHub Actions workflow for on-demand evidence collection before analysis
+    - _Requirements: 2.1, 2.2, 4.1, 4.5, 9.1_
+
+  - [ ] 21.2 Expand analyst ratings and price-target feeds
+    - Add provider-backed analyst upgrades, downgrades, initiations, reiterations, and price-target deltas when available
+    - Keep analyst actions source-backed and separated from generic market news
+    - _Requirements: 2.1, 2.2, 4.1, 4.5_
+
+  - [ ] 21.3 Add earnings releases and transcripts
+    - Ingest company earnings press releases and transcript summaries where provider coverage is available
+    - Link transcript/release evidence to upcoming and recent earnings events
+    - _Requirements: 2.1, 2.2, 4.1, 4.5_
+
+  - [ ] 21.4 Improve ticker-mapped market news
+    - Add additional ticker-aware market news providers only when they improve attribution quality, freshness, or source resilience
+    - Keep news deduplication and article summaries source-backed
+    - _Requirements: 2.1, 2.2, 2.4, 2.6_
+
+  - [ ] 21.5 Add sector and macro evidence feeds
+    - Track sector ETF moves, broad-index context, rates, inflation, and other macro signals that affect candidate risk/reward
+    - Use these as context modifiers, not reasons to suppress otherwise fresh ticker-level candidates
+    - _Requirements: 4.1, 4.5_
+
 ## Notes
 
 - Tasks marked with `*` are optional only when they do not weaken Phase 1 data correctness, analysis reliability, recommendation quality, security, or deployment observability

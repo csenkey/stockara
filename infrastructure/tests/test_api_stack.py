@@ -71,6 +71,26 @@ def test_calendar_collector_lambdas_and_schedules_are_created():
     template.has_resource_properties(
         "AWS::Lambda::Function",
         {
+            "FunctionName": "stockara-codex-test-evidence-collector",
+            "Handler": "src.collectors.evidence_collector.handler",
+            "Timeout": 600,
+            "Environment": {
+                "Variables": assertions.Match.object_like(
+                    {
+                        "POWERTOOLS_SERVICE_NAME": "evidence-collector",
+                        "FINNHUB_KEY_SECRET_NAME": (
+                            "stockara/codex-test/finnhub-key-current"
+                        ),
+                        "EVIDENCE_SEC_FILING_LOOKBACK_DAYS": "45",
+                        "EVIDENCE_ANALYST_LOOKBACK_DAYS": "45",
+                    }
+                )
+            },
+        },
+    )
+    template.has_resource_properties(
+        "AWS::Lambda::Function",
+        {
             "FunctionName": "stockara-codex-test-collection-distributor",
             "Handler": "src.collectors.collection_distributor.handler",
             "Environment": {
@@ -176,5 +196,12 @@ def test_calendar_collector_lambdas_and_schedules_are_created():
         {
             "Name": "stockara-codex-test-dividend-collection",
             "ScheduleExpression": "cron(15 20 * * ? *)",
+        },
+    )
+    template.has_resource_properties(
+        "AWS::Events::Rule",
+        {
+            "Name": "stockara-codex-test-evidence-collection",
+            "ScheduleExpression": "cron(45 20 * * ? *)",
         },
     )

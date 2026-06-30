@@ -268,6 +268,34 @@ class ApiStack(Stack):
             description="Collects and summarizes news for Phase 1 signals",
         )
 
+        self.evidence_collector_fn = _lambda.Function(
+            self,
+            "EvidenceCollectorFunction",
+            function_name=resource_name(
+                deployment_stage,
+                "stockara-evidence-collector",
+                "evidence-collector",
+            ),
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            handler="src.collectors.evidence_collector.handler",
+            code=backend_code,
+            memory_size=256,
+            timeout=Duration.minutes(10),
+            role=batch_role,
+            environment={
+                **common_env,
+                **news_provider_env,
+                "POWERTOOLS_SERVICE_NAME": "evidence-collector",
+                "STOCKARA_SEC_USER_AGENT": (
+                    f"Stockara/{deployment_stage} evidence collector "
+                    "https://stockara.local"
+                ),
+                "EVIDENCE_SEC_FILING_LOOKBACK_DAYS": "45",
+                "EVIDENCE_ANALYST_LOOKBACK_DAYS": "45",
+            },
+            description="Collects SEC filing and analyst-action signals for Phase 1 scoring",
+        )
+
         self.earnings_collector_fn = _lambda.Function(
             self,
             "EarningsCollectorFunction",
@@ -384,6 +412,7 @@ class ApiStack(Stack):
 
         data_table.grant_read_write_data(self.stock_collector_fn)
         data_table.grant_read_write_data(self.news_collector_fn)
+        data_table.grant_read_write_data(self.evidence_collector_fn)
         data_table.grant_read_write_data(self.earnings_collector_fn)
         data_table.grant_read_write_data(self.dividend_collector_fn)
         data_table.grant_read_data(self.collection_distributor_fn)
@@ -406,6 +435,7 @@ class ApiStack(Stack):
         openai_api_key_secret.grant_read(self.ai_analyzer_fn)
         newsapi_key_secret.grant_read(self.news_collector_fn)
         finnhub_key_secret.grant_read(self.news_collector_fn)
+        finnhub_key_secret.grant_read(self.evidence_collector_fn)
         alpha_vantage_key_secret.grant_read(self.stock_collector_fn)
 
         watchlist_seed_provider = cr.Provider(
@@ -508,6 +538,26 @@ class ApiStack(Stack):
 
         events.Rule(
             self,
+            "EvidenceCollectionSchedule",
+            rule_name=resource_name(
+                deployment_stage,
+                "stockara-evidence-collection",
+                "evidence-collection",
+            ),
+            description="Triggers SEC filing and analyst-action evidence collection daily",
+            schedule=events.Schedule.cron(
+                minute="45", hour="20", day="*", month="*", year="*"
+            ),
+            targets=[
+                targets.LambdaFunction(
+                    self.evidence_collector_fn,
+                    event=events.RuleTargetInput.from_object({"max_tickers": 100}),
+                )
+            ],
+        )
+
+        events.Rule(
+            self,
             "EarningsCollectionSchedule",
             rule_name=resource_name(
                 deployment_stage,
@@ -572,4 +622,10 @@ class ApiStack(Stack):
             "StooqZipExtractorFunctionName",
             value=self.stooq_zip_extractor_fn.function_name,
             description="Lambda function for extracting uploaded Stooq zip data",
+        )
+        CfnOutput(
+            self,
+            "EvidenceCollectorFunctionName",
+            value=self.evidence_collector_fn.function_name,
+            description="Lambda function for collecting SEC filings and analyst actions",
         )
