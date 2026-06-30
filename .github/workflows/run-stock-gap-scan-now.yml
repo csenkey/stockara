@@ -1,0 +1,220 @@
+name: Run Stock Gap Scan Now
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_stage:
+        description: "Deployment stage to run"
+        required: true
+        default: "prod"
+        type: choice
+        options:
+          - prod
+      ensure_manifest:
+        description: "Refresh today's collection manifest before scanning"
+        required: true
+        default: true
+        type: boolean
+      lookback_days:
+        description: "Recent calendar days to inspect when explicit dates are omitted"
+        required: true
+        default: "90"
+      scan_start_date:
+        description: "Optional scan start date, YYYY-MM-DD"
+        required: false
+        default: ""
+      scan_end_date:
+        description: "Optional scan end date, YYYY-MM-DD"
+        required: false
+        default: ""
+      manifest_date:
+        description: "Optional manifest date, YYYY-MM-DD"
+        required: false
+        default: ""
+      tickers_csv:
+        description: "Optional comma-separated tickers to scan"
+        required: false
+        default: ""
+
+concurrency:
+  group: run-stock-gap-scan-now-${{ inputs.deployment_stage }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+jobs:
+  scan:
+    name: Invoke deployed stock gap scanner
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Validate inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! [[ "${{ inputs.lookback_days }}" =~ ^[0-9]+$ ]] || [[ "${{ inputs.lookback_days }}" -lt 1 ]]; then
+            echo "lookback_days must be a positive integer."
+            exit 1
+          fi
+          for value in "${{ inputs.scan_start_date }}" "${{ inputs.scan_end_date }}" "${{ inputs.manifest_date }}"; do
+            if [[ -n "$value" ]] && ! [[ "$value" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+              echo "Date inputs must use YYYY-MM-DD."
+              exit 1
+            fi
+          done
+
+      - name: Check AWS OIDC role configuration
+        run: |
+          if [[ -z "${{ secrets.AWS_ROLE_TO_ASSUME }}" ]]; then
+            echo "Missing GitHub secret AWS_ROLE_TO_ASSUME."
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: stockara-gap-scan-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve function names and bucket
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="${{ inputs.deployment_stage }}"
+          if [[ "$stage" == "prod" ]]; then
+            echo "COLLECTION_DISTRIBUTOR_FN=stockara-collection-distributor" >> "$GITHUB_ENV"
+            echo "STOCK_GAP_SCANNER_FN=stockara-stock-gap-scanner" >> "$GITHUB_ENV"
+          else
+            echo "Unsupported deployment stage: $stage"
+            exit 1
+          fi
+          bucket="$(aws cloudformation describe-stacks \
+            --stack-name StockMonitoringFrontend \
+            --query "Stacks[0].Outputs[?OutputKey=='BucketName'].OutputValue | [0]" \
+            --output text)"
+          echo "ARTIFACT_BUCKET=$bucket" >> "$GITHUB_ENV"
+
+      - name: Refresh collection manifest
+        if: ${{ inputs.ensure_manifest }}
+        shell: bash
+        env:
+          MANIFEST_DATE: ${{ inputs.manifest_date }}
+        run: |
+          set -euo pipefail
+          python - <<'PY' > manifest-payload.json
+          import json
+          import os
+
+          payload = {}
+          if os.environ["MANIFEST_DATE"]:
+              payload["manifest_date"] = os.environ["MANIFEST_DATE"]
+          print(json.dumps(payload))
+          PY
+          cat manifest-payload.json
+          aws lambda invoke \
+            --function-name "$COLLECTION_DISTRIBUTOR_FN" \
+            --payload file://manifest-payload.json \
+            --log-type Tail \
+            --cli-read-timeout 900 \
+            --cli-binary-format raw-in-base64-out \
+            manifest-response.json > manifest-invoke.json
+          python -c "import base64, json; meta=json.load(open('manifest-invoke.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
+          python -c "import json, sys; meta=json.load(open('manifest-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
+          cat manifest-response.json
+          python -m json.tool manifest-response.json
+
+      - name: Build scan payload
+        shell: bash
+        env:
+          LOOKBACK_DAYS: ${{ inputs.lookback_days }}
+          SCAN_START_DATE: ${{ inputs.scan_start_date }}
+          SCAN_END_DATE: ${{ inputs.scan_end_date }}
+          MANIFEST_DATE: ${{ inputs.manifest_date }}
+          TICKERS_CSV: ${{ inputs.tickers_csv }}
+        run: |
+          set -euo pipefail
+          python - <<'PY' > gap-scan-payload.json
+          import json
+          import os
+
+          payload = {"lookback_days": int(os.environ["LOOKBACK_DAYS"])}
+          for env_name, payload_name in [
+              ("SCAN_START_DATE", "scan_start_date"),
+              ("SCAN_END_DATE", "scan_end_date"),
+              ("MANIFEST_DATE", "manifest_date"),
+          ]:
+              if os.environ[env_name]:
+                  payload[payload_name] = os.environ[env_name]
+          tickers = [
+              ticker.strip().upper()
+              for ticker in os.environ["TICKERS_CSV"].split(",")
+              if ticker.strip()
+          ]
+          if tickers:
+              payload["tickers"] = tickers
+          print(json.dumps(payload))
+          PY
+          cat gap-scan-payload.json
+
+      - name: Invoke stock gap scanner
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws lambda invoke \
+            --function-name "$STOCK_GAP_SCANNER_FN" \
+            --payload file://gap-scan-payload.json \
+            --log-type Tail \
+            --cli-read-timeout 900 \
+            --cli-binary-format raw-in-base64-out \
+            gap-scan-response.json > gap-scan-invoke.json
+          python -c "import base64, json; meta=json.load(open('gap-scan-invoke.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
+          python -c "import json, sys; meta=json.load(open('gap-scan-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
+          cat gap-scan-response.json
+          python -m json.tool gap-scan-response.json
+          python - <<'PY'
+          import json
+          import sys
+
+          payload = json.load(open("gap-scan-response.json"))
+          if payload.get("statusCode") != 200:
+              print(f"Gap scan failed with statusCode={payload.get('statusCode')}")
+              sys.exit(1)
+          body = payload.get("body", {})
+          if body.get("status") != "success":
+              print(f"Gap scan failed: {body}")
+              sys.exit(1)
+          print(
+              "Gap scan summary: "
+              f"scan_start={body.get('scan_start_date')} "
+              f"scan_end={body.get('scan_end_date')} "
+              f"active_ticker_count={body.get('active_ticker_count')} "
+              f"tasks_created={body.get('tasks_created')}"
+          )
+          PY
+
+      - name: Validate price gaps static artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws s3api head-object --bucket "$ARTIFACT_BUCKET" --key price-gaps/latest.json >/dev/null
+          aws s3 cp "s3://$ARTIFACT_BUCKET/price-gaps/latest.json" price-gaps-latest.json
+          python -m json.tool price-gaps-latest.json >/dev/null
+          python - <<'PY'
+          import json
+
+          payload = json.load(open("price-gaps-latest.json"))
+          print(
+              "Price gap artifact: "
+              f"generated_at={payload.get('generated_at')} "
+              f"scan_start={payload.get('scan_start_date')} "
+              f"scan_end={payload.get('scan_end_date')} "
+              f"gap_ticker_count={payload.get('gap_ticker_count')} "
+              f"gap_count={payload.get('gap_count')}"
+          )
+          PY

@@ -1,0 +1,141 @@
+name: Run News Collection Now
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_stage:
+        description: "Deployment stage to run"
+        required: true
+        default: "prod"
+        type: choice
+        options:
+          - prod
+      tickers_csv:
+        description: "Optional comma-separated tickers to target"
+        required: false
+        default: ""
+
+concurrency:
+  group: run-news-collection-now-${{ inputs.deployment_stage }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+jobs:
+  collect:
+    name: Invoke deployed news collector
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check AWS OIDC role configuration
+        run: |
+          if [[ -z "${{ secrets.AWS_ROLE_TO_ASSUME }}" ]]; then
+            echo "Missing GitHub secret AWS_ROLE_TO_ASSUME."
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: stockara-news-collection-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve function and bucket
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="${{ inputs.deployment_stage }}"
+          if [[ "$stage" == "prod" ]]; then
+            echo "NEWS_COLLECTOR_FN=stockara-news-collector" >> "$GITHUB_ENV"
+          else
+            echo "Unsupported deployment stage: $stage"
+            exit 1
+          fi
+          bucket="$(aws cloudformation describe-stacks \
+            --stack-name StockMonitoringFrontend \
+            --query "Stacks[0].Outputs[?OutputKey=='BucketName'].OutputValue | [0]" \
+            --output text)"
+          echo "ARTIFACT_BUCKET=$bucket" >> "$GITHUB_ENV"
+
+      - name: Build invocation payload
+        shell: bash
+        env:
+          TICKERS_CSV: ${{ inputs.tickers_csv }}
+        run: |
+          set -euo pipefail
+          python - <<'PY' > news-payload.json
+          import json
+          import os
+
+          tickers = [
+              ticker.strip().upper()
+              for ticker in os.environ["TICKERS_CSV"].split(",")
+              if ticker.strip()
+          ]
+          payload = {"tickers": tickers} if tickers else {}
+          print(json.dumps(payload))
+          PY
+          cat news-payload.json
+
+      - name: Invoke news collector
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws lambda invoke \
+            --function-name "$NEWS_COLLECTOR_FN" \
+            --payload file://news-payload.json \
+            --log-type Tail \
+            --cli-read-timeout 900 \
+            --cli-binary-format raw-in-base64-out \
+            news-response.json > news-invoke.json
+          python -c "import base64, json; meta=json.load(open('news-invoke.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
+          python -c "import json, sys; meta=json.load(open('news-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
+          cat news-response.json
+          python -m json.tool news-response.json
+          python - <<'PY'
+          import json
+          import sys
+
+          payload = json.load(open("news-response.json"))
+          if payload.get("statusCode") != 200:
+              print(f"News collector failed with statusCode={payload.get('statusCode')}")
+              sys.exit(1)
+          body = payload.get("body", {})
+          if body.get("status") != "success":
+              print(f"News collector failed: {body}")
+              sys.exit(1)
+          print(
+              "News summary: "
+              f"status={body.get('status')} "
+              f"articles_processed={body.get('articles_processed')} "
+              f"sources_available={body.get('sources_available')} "
+              f"total_fetched={body.get('total_fetched')}"
+          )
+          PY
+
+      - name: Validate news static artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws s3api head-object --bucket "$ARTIFACT_BUCKET" --key news/latest.json >/dev/null
+          aws s3 cp "s3://$ARTIFACT_BUCKET/news/latest.json" news-latest.json
+          python -m json.tool news-latest.json >/dev/null
+          python - <<'PY'
+          import json
+
+          payload = json.load(open("news-latest.json"))
+          last_run = payload.get("last_run", {})
+          print(
+              "News artifact: "
+              f"generated_at={payload.get('generated_at')} "
+              f"recent_article_count={payload.get('recent_article_count')} "
+              f"ticker_count_with_news={payload.get('ticker_count_with_news')} "
+              f"last_run_status={last_run.get('status')}"
+          )
+          PY
