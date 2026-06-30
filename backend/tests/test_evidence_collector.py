@@ -105,6 +105,8 @@ def test_collect_evidence_writes_sec_and_analyst_signals():
         patch.object(evidence_collector, "_finnhub_rating_signal", return_value=None),
         patch.object(evidence_collector, "_finnhub_price_target_signal", return_value=None),
         patch.object(evidence_collector, "_finnhub_earnings_content_signals", return_value=[]),
+        patch.object(evidence_collector, "_sector_context_by_sector", return_value={}),
+        patch.object(evidence_collector, "_macro_context", return_value=None),
     ):
         result = evidence_collector.collect_evidence(tickers=["NVDA", "MSFT"])
 
@@ -117,6 +119,8 @@ def test_collect_evidence_writes_sec_and_analyst_signals():
     assert result["price_target_signals_written"] == 0
     assert result["earnings_release_signals_written"] == 0
     assert result["earnings_transcript_signals_written"] == 0
+    assert result["sector_context_signals_written"] == 0
+    assert result["macro_context_signals_written"] == 0
     assert put_market_signal.call_count == 2
     put_market_signal.assert_any_call(sec_signal)
     put_market_signal.assert_any_call(analyst_signal)
@@ -326,9 +330,109 @@ def test_collect_evidence_counts_earnings_release_and_transcript_signals():
             "_finnhub_earnings_content_signals",
             return_value=[release_signal, transcript_signal],
         ),
+        patch.object(evidence_collector, "_sector_context_by_sector", return_value={}),
+        patch.object(evidence_collector, "_macro_context", return_value=None),
     ):
         result = evidence_collector.collect_evidence(tickers=["NVDA"])
 
     assert result["earnings_release_signals_written"] == 1
     assert result["earnings_transcript_signals_written"] == 1
     assert put_market_signal.call_count == 2
+
+
+def test_sector_context_signal_scores_sector_etf_move_as_context():
+    signal = evidence_collector._sector_context_signal(
+        {"ticker": "NVDA", "sector": "Technology"},
+        {
+            "Technology": {
+                "sector": "Technology",
+                "sector_etf": "XLK",
+                "move_percent": 4.2,
+                "lookback_days": 7,
+            }
+        },
+    )
+
+    assert signal is not None
+    assert signal["signal_type"] == "sector_context"
+    assert signal["direction"] == "positive"
+    assert signal["score"] == 10
+    assert signal["source"]["provider"] == "yfinance"
+    assert signal["source"]["raw"]["context_only"] is True
+    assert signal["source"]["raw"]["sector_etf"] == "XLK"
+
+
+def test_macro_context_signal_uses_yfinance_proxies_as_small_modifier():
+    with patch.object(
+        evidence_collector,
+        "_yfinance_move_percent",
+        side_effect=lambda symbol, _: {
+            "SPY": 2.0,
+            "QQQ": 3.0,
+            "IWM": 1.0,
+            "TLT": -1.0,
+            "^TNX": 0.8,
+            "UUP": 0.5,
+            "GLD": 0.0,
+            "TIP": 0.2,
+            "IEF": -0.1,
+        }[symbol],
+    ):
+        context = evidence_collector._macro_context()
+
+    assert context is not None
+    assert context["score"] == 0
+    assert context["direction"] == "neutral"
+    assert context["moves"]["broad_equity"] == 2.0
+
+    signal = evidence_collector._macro_context_signal("NVDA", context)
+
+    assert signal is not None
+    assert signal["signal_type"] == "macro_context"
+    assert signal["source"]["raw"]["context_only"] is True
+    assert signal["source"]["raw"]["moves"]["ten_year_yield"] == 0.8
+
+
+def test_collect_evidence_writes_sector_and_macro_context_signals():
+    stocks = [{"ticker": "NVDA", "sector": "Technology"}]
+    sector_signal = {
+        "ticker": "NVDA",
+        "signal_date": date.today(),
+        "signal_type": "sector_context",
+        "direction": "positive",
+        "score": 10,
+        "title": "Sector ETF context",
+        "summary": "Technology sector moved higher.",
+        "source": {"provider": "yfinance"},
+    }
+    macro_signal = {
+        "ticker": "NVDA",
+        "signal_date": date.today(),
+        "signal_type": "macro_context",
+        "direction": "neutral",
+        "score": 0,
+        "title": "Macro market context",
+        "summary": "Macro context was mixed.",
+        "source": {"provider": "yfinance"},
+    }
+
+    with (
+        patch.object(evidence_collector.store, "active_stock_metadata", return_value=stocks),
+        patch.object(evidence_collector.store, "put_market_signal") as put_market_signal,
+        patch.object(evidence_collector, "_load_sec_ticker_map", return_value={}),
+        patch.object(evidence_collector, "_sector_context_by_sector", return_value={"Technology": {}}),
+        patch.object(evidence_collector, "_macro_context", return_value={}),
+        patch.object(evidence_collector, "_sector_context_signal", return_value=sector_signal),
+        patch.object(evidence_collector, "_macro_context_signal", return_value=macro_signal),
+        patch.object(evidence_collector, "_sec_filing_signal", return_value=None),
+        patch.object(evidence_collector, "_analyst_action_signal", return_value=None),
+        patch.object(evidence_collector, "_finnhub_rating_signal", return_value=None),
+        patch.object(evidence_collector, "_finnhub_price_target_signal", return_value=None),
+        patch.object(evidence_collector, "_finnhub_earnings_content_signals", return_value=[]),
+    ):
+        result = evidence_collector.collect_evidence(tickers=["NVDA"])
+
+    assert result["sector_context_signals_written"] == 1
+    assert result["macro_context_signals_written"] == 1
+    put_market_signal.assert_any_call(sector_signal)
+    put_market_signal.assert_any_call(macro_signal)

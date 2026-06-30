@@ -294,8 +294,10 @@ class ApiStack(Stack):
                 ),
                 "EVIDENCE_SEC_FILING_LOOKBACK_DAYS": "45",
                 "EVIDENCE_ANALYST_LOOKBACK_DAYS": "45",
+                "EVIDENCE_SECTOR_LOOKBACK_DAYS": "7",
+                "EVIDENCE_MACRO_LOOKBACK_DAYS": "7",
             },
-            description="Collects SEC filing and analyst-action signals for Phase 1 scoring",
+            description="Collects source-backed evidence signals for Phase 1 scoring",
         )
 
         self.earnings_collector_fn = _lambda.Function(

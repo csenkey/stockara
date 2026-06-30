@@ -92,6 +92,8 @@ STORED_SIGNAL_TYPES = {
     "price_target",
     "earnings_release",
     "earnings_transcript",
+    "sector_context",
+    "macro_context",
 }
 
 

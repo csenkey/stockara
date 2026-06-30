@@ -87,6 +87,8 @@ def test_calendar_collector_lambdas_and_schedules_are_created():
                         ),
                         "EVIDENCE_SEC_FILING_LOOKBACK_DAYS": "45",
                         "EVIDENCE_ANALYST_LOOKBACK_DAYS": "45",
+                        "EVIDENCE_SECTOR_LOOKBACK_DAYS": "7",
+                        "EVIDENCE_MACRO_LOOKBACK_DAYS": "7",
                     }
                 )
             },

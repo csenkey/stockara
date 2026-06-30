@@ -292,7 +292,7 @@ Phase 1 is a reliable stock analyzer for real business and investment decisions,
     - Keep news deduplication and article summaries source-backed
     - _Requirements: 2.1, 2.2, 2.4, 2.6_
 
-  - [ ] 21.5 Add sector and macro evidence feeds
+  - [x] 21.5 Add sector and macro evidence feeds
     - Track sector ETF moves, broad-index context, rates, inflation, and other macro signals that affect candidate risk/reward
     - Use these as context modifiers, not reasons to suppress otherwise fresh ticker-level candidates
     - _Requirements: 4.1, 4.5_

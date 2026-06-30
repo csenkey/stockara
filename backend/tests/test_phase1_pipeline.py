@@ -240,6 +240,32 @@ def test_price_volume_signals_include_stored_evidence_signals():
                     "raw": {"article_title": "NVDA earnings call transcript"},
                 },
             },
+            {
+                "ticker": "NVDA",
+                "signal_date": "2026-06-17",
+                "signal_type": "sector_context",
+                "direction": "positive",
+                "score": 10,
+                "title": "Sector ETF context",
+                "summary": "Technology sector ETF moved higher.",
+                "source": {
+                    "provider": "yfinance",
+                    "raw": {"sector_etf": "XLK", "context_only": True},
+                },
+            },
+            {
+                "ticker": "NVDA",
+                "signal_date": "2026-06-17",
+                "signal_type": "macro_context",
+                "direction": "negative",
+                "score": -6,
+                "title": "Macro market context",
+                "summary": "Macro proxies were a modest headwind.",
+                "source": {
+                    "provider": "yfinance",
+                    "raw": {"equity_risk_move_percent": -1.5, "context_only": True},
+                },
+            },
         ]
 
         signals = _price_volume_signals("NVDA", date(2026, 6, 17))
@@ -252,6 +278,8 @@ def test_price_volume_signals_include_stored_evidence_signals():
         "price_target",
         "earnings_release",
         "earnings_transcript",
+        "sector_context",
+        "macro_context",
     }
     sec_signal = next(signal for signal in signals if signal["signal_type"] == "sec_filing")
     analyst_signal = next(
@@ -265,6 +293,8 @@ def test_price_volume_signals_include_stored_evidence_signals():
     assert any(signal["signal_type"] == "price_target" for signal in signals)
     assert any(signal["signal_type"] == "earnings_release" for signal in signals)
     assert any(signal["signal_type"] == "earnings_transcript" for signal in signals)
+    assert any(signal["signal_type"] == "sector_context" for signal in signals)
+    assert any(signal["signal_type"] == "macro_context" for signal in signals)
 
 
 def test_price_volume_signals_add_multi_day_market_context():

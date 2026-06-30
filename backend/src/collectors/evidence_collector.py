@@ -1,9 +1,10 @@
 """Collect high-signal evidence feeds for Phase 1 scoring.
 
 This collector turns SEC filing events, analyst recommendation actions, rating
-changes, price-target updates, earnings releases, and transcript evidence into
-stored market signals. The Phase 1 analyzer then consumes these alongside price
-and volume signals without doing slow provider lookups during scoring.
+changes, price-target updates, earnings releases, transcripts, sector moves, and
+macro context into stored market signals. The Phase 1 analyzer then consumes
+these alongside price and volume signals without doing slow provider lookups
+during scoring.
 """
 
 from __future__ import annotations
@@ -36,6 +37,35 @@ EARNINGS_EVIDENCE_LOOKBACK_DAYS = int(
 EARNINGS_EVENT_LINK_WINDOW_DAYS = int(
     os.environ.get("EVIDENCE_EARNINGS_EVENT_LINK_WINDOW_DAYS", "7")
 )
+SECTOR_CONTEXT_LOOKBACK_DAYS = int(os.environ.get("EVIDENCE_SECTOR_LOOKBACK_DAYS", "7"))
+MACRO_CONTEXT_LOOKBACK_DAYS = int(os.environ.get("EVIDENCE_MACRO_LOOKBACK_DAYS", "7"))
+
+SECTOR_ETFS = {
+    "Technology": "XLK",
+    "Healthcare": "XLV",
+    "Finance": "XLF",
+    "Energy": "XLE",
+    "Consumer Discretionary": "XLY",
+    "Consumer Staples": "XLP",
+    "Industrials": "XLI",
+    "Materials": "XLB",
+    "Utilities": "XLU",
+    "Real Estate": "XLRE",
+    "Communication Services": "XLC",
+    "Telecommunications": "XLC",
+}
+
+MACRO_PROXIES = {
+    "broad_equity": "SPY",
+    "growth_equity": "QQQ",
+    "small_cap": "IWM",
+    "long_duration_bonds": "TLT",
+    "ten_year_yield": "^TNX",
+    "us_dollar": "UUP",
+    "gold": "GLD",
+    "inflation_protected_bonds": "TIP",
+    "intermediate_treasuries": "IEF",
+}
 
 EARNINGS_RELEASE_KEYWORDS = (
     "reports earnings",
@@ -91,12 +121,26 @@ def collect_evidence(
         "price_target_signals_written": 0,
         "earnings_release_signals_written": 0,
         "earnings_transcript_signals_written": 0,
+        "sector_context_signals_written": 0,
+        "macro_context_signals_written": 0,
         "failed_tickers": [],
     }
+    sector_context = _sector_context_by_sector(stocks)
+    macro_context = _macro_context()
 
     for stock in stocks:
         ticker = stock["ticker"]
         try:
+            sector_signal = _sector_context_signal(stock, sector_context)
+            if sector_signal:
+                store.put_market_signal(sector_signal)
+                result["sector_context_signals_written"] += 1
+
+            macro_signal = _macro_context_signal(ticker, macro_context)
+            if macro_signal:
+                store.put_market_signal(macro_signal)
+                result["macro_context_signals_written"] += 1
+
             sec_signal = _sec_filing_signal(ticker, sec_ticker_map)
             if sec_signal:
                 store.put_market_signal(sec_signal)
@@ -398,6 +442,170 @@ def _finnhub_api_key() -> str | None:
         "FINNHUB_KEY_SECRET_NAME",
         supported_json_keys=("FINNHUB_KEY", "finnhub_key", "api_key"),
     )
+
+
+def _sector_context_by_sector(stocks: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    sectors = {
+        str(stock.get("sector") or "").strip()
+        for stock in stocks
+        if str(stock.get("sector") or "").strip() in SECTOR_ETFS
+    }
+    context: dict[str, dict[str, Any]] = {}
+    for sector in sectors:
+        etf = SECTOR_ETFS[sector]
+        move = _yfinance_move_percent(etf, SECTOR_CONTEXT_LOOKBACK_DAYS)
+        if move is None:
+            continue
+        context[sector] = {
+            "sector": sector,
+            "sector_etf": etf,
+            "move_percent": move,
+            "lookback_days": SECTOR_CONTEXT_LOOKBACK_DAYS,
+        }
+    return context
+
+
+def _sector_context_signal(
+    stock: dict[str, Any],
+    context: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    ticker = str(stock.get("ticker") or "").upper()
+    sector = str(stock.get("sector") or "").strip()
+    row = context.get(sector)
+    if not ticker or not row:
+        return None
+    move = float(row["move_percent"])
+    if abs(move) < 1.5:
+        return None
+    score = int(max(-14, min(14, move * 2.5)))
+    direction = "positive" if score > 0 else "negative"
+    return _market_signal(
+        ticker,
+        date.today(),
+        "sector_context",
+        direction,
+        score,
+        "Sector ETF context",
+        (
+            f"{sector} sector proxy {row['sector_etf']} moved {move:.2f}% over "
+            f"the last {row['lookback_days']} calendar days."
+        ),
+        {
+            "provider": "yfinance",
+            "sector": sector,
+            "sector_etf": row["sector_etf"],
+            "lookback_days": row["lookback_days"],
+            "move_percent": round(move, 2),
+            "context_only": True,
+        },
+    )
+
+
+def _macro_context() -> dict[str, Any] | None:
+    moves = {
+        name: _yfinance_move_percent(symbol, MACRO_CONTEXT_LOOKBACK_DAYS)
+        for name, symbol in MACRO_PROXIES.items()
+    }
+    observed = {name: value for name, value in moves.items() if value is not None}
+    if len(observed) < 3:
+        return None
+
+    equity_moves = [
+        value
+        for name, value in observed.items()
+        if name in {"broad_equity", "growth_equity", "small_cap"}
+    ]
+    equity_risk = sum(equity_moves) / len(equity_moves) if equity_moves else 0.0
+    yield_move = observed.get("ten_year_yield", 0.0)
+    dollar_move = observed.get("us_dollar", 0.0)
+    bond_move = observed.get("long_duration_bonds", 0.0)
+    inflation_proxy = None
+    if (
+        observed.get("inflation_protected_bonds") is not None
+        and observed.get("intermediate_treasuries") is not None
+    ):
+        inflation_proxy = (
+            observed["inflation_protected_bonds"]
+            - observed["intermediate_treasuries"]
+        )
+
+    raw_score = equity_risk * 1.1 + bond_move * 0.35 - dollar_move * 0.7 - yield_move * 1.5
+    if inflation_proxy is not None:
+        raw_score -= max(0.0, inflation_proxy) * 0.6
+    score = int(max(-12, min(12, raw_score)))
+    direction = "positive" if score > 3 else "negative" if score < -3 else "neutral"
+    return {
+        "direction": direction,
+        "score": score,
+        "lookback_days": MACRO_CONTEXT_LOOKBACK_DAYS,
+        "moves": {name: round(value, 2) for name, value in observed.items()},
+        "equity_risk_move_percent": round(equity_risk, 2),
+        "inflation_proxy_percent": (
+            round(inflation_proxy, 2) if inflation_proxy is not None else None
+        ),
+    }
+
+
+def _macro_context_signal(ticker: str, context: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not context:
+        return None
+    return _market_signal(
+        ticker,
+        date.today(),
+        "macro_context",
+        context["direction"],
+        context["score"],
+        "Macro market context",
+        (
+            f"Macro proxies over {context['lookback_days']} calendar days: "
+            f"equity risk basket {context['equity_risk_move_percent']:.2f}%, "
+            f"score {context['score']}."
+        ),
+        {
+            "provider": "yfinance",
+            "lookback_days": context["lookback_days"],
+            "moves": context["moves"],
+            "equity_risk_move_percent": context["equity_risk_move_percent"],
+            "inflation_proxy_percent": context["inflation_proxy_percent"],
+            "context_only": True,
+        },
+    )
+
+
+def _yfinance_move_percent(symbol: str, lookback_days: int) -> float | None:
+    try:
+        frame = yf.download(
+            symbol,
+            period=f"{max(lookback_days + 5, 10)}d",
+            interval="1d",
+            progress=False,
+            timeout=10,
+        )
+    except Exception as exc:
+        logger.info("yfinance_context_unavailable", symbol=symbol, error=str(exc))
+        return None
+    closes = _close_values(frame)
+    if len(closes) < 2:
+        return None
+    start_index = max(0, len(closes) - max(lookback_days, 2) - 1)
+    start = closes[start_index]
+    end = closes[-1]
+    if start <= 0:
+        return None
+    return (end - start) / start * 100
+
+
+def _close_values(frame: Any) -> list[float]:
+    if frame is None or getattr(frame, "empty", True):
+        return []
+    try:
+        close = frame["Close"]
+        if hasattr(close, "columns"):
+            close = close.iloc[:, 0]
+        values = close.dropna().tolist()
+    except Exception:
+        return []
+    return [float(value) for value in values if _float(value) is not None]
 
 
 def _recent_and_upcoming_earnings_events(
