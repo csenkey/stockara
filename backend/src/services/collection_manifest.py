@@ -264,7 +264,10 @@ def _recompute_coverage_gates(manifest: CollectionManifest) -> None:
             observed_value=_task_type_ticker_ratio(manifest, {CollectionTaskType.PRICE}),
             default_required=Decimal("0.9"),
             unit="ratio",
-            message="At least 90% of active tickers need fresh daily prices.",
+            message=(
+                "Share of active tickers with completed fresh price collection. "
+                "Tickers with stale or missing prices are excluded individually."
+            ),
         ),
         _coverage_gate(
             existing_by_name,
@@ -272,7 +275,10 @@ def _recompute_coverage_gates(manifest: CollectionManifest) -> None:
             observed_value=_task_type_completion_ratio(manifest, {CollectionTaskType.NEWS}),
             default_required=Decimal("1"),
             unit="ratio",
-            message="All news collection chunks must complete before analysis.",
+            message=(
+                "Share of manifest news chunks completed. Manual news collection can "
+                "refresh news/latest.json without completing every manifest chunk."
+            ),
         ),
         _coverage_gate(
             existing_by_name,
@@ -283,7 +289,10 @@ def _recompute_coverage_gates(manifest: CollectionManifest) -> None:
             ),
             default_required=Decimal("0.9"),
             unit="ratio",
-            message="At least 90% of active tickers need calendar scan attempts.",
+            message=(
+                "Share of active tickers with calendar scan attempts. Missing upcoming "
+                "earnings or dividend events are context gaps, not candidate blockers."
+            ),
         ),
     ]
 
@@ -304,8 +313,8 @@ def _coverage_gate(
         passed=observed >= required,
         observed_value=observed,
         required_value=required,
-        unit=existing.unit if existing else unit,
-        message=existing.message if existing else message,
+        unit=unit,
+        message=message,
     )
 
 

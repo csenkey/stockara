@@ -210,15 +210,21 @@ def _initial_summary(
             observed_value=Decimal("0"),
             required_value=Decimal("0.9"),
             unit="ratio",
-            message="At least 90% of active tickers need fresh daily prices.",
+            message=(
+                "Share of active tickers with completed fresh price collection. "
+                "Tickers with stale or missing prices are excluded individually."
+            ),
         ),
         CollectionCoverageGate(
             name="news_freshness",
             passed=False,
             observed_value=Decimal("0"),
             required_value=Decimal("1"),
-            unit="sources",
-            message="All configured news sources must be available.",
+            unit="ratio",
+            message=(
+                "Share of manifest news chunks completed. Manual news collection can "
+                "refresh news/latest.json without completing every manifest chunk."
+            ),
         ),
         CollectionCoverageGate(
             name="calendar_coverage",
@@ -226,7 +232,10 @@ def _initial_summary(
             observed_value=Decimal("0"),
             required_value=Decimal("0.9"),
             unit="ratio",
-            message="At least 90% of active tickers need calendar scan attempts.",
+            message=(
+                "Share of active tickers with calendar scan attempts. Missing upcoming "
+                "earnings or dividend events are context gaps, not candidate blockers."
+            ),
         ),
     ]
     return CollectionManifestSummary(

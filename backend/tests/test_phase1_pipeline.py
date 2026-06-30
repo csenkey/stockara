@@ -843,7 +843,7 @@ def test_run_phase1_pipeline_suppresses_publication_when_no_ticker_is_eligible()
     score_candidates.assert_not_called()
 
 
-def test_run_phase1_pipeline_suppresses_when_collection_gates_fail():
+def test_collection_manifest_coverage_targets_do_not_suppress_publication():
     run_date = date(2026, 6, 17)
     manifest_payload = {
         "manifest_date": run_date.isoformat(),
@@ -866,34 +866,22 @@ def test_run_phase1_pipeline_suppresses_when_collection_gates_fail():
             ],
         },
     }
-    mock_s3 = patch("src.analysis.phase1_pipeline.boto3.client").start()
-    mock_s3.return_value.get_object.return_value = {
-        "Body": SimpleNamespace(
-            read=lambda: phase1_pipeline.json.dumps(manifest_payload).encode("utf-8")
+    body = SimpleNamespace(
+        read=lambda: phase1_pipeline.json.dumps(manifest_payload).encode("utf-8")
+    )
+    with (
+        patch("src.analysis.phase1_pipeline.ARTIFACT_BUCKET", "artifact-bucket"),
+        patch("src.analysis.phase1_pipeline.boto3.client") as client,
+        patch("src.analysis.phase1_pipeline._emit_metric") as emit_metric,
+    ):
+        client.return_value.get_object.return_value = {"Body": body}
+        result = phase1_pipeline._collection_gate_response(
+            run_date,
+            publish_status_artifact=True,
         )
-    }
-    try:
-        with (
-            patch("src.analysis.phase1_pipeline.DatabasePool"),
-            patch("src.analysis.phase1_pipeline.ARTIFACT_BUCKET", "artifact-bucket"),
-            patch("src.analysis.phase1_pipeline.score_candidates") as score_candidates,
-            patch("src.analysis.phase1_pipeline.publish_payload") as publish_payload,
-            patch("src.analysis.phase1_pipeline._emit_metric"),
-            patch.object(phase1_pipeline, "date", _fixed_date(run_date)),
-        ):
-            result = run_phase1_pipeline()
-    finally:
-        patch.stopall()
 
-    assert result["statusCode"] == 200
-    assert result["body"]["status"] == "suppressed"
-    assert result["body"]["failed_gates"][0]["name"] == "price_freshness"
-    score_candidates.assert_not_called()
-    payload = publish_payload.call_args.args[0]
-    assert payload["publication_status"] == "suppressed"
-    assert payload["suppression_reason"] == "collection_coverage_gates_failed"
-    assert payload["publication_date"] == "2026-06-17"
-    assert payload["data_quality"]["collection_manifest"]["manifest_date"] == "2026-06-17"
+    assert result is None
+    emit_metric.assert_called_once_with("collection_coverage_targets_below_threshold", 1)
 
 
 def test_collection_manifest_quality_metadata_is_added_when_available():

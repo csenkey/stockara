@@ -196,7 +196,7 @@ export default function DataHealth({ onNavigate }: DataHealthProps) {
             <section className="border border-slate-800 bg-slate-900 p-5">
               <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
                 <div>
-                  <h2 className="text-lg font-semibold">Coverage Gates</h2>
+                  <h2 className="text-lg font-semibold">Collection Coverage Targets</h2>
                   <p className="mt-1 text-sm text-slate-400">
                     Generated {formatDate(health.data.generated_at)}
                   </p>
@@ -208,7 +208,9 @@ export default function DataHealth({ onNavigate }: DataHealthProps) {
                       : "border-amber-700 bg-amber-950 text-amber-100"
                   }`}
                 >
-                  {failedGates.length === 0 ? "all passed" : `${failedGates.length} failing`}
+                  {failedGates.length === 0
+                    ? "all on target"
+                    : `${failedGates.length} below target`}
                 </span>
               </div>
               <div className="mt-4 grid gap-3 lg:grid-cols-3">
@@ -282,7 +284,7 @@ function GateCard({ gate }: { gate: CoverageGate }) {
               : "border-amber-700 bg-amber-950 text-amber-100"
           }`}
         >
-          {gate.passed ? "passed" : "failing"}
+          {gate.passed ? "on target" : "below target"}
         </span>
       </div>
       <p className="mt-3 text-sm text-slate-300">{gate.message}</p>

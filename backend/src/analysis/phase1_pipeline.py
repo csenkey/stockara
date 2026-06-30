@@ -371,69 +371,23 @@ def _collection_gate_response(
     run_date: date,
     publish_status_artifact: bool = False,
 ) -> dict[str, Any] | None:
+    """Log collection coverage diagnostics without blocking best-available picks."""
     if not ARTIFACT_BUCKET:
         return None
     manifest = _load_collection_manifest(run_date)
     if manifest is None:
         logger.warning("phase1_collection_manifest_missing", run_date=run_date.isoformat())
-        _emit_metric("publication_suppressed", 1)
-        if publish_status_artifact:
-            _publish_suppressed_publication(
-                run_date,
-                reason="collection_manifest_missing",
-                warnings=["Publication suppressed: collection manifest is missing."],
-            )
-        return {
-            "statusCode": 200,
-            "body": "Publication suppressed: collection manifest is missing",
-        }
+        return None
     failed_gates = [gate for gate in manifest.summary.coverage_gates if not gate.passed]
     if not failed_gates:
         return None
     logger.warning(
-        "phase1_collection_gates_failed",
+        "phase1_collection_coverage_targets_below_threshold",
         failed_gates=[gate.name for gate in failed_gates],
         manifest_key=manifest.s3_key,
     )
-    _emit_metric("publication_suppressed", 1)
-    if publish_status_artifact:
-        failed_gate_names = [gate.name for gate in failed_gates]
-        _publish_suppressed_publication(
-            run_date,
-            reason="collection_coverage_gates_failed",
-            warnings=[
-                "Publication suppressed because collection coverage gates failed: "
-                f"{', '.join(failed_gate_names)}."
-            ],
-            data_quality={
-                "coverage_status": "suppressed",
-                "collection_manifest": {
-                    "manifest_key": manifest.s3_key,
-                    "manifest_date": manifest.manifest_date.isoformat(),
-                    "updated_at": manifest.updated_at.isoformat(),
-                    "active_ticker_count": manifest.active_ticker_count,
-                    "summary": manifest.summary.model_dump(mode="json"),
-                },
-            },
-        )
-    return {
-        "statusCode": 200,
-        "body": {
-            "status": "suppressed",
-            "reason": "collection_coverage_gates_failed",
-            "manifest_key": manifest.s3_key,
-            "failed_gates": [
-                {
-                    "name": gate.name,
-                    "observed_value": str(gate.observed_value),
-                    "required_value": str(gate.required_value),
-                    "unit": gate.unit,
-                    "message": gate.message,
-                }
-                for gate in failed_gates
-            ],
-        },
-    }
+    _emit_metric("collection_coverage_targets_below_threshold", len(failed_gates))
+    return None
 
 
 def _load_collection_manifest(run_date: date) -> CollectionManifest | None:
