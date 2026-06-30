@@ -282,7 +282,7 @@ Phase 1 is a reliable stock analyzer for real business and investment decisions,
     - Keep analyst actions source-backed and separated from generic market news
     - _Requirements: 2.1, 2.2, 4.1, 4.5_
 
-  - [ ] 21.3 Add earnings releases and transcripts
+  - [x] 21.3 Add earnings releases and transcripts
     - Ingest company earnings press releases and transcript summaries where provider coverage is available
     - Link transcript/release evidence to upcoming and recent earnings events
     - _Requirements: 2.1, 2.2, 4.1, 4.5_

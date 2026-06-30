@@ -1,9 +1,9 @@
 """Collect high-signal evidence feeds for Phase 1 scoring.
 
 This collector turns SEC filing events, analyst recommendation actions, rating
-changes, and price-target updates into stored market signals. The Phase 1
-analyzer then consumes these alongside price and volume signals without doing
-slow provider lookups during scoring.
+changes, price-target updates, earnings releases, and transcript evidence into
+stored market signals. The Phase 1 analyzer then consumes these alongside price
+and volume signals without doing slow provider lookups during scoring.
 """
 
 from __future__ import annotations
@@ -30,6 +30,47 @@ SEC_USER_AGENT = os.environ.get(
 SEC_MATERIAL_FORMS = {"8-K", "10-K", "10-Q", "S-1", "S-3", "S-4", "SC 13D", "SC 13G"}
 SEC_FILING_LOOKBACK_DAYS = int(os.environ.get("EVIDENCE_SEC_FILING_LOOKBACK_DAYS", "45"))
 ANALYST_LOOKBACK_DAYS = int(os.environ.get("EVIDENCE_ANALYST_LOOKBACK_DAYS", "45"))
+EARNINGS_EVIDENCE_LOOKBACK_DAYS = int(
+    os.environ.get("EVIDENCE_EARNINGS_LOOKBACK_DAYS", "30")
+)
+EARNINGS_EVENT_LINK_WINDOW_DAYS = int(
+    os.environ.get("EVIDENCE_EARNINGS_EVENT_LINK_WINDOW_DAYS", "7")
+)
+
+EARNINGS_RELEASE_KEYWORDS = (
+    "reports earnings",
+    "reported earnings",
+    "earnings release",
+    "quarterly results",
+    "financial results",
+    "fiscal quarter",
+    "q1 results",
+    "q2 results",
+    "q3 results",
+    "q4 results",
+)
+EARNINGS_TRANSCRIPT_KEYWORDS = (
+    "earnings call transcript",
+    "earnings transcript",
+    "conference call transcript",
+    "results call transcript",
+)
+POSITIVE_EARNINGS_KEYWORDS = (
+    "beats",
+    "beat estimates",
+    "raises guidance",
+    "record revenue",
+    "above expectations",
+    "growth",
+)
+NEGATIVE_EARNINGS_KEYWORDS = (
+    "misses",
+    "missed estimates",
+    "cuts guidance",
+    "below expectations",
+    "decline",
+    "loss widens",
+)
 
 
 def collect_evidence(
@@ -48,6 +89,8 @@ def collect_evidence(
         "analyst_signals_written": 0,
         "analyst_rating_signals_written": 0,
         "price_target_signals_written": 0,
+        "earnings_release_signals_written": 0,
+        "earnings_transcript_signals_written": 0,
         "failed_tickers": [],
     }
 
@@ -73,6 +116,13 @@ def collect_evidence(
             if price_target_signal:
                 store.put_market_signal(price_target_signal)
                 result["price_target_signals_written"] += 1
+
+            for earnings_signal in _finnhub_earnings_content_signals(ticker):
+                store.put_market_signal(earnings_signal)
+                if earnings_signal["signal_type"] == "earnings_release":
+                    result["earnings_release_signals_written"] += 1
+                elif earnings_signal["signal_type"] == "earnings_transcript":
+                    result["earnings_transcript_signals_written"] += 1
 
             result["tickers_processed"] += 1
         except Exception as exc:
@@ -287,6 +337,47 @@ def _finnhub_price_target_signal(ticker: str) -> dict[str, Any] | None:
     return _price_target_signal_from_row(ticker, row, "finnhub")
 
 
+def _finnhub_earnings_content_signals(ticker: str) -> list[dict[str, Any]]:
+    api_key = _finnhub_api_key()
+    if not api_key:
+        return []
+    to_date = date.today()
+    from_date = to_date - timedelta(days=EARNINGS_EVIDENCE_LOOKBACK_DAYS)
+    try:
+        response = requests.get(
+            "https://finnhub.io/api/v1/company-news",
+            params={
+                "symbol": ticker,
+                "from": from_date.isoformat(),
+                "to": to_date.isoformat(),
+                "token": api_key,
+            },
+            timeout=20,
+        )
+        response.raise_for_status()
+        rows = response.json()
+    except Exception as exc:
+        logger.info("finnhub_earnings_content_unavailable", ticker=ticker, error=str(exc))
+        return []
+
+    linked_events = _recent_and_upcoming_earnings_events(ticker, to_date)
+    release_signal = _earnings_content_signal_from_articles(
+        ticker,
+        rows,
+        linked_events,
+        "earnings_release",
+        EARNINGS_RELEASE_KEYWORDS,
+    )
+    transcript_signal = _earnings_content_signal_from_articles(
+        ticker,
+        rows,
+        linked_events,
+        "earnings_transcript",
+        EARNINGS_TRANSCRIPT_KEYWORDS,
+    )
+    return [signal for signal in (release_signal, transcript_signal) if signal]
+
+
 def _yfinance_recommendation_signal(ticker: str) -> dict[str, Any] | None:
     try:
         recs = yf.Ticker(ticker).recommendations
@@ -307,6 +398,21 @@ def _finnhub_api_key() -> str | None:
         "FINNHUB_KEY_SECRET_NAME",
         supported_json_keys=("FINNHUB_KEY", "finnhub_key", "api_key"),
     )
+
+
+def _recent_and_upcoming_earnings_events(
+    ticker: str,
+    run_date: date,
+) -> list[dict[str, Any]]:
+    try:
+        return store.earnings_events_for_ticker(
+            ticker,
+            run_date - timedelta(days=EARNINGS_EVIDENCE_LOOKBACK_DAYS),
+            run_date + timedelta(days=EARNINGS_EVENT_LINK_WINDOW_DAYS),
+        )
+    except Exception as exc:
+        logger.info("earnings_event_link_lookup_failed", ticker=ticker, error=str(exc))
+        return []
 
 
 def _recommendation_signal_from_counts(
@@ -362,6 +468,120 @@ def _recommendation_signal_from_counts(
             "coverage": coverage,
         },
     )
+
+
+def _earnings_content_signal_from_articles(
+    ticker: str,
+    rows: list[dict[str, Any]],
+    earnings_events: list[dict[str, Any]],
+    signal_type: str,
+    keywords: tuple[str, ...],
+) -> dict[str, Any] | None:
+    article = _latest_matching_article(rows, keywords)
+    if not article:
+        return None
+
+    published_at = _article_published_at(article)
+    published_date = published_at.date() if published_at else date.today()
+    linked_event = _nearest_earnings_event(earnings_events, published_date)
+    direction, score = _earnings_content_direction_and_score(article, signal_type)
+    title = (
+        "Earnings call transcript available"
+        if signal_type == "earnings_transcript"
+        else "Earnings release available"
+    )
+    article_title = str(article.get("headline") or article.get("title") or "").strip()
+    source = str(article.get("source") or "finnhub").strip()
+    summary = str(article.get("summary") or "").strip()
+    summary_text = summary or article_title
+
+    return _market_signal(
+        ticker,
+        date.today(),
+        signal_type,
+        direction,
+        score,
+        title,
+        f"{source} published {ticker} earnings evidence: {summary_text[:220]}",
+        {
+            "provider": "finnhub",
+            "published_at": published_at.isoformat() if published_at else None,
+            "article_title": article_title,
+            "source": source,
+            "url": article.get("url"),
+            "linked_earnings_event": (
+                _jsonable_earnings_event(linked_event) if linked_event else None
+            ),
+        },
+    )
+
+
+def _latest_matching_article(
+    rows: list[dict[str, Any]],
+    keywords: tuple[str, ...],
+) -> dict[str, Any] | None:
+    matches = [
+        row
+        for row in rows
+        if any(keyword in _article_text(row) for keyword in keywords)
+    ]
+    if not matches:
+        return None
+    return max(matches, key=lambda row: _article_published_at(row) or datetime.min)
+
+
+def _earnings_content_direction_and_score(
+    article: dict[str, Any],
+    signal_type: str,
+) -> tuple[str, int]:
+    text = _article_text(article)
+    positive_hits = sum(1 for keyword in POSITIVE_EARNINGS_KEYWORDS if keyword in text)
+    negative_hits = sum(1 for keyword in NEGATIVE_EARNINGS_KEYWORDS if keyword in text)
+    base_score = 16 if signal_type == "earnings_transcript" else 20
+    if positive_hits > negative_hits:
+        return "positive", min(35, base_score + positive_hits * 5)
+    if negative_hits > positive_hits:
+        return "negative", -min(35, base_score + negative_hits * 5)
+    return "neutral", base_score
+
+
+def _nearest_earnings_event(
+    events: list[dict[str, Any]],
+    target_date: date,
+) -> dict[str, Any] | None:
+    parsed_events = [
+        (event, _parse_date(event.get("event_date")))
+        for event in events
+    ]
+    candidates = [
+        (event, event_date)
+        for event, event_date in parsed_events
+        if event_date is not None
+        and abs((event_date - target_date).days) <= EARNINGS_EVENT_LINK_WINDOW_DAYS
+    ]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda item: abs((item[1] - target_date).days))[0]
+
+
+def _jsonable_earnings_event(event: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: _jsonable_value(value)
+        for key, value in event.items()
+        if key
+        in {
+            "ticker",
+            "company_name",
+            "event_date",
+            "eps_estimate",
+            "reported_eps",
+            "surprise_percent",
+            "time_of_day",
+            "is_upcoming",
+            "provider",
+            "source_url",
+        }
+    }
 
 
 def _rating_signal_from_row(
@@ -537,6 +757,37 @@ def _parse_date(value: Any) -> date | None:
         return date.fromisoformat(str(value)[:10])
     except ValueError:
         return None
+
+
+def _article_published_at(article: dict[str, Any]) -> datetime | None:
+    value = article.get("datetime") or article.get("published_at") or article.get("publishedAt")
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(value, tz=timezone.utc)
+        except (OSError, ValueError):
+            return None
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return None
+
+
+def _article_text(article: dict[str, Any]) -> str:
+    return " ".join(
+        str(article.get(field) or "")
+        for field in ("headline", "title", "summary", "content")
+    ).lower()
+
+
+def _jsonable_value(value: Any) -> Any:
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    return value
 
 
 def _int(value: Any) -> int:

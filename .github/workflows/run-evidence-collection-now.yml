@@ -119,6 +119,8 @@ jobs:
               f"analyst_signals_written={body.get('analyst_signals_written')} "
               f"analyst_rating_signals_written={body.get('analyst_rating_signals_written')} "
               f"price_target_signals_written={body.get('price_target_signals_written')} "
+              f"earnings_release_signals_written={body.get('earnings_release_signals_written')} "
+              f"earnings_transcript_signals_written={body.get('earnings_transcript_signals_written')} "
               f"failed_tickers={len(body.get('failed_tickers', []))}"
           )
           PY

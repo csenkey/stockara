@@ -90,6 +90,8 @@ STORED_SIGNAL_TYPES = {
     "analyst_action",
     "analyst_rating",
     "price_target",
+    "earnings_release",
+    "earnings_transcript",
 }
 
 

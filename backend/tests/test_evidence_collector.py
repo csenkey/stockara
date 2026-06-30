@@ -104,6 +104,7 @@ def test_collect_evidence_writes_sec_and_analyst_signals():
         ),
         patch.object(evidence_collector, "_finnhub_rating_signal", return_value=None),
         patch.object(evidence_collector, "_finnhub_price_target_signal", return_value=None),
+        patch.object(evidence_collector, "_finnhub_earnings_content_signals", return_value=[]),
     ):
         result = evidence_collector.collect_evidence(tickers=["NVDA", "MSFT"])
 
@@ -114,6 +115,8 @@ def test_collect_evidence_writes_sec_and_analyst_signals():
     assert result["analyst_signals_written"] == 1
     assert result["analyst_rating_signals_written"] == 0
     assert result["price_target_signals_written"] == 0
+    assert result["earnings_release_signals_written"] == 0
+    assert result["earnings_transcript_signals_written"] == 0
     assert put_market_signal.call_count == 2
     put_market_signal.assert_any_call(sec_signal)
     put_market_signal.assert_any_call(analyst_signal)
@@ -221,3 +224,111 @@ def test_price_target_signal_ignores_stale_updates():
     )
 
     assert signal is None
+
+
+def test_earnings_release_signal_links_nearby_earnings_event():
+    published = date.today()
+    article = {
+        "headline": "NVIDIA reports earnings and beats estimates",
+        "summary": "Revenue growth was above expectations.",
+        "source": "Business Wire",
+        "datetime": int(
+            evidence_collector.datetime(
+                published.year,
+                published.month,
+                published.day,
+                tzinfo=evidence_collector.timezone.utc,
+            ).timestamp()
+        ),
+        "url": "https://example.com/nvda-earnings",
+    }
+    earnings_event = {
+        "ticker": "NVDA",
+        "event_date": published.isoformat(),
+        "eps_estimate": "1.00",
+        "reported_eps": "1.20",
+        "provider": "finnhub",
+    }
+
+    signal = evidence_collector._earnings_content_signal_from_articles(
+        "NVDA",
+        [article],
+        [earnings_event],
+        "earnings_release",
+        evidence_collector.EARNINGS_RELEASE_KEYWORDS,
+    )
+
+    assert signal is not None
+    assert signal["signal_type"] == "earnings_release"
+    assert signal["direction"] == "positive"
+    assert signal["score"] > 20
+    assert signal["source"]["provider"] == "finnhub"
+    assert signal["source"]["raw"]["linked_earnings_event"]["event_date"] == published.isoformat()
+
+
+def test_earnings_transcript_signal_matches_transcript_article():
+    article = {
+        "headline": "Microsoft earnings call transcript",
+        "summary": "Management discussed quarterly results.",
+        "source": "Seeking Alpha",
+        "published_at": date.today().isoformat(),
+        "url": "https://example.com/msft-transcript",
+    }
+
+    signal = evidence_collector._earnings_content_signal_from_articles(
+        "MSFT",
+        [article],
+        [],
+        "earnings_transcript",
+        evidence_collector.EARNINGS_TRANSCRIPT_KEYWORDS,
+    )
+
+    assert signal is not None
+    assert signal["signal_type"] == "earnings_transcript"
+    assert signal["direction"] == "neutral"
+    assert signal["score"] == 16
+    assert signal["title"] == "Earnings call transcript available"
+
+
+def test_collect_evidence_counts_earnings_release_and_transcript_signals():
+    stocks = [{"ticker": "NVDA"}]
+    release_signal = {
+        "ticker": "NVDA",
+        "signal_date": date.today(),
+        "signal_type": "earnings_release",
+        "direction": "positive",
+        "score": 25,
+        "title": "Earnings release available",
+        "summary": "NVDA reported earnings.",
+        "source": {"provider": "finnhub"},
+    }
+    transcript_signal = {
+        "ticker": "NVDA",
+        "signal_date": date.today(),
+        "signal_type": "earnings_transcript",
+        "direction": "neutral",
+        "score": 16,
+        "title": "Earnings call transcript available",
+        "summary": "NVDA transcript published.",
+        "source": {"provider": "finnhub"},
+    }
+
+    with (
+        patch.object(evidence_collector.store, "active_stock_metadata", return_value=stocks),
+        patch.object(evidence_collector.store, "put_market_signal") as put_market_signal,
+        patch.object(evidence_collector, "_load_sec_ticker_map", return_value={}),
+        patch.object(evidence_collector, "_sec_filing_signal", return_value=None),
+        patch.object(evidence_collector, "_analyst_action_signal", return_value=None),
+        patch.object(evidence_collector, "_finnhub_rating_signal", return_value=None),
+        patch.object(evidence_collector, "_finnhub_price_target_signal", return_value=None),
+        patch.object(
+            evidence_collector,
+            "_finnhub_earnings_content_signals",
+            return_value=[release_signal, transcript_signal],
+        ),
+    ):
+        result = evidence_collector.collect_evidence(tickers=["NVDA"])
+
+    assert result["earnings_release_signals_written"] == 1
+    assert result["earnings_transcript_signals_written"] == 1
+    assert put_market_signal.call_count == 2
