@@ -218,6 +218,27 @@ def test_put_candidate_score_converts_nested_signal_floats_to_decimal():
     assert source["sector_change_percent"] == Decimal("-0.5")
 
 
+def test_existing_news_hashes_deduplicates_batch_get_keys():
+    table = MagicMock()
+    table.meta.client.batch_get_item.return_value = {
+        "Responses": {
+            "stockara": [
+                {"title_source_hash": "hash-a"},
+            ]
+        }
+    }
+    store = _TestableDynamoStore(table)
+
+    result = store.existing_news_hashes(["hash-a", "hash-a", "hash-b", ""])
+
+    assert result == {"hash-a"}
+    keys = table.meta.client.batch_get_item.call_args.kwargs["RequestItems"]["stockara"]["Keys"]
+    assert keys == [
+        {"PK": "NEWS#hash-a", "SK": "META"},
+        {"PK": "NEWS#hash-b", "SK": "META"},
+    ]
+
+
 def test_put_candidate_analysis_converts_nested_signal_floats_to_decimal():
     table = MagicMock()
     store = _TestableDynamoStore(table)

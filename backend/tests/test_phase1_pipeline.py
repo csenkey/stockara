@@ -995,6 +995,39 @@ def test_run_phase1_score_mode_scores_without_analyzing_or_publishing():
     publish_payload.assert_not_called()
 
 
+def test_run_phase1_score_mode_scores_requested_batch_only():
+    stocks = [
+        {"ticker": "AAPL", "company_name": "Apple", "sector": "Technology"},
+        {"ticker": "MSFT", "company_name": "Microsoft", "sector": "Technology"},
+        {"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology"},
+    ]
+    scores = [_candidate_score("NVDA", opportunity_score=60, negative_score=0)]
+
+    with (
+        patch("src.analysis.phase1_pipeline.DatabasePool"),
+        patch(
+            "src.analysis.phase1_pipeline._eligible_context",
+            return_value={"eligible_stocks": stocks, "freshness": {}},
+        ),
+        patch("src.analysis.phase1_pipeline.score_candidates", return_value=scores) as score,
+        patch("src.analysis.phase1_pipeline.select_shortlist", return_value=scores),
+        patch("src.analysis.phase1_pipeline.analyze_shortlist") as analyze_shortlist,
+        patch("src.analysis.phase1_pipeline.publish_payload") as publish_payload,
+        patch("src.analysis.phase1_pipeline._emit_metric"),
+        patch.object(phase1_pipeline, "date", _fixed_date(date(2026, 6, 17))),
+    ):
+        result = run_phase1_pipeline({"mode": "score", "batch_index": 1, "batch_size": 2})
+
+    assert result["statusCode"] == 200
+    assert result["body"]["candidate_count"] == 1
+    assert result["body"]["eligible_count"] == 3
+    assert result["body"]["batch_start"] == 2
+    assert result["body"]["batch_end"] == 3
+    assert [stock["ticker"] for stock in score.call_args.args[0]] == ["NVDA"]
+    analyze_shortlist.assert_not_called()
+    publish_payload.assert_not_called()
+
+
 def test_run_phase1_analyze_batch_mode_slices_shortlist():
     stocks = [
         {"ticker": "AAPL", "company_name": "Apple", "sector": "Technology"},

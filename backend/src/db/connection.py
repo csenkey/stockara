@@ -707,7 +707,8 @@ class DynamoStore:
 
     def existing_news_hashes(self, hashes: Iterable[str]) -> set[str]:
         result: set[str] = set()
-        keys = [{"PK": f"NEWS#{hash_value}", "SK": "META"} for hash_value in hashes]
+        unique_hashes = sorted({hash_value for hash_value in hashes if hash_value})
+        keys = [{"PK": f"NEWS#{hash_value}", "SK": "META"} for hash_value in unique_hashes]
         for i in range(0, len(keys), 100):
             response = self.table.meta.client.batch_get_item(
                 RequestItems={TABLE_NAME: {"Keys": keys[i : i + 100]}}

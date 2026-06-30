@@ -92,7 +92,7 @@ def run_phase1_pipeline(event: dict | None = None) -> dict[str, Any]:
     try:
         mode = str(event.get("mode", "full"))
         if mode == "score":
-            return _run_score_phase(run_date)
+            return _run_score_phase(event, run_date)
         if mode == "analyze_batch":
             return _run_analyze_batch_phase(event, run_date)
         if mode == "publish":
@@ -149,7 +149,7 @@ def _run_full_phase(run_date: date) -> dict[str, Any]:
     }
 
 
-def _run_score_phase(run_date: date) -> dict[str, Any]:
+def _run_score_phase(event: dict[str, Any], run_date: date) -> dict[str, Any]:
     gate_response = _collection_gate_response(run_date)
     if gate_response:
         return gate_response
@@ -158,17 +158,44 @@ def _run_score_phase(run_date: date) -> dict[str, Any]:
     if context.get("response"):
         return context["response"]
 
-    scores = score_candidates(context["eligible_stocks"], run_date)
+    eligible_stocks = context["eligible_stocks"]
+    batch_index = event.get("batch_index")
+    batch_size = event.get("batch_size")
+    if batch_index is not None or batch_size is not None:
+        batch_index = int(batch_index or 0)
+        batch_size = int(batch_size or 100)
+        if batch_index < 0 or batch_size < 1:
+            return {"statusCode": 400, "body": "batch_index must be >= 0 and batch_size must be >= 1"}
+        start = batch_index * batch_size
+        stocks_to_score = eligible_stocks[start : start + batch_size]
+    else:
+        batch_index = None
+        batch_size = None
+        start = 0
+        stocks_to_score = eligible_stocks
+
+    scores = score_candidates(stocks_to_score, run_date)
     shortlist = select_shortlist(scores)
     _emit_metric("candidates_scored", len(scores))
+    body: dict[str, Any] = {
+        "mode": "score",
+        "candidate_count": len(scores),
+        "eligible_count": len(eligible_stocks),
+        "shortlist_count": len(shortlist),
+        "shortlisted_tickers": [score["ticker"] for score in shortlist],
+    }
+    if batch_index is not None and batch_size is not None:
+        body.update(
+            {
+                "batch_index": batch_index,
+                "batch_size": batch_size,
+                "batch_start": start,
+                "batch_end": min(start + batch_size, len(eligible_stocks)),
+            }
+        )
     return {
         "statusCode": 200,
-        "body": {
-            "mode": "score",
-            "candidate_count": len(scores),
-            "shortlist_count": len(shortlist),
-            "shortlisted_tickers": [score["ticker"] for score in shortlist],
-        },
+        "body": body,
     }
 
 
