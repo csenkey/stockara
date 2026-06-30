@@ -305,6 +305,39 @@ class CandidateAnalysis(BaseModel):
         return validate_ticker(value)
 
 
+class PriceCandle(BaseModel):
+    date: date
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: int
+
+
+class ChartPoint(BaseModel):
+    date: date
+    value: Decimal
+
+
+class TrendLine(BaseModel):
+    start_date: date
+    start_value: Decimal
+    end_date: date
+    end_value: Decimal
+    slope_per_session: Decimal
+
+
+class PriceChart(BaseModel):
+    period_start: date
+    period_end: date
+    currency: Optional[str] = None
+    candles: list[PriceCandle]
+    sma_20: list[ChartPoint] = Field(default_factory=list)
+    trend_line: Optional[TrendLine] = None
+    support: Optional[Decimal] = None
+    resistance: Optional[Decimal] = None
+
+
 class TopPick(BaseModel):
     rank: int
     ticker: str
@@ -320,6 +353,7 @@ class TopPick(BaseModel):
     invalidation_criteria: str
     supporting_evidence: list[str]
     source_traceability: list[SignalSource]
+    price_chart: Optional[PriceChart] = None
 
 
 class SellAlert(BaseModel):
@@ -335,6 +369,7 @@ class SellAlert(BaseModel):
     rationale: str
     supporting_evidence: list[str]
     source_traceability: list[SignalSource]
+    price_chart: Optional[PriceChart] = None
 
 
 class ReviewRejection(BaseModel):
@@ -353,6 +388,7 @@ class ReviewRejection(BaseModel):
     invalidation_criteria: str
     supporting_evidence: list[str] = Field(default_factory=list)
     ai_review: dict[str, Any]
+    price_chart: Optional[PriceChart] = None
 
 
 class PublishedTopPicks(BaseModel):

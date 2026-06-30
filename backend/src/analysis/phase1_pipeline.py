@@ -26,6 +26,8 @@ ARTIFACT_BUCKET = os.environ.get("STOCKARA_ARTIFACT_BUCKET", "")
 SHORTLIST_SIZE = int(os.environ.get("PHASE1_SHORTLIST_SIZE", "50"))
 TOP_PICK_COUNT = int(os.environ.get("PHASE1_TOP_PICK_COUNT", "10"))
 ANALYSIS_BATCH_SIZE = int(os.environ.get("PHASE1_ANALYSIS_BATCH_SIZE", "5"))
+PRICE_CHART_LOOKBACK_DAYS = int(os.environ.get("PHASE1_PRICE_CHART_LOOKBACK_DAYS", "60"))
+PRICE_CHART_MAX_ROWS = int(os.environ.get("PHASE1_PRICE_CHART_MAX_ROWS", "45"))
 STOCK_FRESHNESS_MAX_AGE_DAYS = int(os.environ.get("PHASE1_STOCK_FRESHNESS_MAX_AGE_DAYS", "3"))
 MIN_HISTORY_CALENDAR_DAYS = int(os.environ.get("PHASE1_MIN_HISTORY_CALENDAR_DAYS", "30"))
 MIN_HISTORY_ROWS = int(os.environ.get("PHASE1_MIN_HISTORY_ROWS", "20"))
@@ -805,23 +807,27 @@ def build_publication_payload(
     for rank, row in enumerate(buy_candidates[:TOP_PICK_COUNT], start=1):
         stock = stock_map[row["ticker"]]
         top_picks.append(
-            {
-                "rank": rank,
-                "ticker": row["ticker"],
-                "company_name": stock["company_name"],
-                "sector": stock["sector"],
-                "analysis_method": row.get("analysis_method", "ai"),
-                "recommendation": row["recommendation"],
-                "risk_level": row["risk_level"],
-                "confidence_score": row["confidence_score"],
-                "catalyst": row["catalyst"],
-                "expected_timeframe": row["expected_timeframe"],
-                "rationale": row["reasoning"],
-                "invalidation_criteria": row["invalidation_criteria"],
-                "ai_review": row.get("ai_review"),
-                "supporting_evidence": _evidence(row["signals"]),
-                "source_traceability": [signal["source"] for signal in row["signals"][:5]],
-            }
+            _with_price_chart(
+                {
+                    "rank": rank,
+                    "ticker": row["ticker"],
+                    "company_name": stock["company_name"],
+                    "sector": stock["sector"],
+                    "analysis_method": row.get("analysis_method", "ai"),
+                    "recommendation": row["recommendation"],
+                    "risk_level": row["risk_level"],
+                    "confidence_score": row["confidence_score"],
+                    "catalyst": row["catalyst"],
+                    "expected_timeframe": row["expected_timeframe"],
+                    "rationale": row["reasoning"],
+                    "invalidation_criteria": row["invalidation_criteria"],
+                    "ai_review": row.get("ai_review"),
+                    "supporting_evidence": _evidence(row["signals"]),
+                    "source_traceability": [signal["source"] for signal in row["signals"][:5]],
+                },
+                row["ticker"],
+                run_date,
+            )
         )
 
     sell_candidates = [
@@ -839,21 +845,25 @@ def build_publication_payload(
     for rank, row in enumerate(sell_candidates[:TOP_PICK_COUNT], start=1):
         stock = stock_map[row["ticker"]]
         sell_alerts.append(
-            {
-                "rank": rank,
-                "ticker": row["ticker"],
-                "company_name": stock["company_name"],
-                "sector": stock["sector"],
-                "analysis_method": row.get("analysis_method", "ai"),
-                "severity": "critical" if row["negative_score"] >= 80 else "high",
-                "risk_level": row["risk_level"],
-                "confidence_score": row["confidence_score"],
-                "negative_catalyst": row["catalyst"],
-                "rationale": row["reasoning"],
-                "ai_review": row.get("ai_review"),
-                "supporting_evidence": _evidence(row["signals"]),
-                "source_traceability": [signal["source"] for signal in row["signals"][:5]],
-            }
+            _with_price_chart(
+                {
+                    "rank": rank,
+                    "ticker": row["ticker"],
+                    "company_name": stock["company_name"],
+                    "sector": stock["sector"],
+                    "analysis_method": row.get("analysis_method", "ai"),
+                    "severity": "critical" if row["negative_score"] >= 80 else "high",
+                    "risk_level": row["risk_level"],
+                    "confidence_score": row["confidence_score"],
+                    "negative_catalyst": row["catalyst"],
+                    "rationale": row["reasoning"],
+                    "ai_review": row.get("ai_review"),
+                    "supporting_evidence": _evidence(row["signals"]),
+                    "source_traceability": [signal["source"] for signal in row["signals"][:5]],
+                },
+                row["ticker"],
+                run_date,
+            )
         )
 
     data_warnings = _source_warnings(scores)
@@ -890,7 +900,7 @@ def build_publication_payload(
         "publication_scope": "top_opportunities_among_eligible_tickers",
         "fallback_policy": fallback_policy,
         "review_policy": review_policy,
-        "review_rejections": _review_rejection_audit(analyses, stock_map),
+        "review_rejections": _review_rejection_audit(analyses, stock_map, run_date),
         "top_picks": top_picks,
         "sell_alerts": sell_alerts,
         "upcoming_earnings": upcoming_earnings or [],
@@ -2021,8 +2031,115 @@ def _review_policy_summary(analyses: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _with_price_chart(
+    row: dict[str, Any], ticker: str, run_date: date
+) -> dict[str, Any]:
+    chart = _price_chart_for_ticker(ticker, run_date)
+    if chart:
+        return {**row, "price_chart": chart}
+    return row
+
+
+def _price_chart_for_ticker(ticker: str, run_date: date) -> dict[str, Any] | None:
+    """Return compact static OHLCV chart data for the public artifact."""
+    try:
+        rows = store.get_stock_data(
+            ticker,
+            run_date - timedelta(days=PRICE_CHART_LOOKBACK_DAYS),
+            run_date,
+        )
+    except Exception as exc:
+        logger.warning("price_chart_lookup_failed", ticker=ticker, error=str(exc))
+        return None
+
+    ordered = _ordered_stock_rows(rows)[-PRICE_CHART_MAX_ROWS:]
+    if len(ordered) < 2:
+        return None
+
+    candles: list[dict[str, Any]] = []
+    for row in ordered:
+        try:
+            candles.append(
+                {
+                    "date": str(row["trading_date"])[:10],
+                    "open": _jsonable_value(row["open_price"]),
+                    "high": _jsonable_value(row["high_price"]),
+                    "low": _jsonable_value(row["low_price"]),
+                    "close": _jsonable_value(_analysis_close_price(row)),
+                    "volume": int(row.get("volume", 0)),
+                }
+            )
+        except (KeyError, TypeError, ValueError, ArithmeticError) as exc:
+            logger.warning(
+                "price_chart_row_skipped",
+                ticker=ticker,
+                trading_date=row.get("trading_date"),
+                error=str(exc),
+            )
+    if len(candles) < 2:
+        return None
+
+    closes = [Decimal(str(candle["close"])) for candle in candles]
+    lows = [Decimal(str(candle["low"])) for candle in candles]
+    highs = [Decimal(str(candle["high"])) for candle in candles]
+    sma_20 = _sma_chart_points(candles, closes, 20)
+    trend_line = _trend_line_for_candles(candles, closes)
+    support_window = lows[-20:] if len(lows) >= 20 else lows
+    resistance_window = highs[-20:] if len(highs) >= 20 else highs
+
+    latest = ordered[-1]
+    return {
+        "period_start": candles[0]["date"],
+        "period_end": candles[-1]["date"],
+        "currency": latest.get("currency"),
+        "candles": candles,
+        "sma_20": sma_20,
+        "trend_line": trend_line,
+        "support": _jsonable_value(min(support_window)) if support_window else None,
+        "resistance": _jsonable_value(max(resistance_window)) if resistance_window else None,
+    }
+
+
+def _sma_chart_points(
+    candles: list[dict[str, Any]], closes: list[Decimal], window: int
+) -> list[dict[str, Any]]:
+    if len(closes) < window:
+        return []
+    points = []
+    for index in range(window - 1, len(closes)):
+        value = _average_decimal(closes[index - window + 1 : index + 1])
+        points.append({"date": candles[index]["date"], "value": _jsonable_value(value)})
+    return points
+
+
+def _trend_line_for_candles(
+    candles: list[dict[str, Any]], closes: list[Decimal]
+) -> dict[str, Any] | None:
+    if len(closes) < 2:
+        return None
+    count = Decimal(len(closes))
+    xs = [Decimal(index) for index in range(len(closes))]
+    sum_x = sum(xs, Decimal("0"))
+    sum_y = sum(closes, Decimal("0"))
+    sum_xy = sum((x * y for x, y in zip(xs, closes)), Decimal("0"))
+    sum_x2 = sum((x * x for x in xs), Decimal("0"))
+    denominator = count * sum_x2 - sum_x * sum_x
+    if denominator == 0:
+        return None
+    slope = (count * sum_xy - sum_x * sum_y) / denominator
+    intercept = (sum_y - slope * sum_x) / count
+    end_x = Decimal(len(closes) - 1)
+    return {
+        "start_date": candles[0]["date"],
+        "start_value": _jsonable_value(intercept),
+        "end_date": candles[-1]["date"],
+        "end_value": _jsonable_value(intercept + slope * end_x),
+        "slope_per_session": _jsonable_value(slope),
+    }
+
+
 def _review_rejection_audit(
-    analyses: list[dict[str, Any]], stock_map: dict[str, dict[str, Any]]
+    analyses: list[dict[str, Any]], stock_map: dict[str, dict[str, Any]], run_date: date
 ) -> list[dict[str, Any]]:
     """Return analyst/reviewer details for withheld AI recommendations."""
     suppressed = [
@@ -2046,23 +2163,27 @@ def _review_rejection_audit(
     for row in suppressed[:50]:
         stock = stock_map.get(row["ticker"], {})
         audit_rows.append(
-            {
-                "ticker": row["ticker"],
-                "company_name": stock.get("company_name", row["ticker"]),
-                "sector": stock.get("sector"),
-                "analysis_method": row.get("analysis_method", "ai"),
-                "analysis_model": row.get("analysis_model", OPENAI_ANALYSIS_MODEL),
-                "recommendation": row["recommendation"],
-                "risk_level": row["risk_level"],
-                "confidence_score": row["confidence_score"],
-                "opportunity_score": row["opportunity_score"],
-                "negative_score": row["negative_score"],
-                "catalyst": row["catalyst"],
-                "analyst_reasoning": row["reasoning"],
-                "invalidation_criteria": row["invalidation_criteria"],
-                "supporting_evidence": _evidence(row.get("signals", [])),
-                "ai_review": row.get("ai_review"),
-            }
+            _with_price_chart(
+                {
+                    "ticker": row["ticker"],
+                    "company_name": stock.get("company_name", row["ticker"]),
+                    "sector": stock.get("sector"),
+                    "analysis_method": row.get("analysis_method", "ai"),
+                    "analysis_model": row.get("analysis_model", OPENAI_ANALYSIS_MODEL),
+                    "recommendation": row["recommendation"],
+                    "risk_level": row["risk_level"],
+                    "confidence_score": row["confidence_score"],
+                    "opportunity_score": row["opportunity_score"],
+                    "negative_score": row["negative_score"],
+                    "catalyst": row["catalyst"],
+                    "analyst_reasoning": row["reasoning"],
+                    "invalidation_criteria": row["invalidation_criteria"],
+                    "supporting_evidence": _evidence(row.get("signals", [])),
+                    "ai_review": row.get("ai_review"),
+                },
+                row["ticker"],
+                run_date,
+            )
         )
     return audit_rows
 

@@ -15,6 +15,39 @@ interface AiReview {
   what_would_make_approvable?: string | null;
 }
 
+interface PriceCandle {
+  date: string;
+  open: number | string;
+  high: number | string;
+  low: number | string;
+  close: number | string;
+  volume: number;
+}
+
+interface ChartPoint {
+  date: string;
+  value: number | string;
+}
+
+interface TrendLine {
+  start_date: string;
+  start_value: number | string;
+  end_date: string;
+  end_value: number | string;
+  slope_per_session: number | string;
+}
+
+interface PriceChart {
+  period_start: string;
+  period_end: string;
+  currency?: string | null;
+  candles: PriceCandle[];
+  sma_20: ChartPoint[];
+  trend_line?: TrendLine | null;
+  support?: number | string | null;
+  resistance?: number | string | null;
+}
+
 interface TopPick {
   rank: number;
   ticker: string;
@@ -29,6 +62,7 @@ interface TopPick {
   invalidation_criteria: string;
   supporting_evidence: string[];
   source_traceability: SignalSource[];
+  price_chart?: PriceChart | null;
 }
 
 interface SellAlert {
@@ -43,6 +77,7 @@ interface SellAlert {
   rationale: string;
   supporting_evidence: string[];
   source_traceability: SignalSource[];
+  price_chart?: PriceChart | null;
 }
 
 interface ReviewRejection {
@@ -59,6 +94,7 @@ interface ReviewRejection {
   invalidation_criteria: string;
   supporting_evidence: string[];
   ai_review: AiReview;
+  price_chart?: PriceChart | null;
 }
 
 interface DataQuality {
@@ -206,35 +242,8 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
 
         {!loading && payload && (
           <div className="space-y-8">
-            {payload.data_warnings.length > 0 && (
-              <div className="border border-amber-700 bg-amber-950 p-4 text-sm text-amber-100">
-                <div className="mb-2 flex items-center gap-2 font-medium">
-                  Data Warnings
-                </div>
-                <ul className="space-y-1">
-                  {payload.data_warnings.map((warning) => (
-                    <li key={warning}>{warning}</li>
-                  ))}
-                </ul>
-                <FreshnessSummary dataQuality={payload.data_quality} />
-              </div>
-            )}
-
-            {reviewRejections.length > 0 && (
-              <section>
-                <h2 className="mb-3 text-lg font-semibold">
-                  Withheld AI Recommendations
-                </h2>
-                <div className="space-y-3">
-                  {reviewRejections.map((row) => (
-                    <ReviewRejectionRow key={row.ticker} row={row} />
-                  ))}
-                </div>
-              </section>
-            )}
-
             <section>
-              <h2 className="mb-3 text-lg font-semibold">Top Opportunities</h2>
+              <h2 className="mb-3 text-lg font-semibold">Top Picks</h2>
               {payload.top_picks.length === 0 ? (
                 <div className="border border-slate-800 bg-slate-900 p-5 text-sm text-slate-300">
                   No BUY recommendations passed the review gate for this publication.
@@ -262,6 +271,33 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
                 </div>
               )}
             </section>
+
+            {payload.data_warnings.length > 0 && (
+              <section>
+                <h2 className="mb-3 text-lg font-semibold">Data Warnings</h2>
+                <div className="border border-amber-700 bg-amber-950 p-4 text-sm text-amber-100">
+                  <ul className="space-y-1">
+                    {payload.data_warnings.map((warning) => (
+                      <li key={warning}>{warning}</li>
+                    ))}
+                  </ul>
+                  <FreshnessSummary dataQuality={payload.data_quality} />
+                </div>
+              </section>
+            )}
+
+            {reviewRejections.length > 0 && (
+              <section>
+                <h2 className="mb-3 text-lg font-semibold">
+                  Withheld AI Recommendations
+                </h2>
+                <div className="space-y-3">
+                  {reviewRejections.map((row) => (
+                    <ReviewRejectionRow key={row.ticker} row={row} />
+                  ))}
+                </div>
+              </section>
+            )}
           </div>
         )}
       </div>
@@ -322,6 +358,8 @@ function ReviewRejectionRow({ row }: { row: ReviewRejection }) {
           </span>
         </div>
       </div>
+
+      <PriceChartPanel chart={row.price_chart} tone="slate" />
 
       <div className="mt-4 grid gap-4 text-sm lg:grid-cols-2">
         <div>
@@ -402,6 +440,7 @@ function PickRow({ pick }: { pick: TopPick }) {
       </div>
       <p className="mt-4 text-sm font-medium text-slate-100">{pick.catalyst}</p>
       <p className="mt-2 text-sm leading-6 text-slate-300">{pick.rationale}</p>
+      <PriceChartPanel chart={pick.price_chart} tone="slate" />
       <div className="mt-4 grid gap-3 text-sm md:grid-cols-2">
         <Fact label="Confidence" value={`${pick.confidence_score}%`} />
         <Fact label="Timeframe" value={pick.expected_timeframe} />
@@ -430,6 +469,7 @@ function SellAlertRow({ alert }: { alert: SellAlert }) {
         {alert.negative_catalyst}
       </p>
       <p className="mt-2 text-sm leading-6 text-red-100">{alert.rationale}</p>
+      <PriceChartPanel chart={alert.price_chart} tone="red" />
       <div className="mt-4 grid gap-3 text-sm md:grid-cols-2">
         <Fact label="Confidence" value={`${alert.confidence_score}%`} />
         <Fact label="Risk" value={alert.risk_level} />
@@ -437,6 +477,291 @@ function SellAlertRow({ alert }: { alert: SellAlert }) {
       <Evidence items={alert.supporting_evidence} />
     </article>
   );
+}
+
+function PriceChartPanel({
+  chart,
+  tone,
+}: {
+  chart?: PriceChart | null;
+  tone: "slate" | "red";
+}) {
+  if (!chart || chart.candles.length < 2) {
+    return (
+      <div
+        className={`mt-4 border-t pt-4 text-sm ${
+          tone === "red"
+            ? "border-red-900 text-red-200"
+            : "border-slate-800 text-slate-400"
+        }`}
+      >
+        Static price chart unavailable for this publication.
+      </div>
+    );
+  }
+
+  const candles = chart.candles
+    .map((candle) => ({
+      ...candle,
+      open: toNumber(candle.open),
+      high: toNumber(candle.high),
+      low: toNumber(candle.low),
+      close: toNumber(candle.close),
+      volume: Number(candle.volume) || 0,
+    }))
+    .filter((candle) =>
+      [candle.open, candle.high, candle.low, candle.close].every(Number.isFinite),
+    );
+  if (candles.length < 2) return null;
+
+  const width = 720;
+  const priceTop = 12;
+  const priceHeight = 150;
+  const volumeTop = 184;
+  const volumeHeight = 38;
+  const xPadding = 18;
+  const step = (width - xPadding * 2) / Math.max(1, candles.length - 1);
+  const candleWidth = Math.max(3, Math.min(9, step * 0.52));
+  const support = chart.support == null ? null : toNumber(chart.support);
+  const resistance = chart.resistance == null ? null : toNumber(chart.resistance);
+  const trend = chart.trend_line
+    ? {
+        start: toNumber(chart.trend_line.start_value),
+        end: toNumber(chart.trend_line.end_value),
+        slope: toNumber(chart.trend_line.slope_per_session),
+      }
+    : null;
+  const smaPoints = chart.sma_20
+    .map((point) => ({
+      x: xForDate(candles, point.date, step, xPadding),
+      value: toNumber(point.value),
+    }))
+    .filter((point) => point.x !== null && Number.isFinite(point.value));
+  const priceValues = [
+    ...candles.flatMap((candle) => [candle.high, candle.low]),
+    ...smaPoints.map((point) => point.value),
+    support,
+    resistance,
+    trend?.start,
+    trend?.end,
+  ].filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  const minPrice = Math.min(...priceValues);
+  const maxPrice = Math.max(...priceValues);
+  const priceRange = maxPrice - minPrice || Math.max(1, maxPrice * 0.02);
+  const paddedMin = minPrice - priceRange * 0.08;
+  const paddedMax = maxPrice + priceRange * 0.08;
+  const maxVolume = Math.max(...candles.map((candle) => candle.volume), 1);
+  const yForPrice = (value: number) =>
+    priceTop + ((paddedMax - value) / (paddedMax - paddedMin)) * priceHeight;
+  const xForIndex = (index: number) => xPadding + index * step;
+  const latest = candles[candles.length - 1];
+  const first = candles[0];
+  const periodReturn = ((latest.close - first.close) / first.close) * 100;
+  const trendLabel =
+    trend && Number.isFinite(trend.slope)
+      ? `${trend.slope >= 0 ? "+" : ""}${formatCompactNumber(trend.slope)} / session`
+      : "n/a";
+  const strokeBase = tone === "red" ? "stroke-red-900" : "stroke-slate-800";
+  const textBase = tone === "red" ? "text-red-100" : "text-slate-200";
+  const mutedText = tone === "red" ? "text-red-200" : "text-slate-400";
+  const borderBase = tone === "red" ? "border-red-900" : "border-slate-800";
+  const smaPath = linePath(smaPoints.map((point) => [point.x ?? 0, yForPrice(point.value)]));
+  const trendPath =
+    trend && Number.isFinite(trend.start) && Number.isFinite(trend.end)
+      ? `M ${xForIndex(0)} ${yForPrice(trend.start)} L ${xForIndex(candles.length - 1)} ${yForPrice(
+          trend.end,
+        )}`
+      : "";
+
+  return (
+    <div className={`mt-4 border-t ${borderBase} pt-4`}>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className={`text-xs uppercase ${mutedText}`}>Static price chart</div>
+          <div className={`mt-1 text-sm ${textBase}`}>
+            {chart.period_start} to {chart.period_end}
+            {chart.currency ? ` · ${chart.currency}` : ""}
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-x-5 gap-y-1 text-xs md:grid-cols-4">
+          <ChartStat label="Close" value={formatPrice(latest.close)} tone={tone} />
+          <ChartStat
+            label="Return"
+            value={`${periodReturn >= 0 ? "+" : ""}${periodReturn.toFixed(1)}%`}
+            tone={tone}
+          />
+          <ChartStat
+            label="Support"
+            value={support == null ? "n/a" : formatPrice(support)}
+            tone={tone}
+          />
+          <ChartStat label="Trend" value={trendLabel} tone={tone} />
+        </div>
+      </div>
+
+      <svg
+        viewBox={`0 0 ${width} 240`}
+        role="img"
+        aria-label={`Static OHLCV chart from ${chart.period_start} to ${chart.period_end}`}
+        className="h-56 w-full overflow-visible"
+        preserveAspectRatio="none"
+      >
+        <line x1="0" y1={priceTop} x2={width} y2={priceTop} className={strokeBase} />
+        <line
+          x1="0"
+          y1={priceTop + priceHeight}
+          x2={width}
+          y2={priceTop + priceHeight}
+          className={strokeBase}
+        />
+        <line x1="0" y1={volumeTop} x2={width} y2={volumeTop} className={strokeBase} />
+
+        {support != null && (
+          <ReferenceLine
+            y={yForPrice(support)}
+            label="support"
+            width={width}
+            color="stroke-sky-400"
+          />
+        )}
+        {resistance != null && (
+          <ReferenceLine
+            y={yForPrice(resistance)}
+            label="resistance"
+            width={width}
+            color="stroke-amber-300"
+          />
+        )}
+        {trendPath && (
+          <path d={trendPath} fill="none" className="stroke-violet-300" strokeWidth="2" />
+        )}
+        {smaPath && (
+          <path d={smaPath} fill="none" className="stroke-cyan-300" strokeWidth="2" />
+        )}
+
+        {candles.map((candle, index) => {
+          const x = xForIndex(index);
+          const bodyTop = yForPrice(Math.max(candle.open, candle.close));
+          const bodyBottom = yForPrice(Math.min(candle.open, candle.close));
+          const isUp = candle.close >= candle.open;
+          const bodyHeight = Math.max(2, bodyBottom - bodyTop);
+          const volumeHeightValue = (candle.volume / maxVolume) * volumeHeight;
+          return (
+            <g key={`${candle.date}-${index}`}>
+              <line
+                x1={x}
+                y1={yForPrice(candle.high)}
+                x2={x}
+                y2={yForPrice(candle.low)}
+                className={isUp ? "stroke-emerald-300" : "stroke-red-300"}
+                strokeWidth="1.5"
+              />
+              <rect
+                x={x - candleWidth / 2}
+                y={bodyTop}
+                width={candleWidth}
+                height={bodyHeight}
+                rx="1"
+                className={isUp ? "fill-emerald-300" : "fill-red-300"}
+              />
+              <rect
+                x={x - candleWidth / 2}
+                y={volumeTop + volumeHeight - volumeHeightValue}
+                width={candleWidth}
+                height={Math.max(1, volumeHeightValue)}
+                className={isUp ? "fill-emerald-700" : "fill-red-700"}
+                opacity="0.6"
+              />
+            </g>
+          );
+        })}
+      </svg>
+
+      <div className={`mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs ${mutedText}`}>
+        <span>SMA20</span>
+        <span>Trend</span>
+        <span>Support {support == null ? "n/a" : formatPrice(support)}</span>
+        <span>Resistance {resistance == null ? "n/a" : formatPrice(resistance)}</span>
+      </div>
+    </div>
+  );
+}
+
+function ChartStat({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "slate" | "red";
+}) {
+  return (
+    <div>
+      <div className={tone === "red" ? "text-red-300" : "text-slate-500"}>{label}</div>
+      <div className={tone === "red" ? "text-red-50" : "text-slate-100"}>{value}</div>
+    </div>
+  );
+}
+
+function ReferenceLine({
+  y,
+  label,
+  width,
+  color,
+}: {
+  y: number;
+  label: string;
+  width: number;
+  color: string;
+}) {
+  return (
+    <g>
+      <line
+        x1="0"
+        y1={y}
+        x2={width}
+        y2={y}
+        className={color}
+        strokeWidth="1.5"
+        strokeDasharray="6 5"
+      />
+      <text x="6" y={Math.max(11, y - 4)} className="fill-slate-300 text-[10px] uppercase">
+        {label}
+      </text>
+    </g>
+  );
+}
+
+function toNumber(value: number | string): number {
+  return typeof value === "number" ? value : Number(value);
+}
+
+function xForDate(
+  candles: Array<{ date: string }>,
+  dateValue: string,
+  step: number,
+  xPadding: number,
+) {
+  const index = candles.findIndex((candle) => candle.date === dateValue);
+  if (index < 0) return null;
+  return xPadding + index * step;
+}
+
+function linePath(points: Array<[number, number]>) {
+  if (points.length < 2) return "";
+  return points
+    .map(([x, y], index) => `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`)
+    .join(" ");
+}
+
+function formatPrice(value: number) {
+  return value >= 100 ? value.toFixed(1) : value.toFixed(2);
+}
+
+function formatCompactNumber(value: number) {
+  if (Math.abs(value) >= 1) return value.toFixed(2);
+  return value.toFixed(4);
 }
 
 function Fact({ label, value }: { label: string; value: string }) {

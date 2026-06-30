@@ -83,6 +83,54 @@ def test_build_publication_payload_splits_top_picks_and_sell_alerts():
     assert payload["sell_alerts"][0]["ticker"] == "TSLA"
 
 
+def test_build_publication_payload_includes_static_price_chart_data():
+    stocks = [{"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology"}]
+    scores = [{"ticker": "NVDA", "opportunity_score": 80, "negative_score": 5, "signals": []}]
+    analyses = [
+        {
+            "ticker": "NVDA",
+            "recommendation": "BUY",
+            "risk_level": "MEDIUM",
+            "confidence_score": 84,
+            "catalyst": "Unusual volume",
+            "expected_timeframe": "1-30 days",
+            "reasoning": "Momentum cluster is positive.",
+            "invalidation_criteria": "Momentum fades.",
+            "opportunity_score": 80,
+            "negative_score": 5,
+            "signals": [],
+        }
+    ]
+    rows = [
+        {
+            "ticker": "NVDA",
+            "trading_date": date(2026, 5, 18) + timedelta(days=index),
+            "open_price": Decimal("100") + Decimal(index),
+            "high_price": Decimal("102") + Decimal(index),
+            "low_price": Decimal("99") + Decimal(index),
+            "close_price": Decimal("101") + Decimal(index),
+            "volume": 1000 + index,
+            "currency": "USD",
+        }
+        for index in range(25)
+    ]
+
+    with (
+        patch("src.analysis.phase1_pipeline.store.sell_alert_tickers", return_value=[]),
+        patch("src.analysis.phase1_pipeline.store.get_stock_data", return_value=rows),
+    ):
+        payload = build_publication_payload(analyses, scores, stocks, date(2026, 6, 17))
+
+    chart = payload["top_picks"][0]["price_chart"]
+    assert chart["currency"] == "USD"
+    assert len(chart["candles"]) == 25
+    assert chart["candles"][0]["open"] == 100
+    assert len(chart["sma_20"]) == 6
+    assert chart["support"] == 104
+    assert chart["resistance"] == 126
+    assert chart["trend_line"]["slope_per_session"] > 0
+
+
 def test_build_publication_payload_includes_partial_coverage_quality():
     stocks = [{"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology"}]
     scores = [
