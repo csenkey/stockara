@@ -287,7 +287,7 @@ Phase 1 is a reliable stock analyzer for real business and investment decisions,
     - Link transcript/release evidence to upcoming and recent earnings events
     - _Requirements: 2.1, 2.2, 4.1, 4.5_
 
-  - [ ] 21.4 Improve ticker-mapped market news
+  - [x] 21.4 Improve ticker-mapped market news
     - Add additional ticker-aware market news providers only when they improve attribution quality, freshness, or source resilience
     - Keep news deduplication and article summaries source-backed
     - _Requirements: 2.1, 2.2, 2.4, 2.6_

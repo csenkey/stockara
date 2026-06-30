@@ -117,6 +117,7 @@ class ApiStack(Stack):
         news_provider_env = {
             "NEWSAPI_KEY_SECRET_NAME": newsapi_key_secret_name,
             "FINNHUB_KEY_SECRET_NAME": finnhub_key_secret_name,
+            "ALPHA_VANTAGE_API_KEY_SECRET_NAME": alpha_vantage_key_secret_name,
         }
         backend_code = _lambda.Code.from_asset(
             BACKEND_ASSET_PATH,
@@ -263,6 +264,7 @@ class ApiStack(Stack):
                 **openai_env,
                 **news_provider_env,
                 "OPENAI_NEWS_MODEL": "gpt-5.4-mini",
+                "ALPHA_VANTAGE_NEWS_MAX_TICKERS": "25",
                 "POWERTOOLS_SERVICE_NAME": "news-collector",
             },
             description="Collects and summarizes news for Phase 1 signals",
@@ -436,6 +438,7 @@ class ApiStack(Stack):
         newsapi_key_secret.grant_read(self.news_collector_fn)
         finnhub_key_secret.grant_read(self.news_collector_fn)
         finnhub_key_secret.grant_read(self.evidence_collector_fn)
+        alpha_vantage_key_secret.grant_read(self.news_collector_fn)
         alpha_vantage_key_secret.grant_read(self.stock_collector_fn)
 
         watchlist_seed_provider = cr.Provider(

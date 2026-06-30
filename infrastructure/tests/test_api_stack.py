@@ -63,6 +63,10 @@ def test_calendar_collector_lambdas_and_schedules_are_created():
                         "FINNHUB_KEY_SECRET_NAME": (
                             "stockara/codex-test/finnhub-key-current"
                         ),
+                        "ALPHA_VANTAGE_API_KEY_SECRET_NAME": (
+                            "stockara/codex-test/alpha-vantage-api-key-current"
+                        ),
+                        "ALPHA_VANTAGE_NEWS_MAX_TICKERS": "25",
                     }
                 )
             },

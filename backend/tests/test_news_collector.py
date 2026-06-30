@@ -17,10 +17,12 @@ from backend.src.collectors.news_collector import (
     build_news_collection_summary,
     compute_title_source_hash,
     emit_news_collection_summary_metrics,
+    fetch_alpha_vantage_articles,
     fetch_newsapi_articles,
     fetch_finnhub_articles,
     get_existing_hashes,
     generate_summary,
+    merge_provider_classification,
     store_article,
     collect_news,
     handler,
@@ -336,6 +338,52 @@ class TestFetchFinnhubArticles:
         assert mock_get.call_args.kwargs["params"]["symbol"] == "AAPL"
 
 
+class TestFetchAlphaVantageArticles:
+    """Tests for ticker-aware Alpha Vantage NEWS_SENTIMENT fetching."""
+
+    @pytest.fixture(autouse=True)
+    def _alpha_vantage_key(self, monkeypatch):
+        monkeypatch.setenv("ALPHA_VANTAGE_API_KEY", "test-alpha-key")
+        get_provider_api_key.cache_clear()
+
+    @patch("requests.get")
+    def test_successful_ticker_fetch_preserves_provider_tickers_and_sentiment(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {
+            "feed": [
+                {
+                    "title": "Apple shares rise after AI update",
+                    "source": "Reuters",
+                    "time_published": "20250630T130000",
+                    "summary": "Apple shares rose after a product update.",
+                    "overall_sentiment_label": "Bullish",
+                    "url": "https://example.com/aapl",
+                    "ticker_sentiment": [
+                        {"ticker": "AAPL", "ticker_sentiment_label": "Bullish"},
+                        {"ticker": "MSFT", "ticker_sentiment_label": "Neutral"},
+                    ],
+                }
+            ]
+        }
+        mock_get.return_value = mock_response
+
+        articles = fetch_alpha_vantage_articles(tickers=["AAPL"])
+
+        assert len(articles) == 1
+        assert articles[0]["provider"] == "alpha_vantage"
+        assert articles[0]["provider_tickers"] == ["AAPL"]
+        assert articles[0]["provider_sentiment"] == "positive"
+        assert articles[0]["published_at"] == "2025-06-30T13:00:00+00:00"
+        assert mock_get.call_args.kwargs["params"]["tickers"] == "AAPL"
+
+    @patch("requests.get")
+    def test_returns_empty_on_http_error(self, mock_get):
+        mock_get.side_effect = Exception("rate limited")
+
+        assert fetch_alpha_vantage_articles(tickers=["AAPL"]) == []
+
+
 # --- Tests for get_existing_hashes (Requirement 2.5) ---
 
 
@@ -512,6 +560,31 @@ class TestStoreArticle:
         )
 
 
+class TestProviderClassification:
+    """Tests provider supplied ticker/sentiment preservation."""
+
+    def test_provider_tickers_merge_with_ai_tickers(self):
+        article = {
+            "provider_tickers": ["MSFT", "AAPL"],
+            "provider_sentiment": "positive",
+        }
+        summary_data = {"summary": "Summary", "tickers": ["AAPL"], "sentiment": "neutral"}
+
+        merged = merge_provider_classification(article, summary_data)
+
+        assert merged["tickers"] == ["AAPL", "MSFT"]
+        assert merged["sentiment"] == "positive"
+
+    def test_ai_non_neutral_sentiment_wins_over_provider(self):
+        article = {"provider_tickers": ["AAPL"], "provider_sentiment": "negative"}
+        summary_data = {"summary": "Summary", "tickers": [], "sentiment": "positive"}
+
+        merged = merge_provider_classification(article, summary_data)
+
+        assert merged["tickers"] == ["AAPL"]
+        assert merged["sentiment"] == "positive"
+
+
 class TestNewsCollectionSummary:
     """Tests news completeness/failure summary shape."""
 
@@ -519,13 +592,13 @@ class TestNewsCollectionSummary:
         summary = build_news_collection_summary(
             status="success",
             articles_processed=3,
-            sources_available=2,
+            sources_available=3,
             total_fetched=5,
             duplicates_skipped=2,
         )
 
         assert summary["status"] == "success"
-        assert summary["sources_total"] == 2
+        assert summary["sources_total"] == 3
         assert summary["sources_failed"] == 0
         assert summary["completeness_ratio"] == 1.0
 
@@ -540,10 +613,10 @@ class TestNewsCollectionSummary:
         )
 
         assert summary["status"] == "partial"
-        assert summary["sources_failed"] == 1
+        assert summary["sources_failed"] == 2
         assert summary["failed_sources"] == ["finnhub"]
         assert summary["article_failures"] == 1
-        assert summary["completeness_ratio"] == 0.5
+        assert summary["completeness_ratio"] == 0.3333
 
     @patch("backend.src.collectors.news_collector.cloudwatch")
     def test_summary_metrics_are_emitted(self, mock_cloudwatch):
@@ -578,14 +651,16 @@ class TestCollectNews:
 
     @patch("backend.src.collectors.news_collector.emit_metrics")
     @patch("backend.src.collectors.news_collector.raise_all_sources_failed_alert")
+    @patch("backend.src.collectors.news_collector.fetch_alpha_vantage_articles")
     @patch("backend.src.collectors.news_collector.fetch_finnhub_articles")
     @patch("backend.src.collectors.news_collector.fetch_newsapi_articles")
     def test_all_sources_failed_raises_alert(
-        self, mock_newsapi, mock_finnhub, mock_alert, mock_metrics
+        self, mock_newsapi, mock_finnhub, mock_alpha, mock_alert, mock_metrics
     ):
         """Requirement 2.6: Alert raised when all sources fail."""
         mock_newsapi.return_value = []
         mock_finnhub.return_value = []
+        mock_alpha.return_value = []
 
         result = collect_news()
 
@@ -597,16 +672,19 @@ class TestCollectNews:
     @patch("backend.src.collectors.news_collector.OpenAI")
     @patch("backend.src.collectors.news_collector.DatabasePool")
     @patch("backend.src.collectors.news_collector.get_existing_hashes")
+    @patch("backend.src.collectors.news_collector.fetch_alpha_vantage_articles")
     @patch("backend.src.collectors.news_collector.fetch_finnhub_articles")
     @patch("backend.src.collectors.news_collector.fetch_newsapi_articles")
     def test_deduplication_skips_existing_articles(
-        self, mock_newsapi, mock_finnhub, mock_get_hashes, mock_db_pool, mock_openai, mock_metrics
+        self, mock_newsapi, mock_finnhub, mock_alpha, mock_get_hashes,
+        mock_db_pool, mock_openai, mock_metrics
     ):
         """Requirement 2.5: Duplicate articles are discarded."""
         mock_newsapi.return_value = [
             {"title": "Existing Article", "source": "Reuters", "published_at": "2025-01-15T10:00:00Z", "content": "Content"},
         ]
         mock_finnhub.return_value = []
+        mock_alpha.return_value = []
 
         # Compute the hash that would be generated
         existing_hash = compute_title_source_hash("Existing Article", "Reuters")
@@ -623,7 +701,7 @@ class TestCollectNews:
 
         result = collect_news()
 
-        assert result["status"] == "success"
+        assert result["status"] == "partial"
         assert result["articles_processed"] == 0
         assert result["duplicates_skipped"] == 1
 
@@ -633,10 +711,11 @@ class TestCollectNews:
     @patch("backend.src.collectors.news_collector.OpenAI")
     @patch("backend.src.collectors.news_collector.DatabasePool")
     @patch("backend.src.collectors.news_collector.get_existing_hashes")
+    @patch("backend.src.collectors.news_collector.fetch_alpha_vantage_articles")
     @patch("backend.src.collectors.news_collector.fetch_finnhub_articles")
     @patch("backend.src.collectors.news_collector.fetch_newsapi_articles")
     def test_new_articles_are_summarized_and_stored(
-        self, mock_newsapi, mock_finnhub, mock_get_hashes, mock_db_pool,
+        self, mock_newsapi, mock_finnhub, mock_alpha, mock_get_hashes, mock_db_pool,
         mock_openai, mock_generate, mock_store, mock_metrics
     ):
         """Test that new articles go through summary + store pipeline."""
@@ -644,6 +723,7 @@ class TestCollectNews:
             {"title": "New Article", "source": "CNBC", "published_at": "2025-01-15T10:00:00Z", "content": "Breaking news."},
         ]
         mock_finnhub.return_value = []
+        mock_alpha.return_value = []
         mock_get_hashes.return_value = set()
 
         mock_conn = MagicMock()
@@ -657,20 +737,24 @@ class TestCollectNews:
 
         result = collect_news()
 
-        assert result["status"] == "success"
+        assert result["status"] == "partial"
         assert result["articles_processed"] == 1
         mock_generate.assert_called_once()
         mock_store.assert_called_once()
 
     @patch("backend.src.collectors.news_collector.emit_metrics")
+    @patch("backend.src.collectors.news_collector.fetch_alpha_vantage_articles")
     @patch("backend.src.collectors.news_collector.fetch_finnhub_articles")
     @patch("backend.src.collectors.news_collector.fetch_newsapi_articles")
-    def test_partial_source_failure_continues(self, mock_newsapi, mock_finnhub, mock_metrics):
+    def test_partial_source_failure_continues(
+        self, mock_newsapi, mock_finnhub, mock_alpha, mock_metrics
+    ):
         """Requirement 2.4: Continues collecting from remaining sources when one fails."""
         mock_newsapi.return_value = [
             {"title": "Article", "source": "CNBC", "published_at": "2025-01-15T10:00:00Z", "content": "Content"},
         ]
         mock_finnhub.return_value = []  # Finnhub failed
+        mock_alpha.return_value = []
 
         with patch("backend.src.collectors.news_collector.DatabasePool") as mock_db_pool, \
              patch("backend.src.collectors.news_collector.get_existing_hashes") as mock_get_hashes, \
@@ -687,7 +771,7 @@ class TestCollectNews:
 
             result = collect_news()
 
-            assert result["status"] == "success"
+            assert result["status"] == "partial"
             assert result["sources_available"] == 1
 
 

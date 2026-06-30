@@ -44,6 +44,9 @@ ARTIFACT_BUCKET = os.environ.get("STOCKARA_ARTIFACT_BUCKET", "")
 FINNHUB_TICKER_NEWS_MAX_TICKERS = int(
     os.environ.get("FINNHUB_TICKER_NEWS_MAX_TICKERS", "10")
 )
+ALPHA_VANTAGE_NEWS_MAX_TICKERS = int(
+    os.environ.get("ALPHA_VANTAGE_NEWS_MAX_TICKERS", "25")
+)
 NEWS_ARTIFACT_LOOKBACK_DAYS = int(os.environ.get("NEWS_ARTIFACT_LOOKBACK_DAYS", "30"))
 NEWS_ARTIFACT_MAX_TICKERS = int(os.environ.get("NEWS_ARTIFACT_MAX_TICKERS", "250"))
 NEWS_ARTIFACT_MAX_ARTICLES_PER_TICKER = int(
@@ -93,6 +96,15 @@ def _finnhub_key() -> str | None:
     )
 
 
+def _alpha_vantage_key() -> str | None:
+    return get_provider_api_key(
+        "alpha_vantage",
+        "ALPHA_VANTAGE_API_KEY",
+        "ALPHA_VANTAGE_API_KEY_SECRET_NAME",
+        supported_json_keys=("ALPHA_VANTAGE_API_KEY", "alpha_vantage_api_key", "api_key"),
+    )
+
+
 def fetch_newsapi_articles(tickers: list[str] | None = None) -> list[dict[str, Any]]:
     """Fetch recent stock-related articles from NewsAPI.
 
@@ -135,6 +147,7 @@ def fetch_newsapi_articles(tickers: list[str] | None = None) -> list[dict[str, A
                 "source": source,
                 "published_at": published_at,
                 "content": article.get("description", "") or article.get("content", "") or "",
+                "provider": "newsapi",
             })
 
         logger.info("NewsAPI articles fetched", count=len(articles), tickers=tickers or [])
@@ -189,6 +202,7 @@ def fetch_finnhub_articles(tickers: list[str] | None = None) -> list[dict[str, A
                 "source": source,
                 "published_at": published_at,
                 "content": article.get("summary", "") or "",
+                "provider": "finnhub",
             })
 
         logger.info("Finnhub articles fetched", count=len(articles))
@@ -242,6 +256,8 @@ def _fetch_finnhub_company_news(
                         "source": source,
                         "published_at": published_at,
                         "content": article.get("summary", "") or "",
+                        "provider": "finnhub",
+                        "provider_tickers": [str(ticker).upper()],
                     }
                 )
         except Exception as e:
@@ -253,6 +269,100 @@ def _fetch_finnhub_company_news(
             continue
     logger.info("Finnhub company news fetched", count=len(articles), tickers=tickers)
     return articles
+
+
+def fetch_alpha_vantage_articles(tickers: list[str] | None = None) -> list[dict[str, Any]]:
+    """Fetch ticker-aware news from Alpha Vantage NEWS_SENTIMENT."""
+    import requests
+
+    api_key = _alpha_vantage_key()
+    if not api_key:
+        logger.error(
+            "Alpha Vantage news fetch skipped",
+            error="Alpha Vantage key is not configured",
+        )
+        return []
+
+    params = {
+        "function": "NEWS_SENTIMENT",
+        "apikey": api_key,
+        "limit": "50",
+    }
+    if tickers:
+        params["tickers"] = ",".join(tickers[:ALPHA_VANTAGE_NEWS_MAX_TICKERS])
+    else:
+        params["topics"] = "earnings,financial_markets"
+
+    try:
+        response = requests.get(
+            "https://www.alphavantage.co/query",
+            params=params,
+            timeout=30,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        logger.error("Alpha Vantage news fetch failed", error=str(exc))
+        return []
+
+    articles = []
+    for article in payload.get("feed", []):
+        title = str(article.get("title") or "").strip()
+        source = str(article.get("source") or "Alpha Vantage").strip()
+        published_at = _alpha_vantage_time_published(article.get("time_published"))
+        if not title or not source or not published_at:
+            continue
+        articles.append(
+            {
+                "title": title,
+                "source": source,
+                "published_at": published_at,
+                "content": article.get("summary", "") or "",
+                "provider": "alpha_vantage",
+                "provider_tickers": _alpha_vantage_article_tickers(article, tickers),
+                "provider_sentiment": _alpha_vantage_sentiment(article),
+                "url": article.get("url"),
+            }
+        )
+
+    logger.info("Alpha Vantage news fetched", count=len(articles), tickers=tickers or [])
+    return articles
+
+
+def _alpha_vantage_time_published(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.strptime(text[:15], "%Y%m%dT%H%M%S")
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=timezone.utc).isoformat()
+
+
+def _alpha_vantage_article_tickers(
+    article: dict[str, Any],
+    requested_tickers: list[str] | None,
+) -> list[str]:
+    requested = {ticker.upper() for ticker in requested_tickers or []}
+    result = []
+    for row in article.get("ticker_sentiment", []) or []:
+        ticker = str(row.get("ticker") or "").upper().strip()
+        if not ticker:
+            continue
+        if requested and ticker not in requested:
+            continue
+        result.append(ticker)
+    return sorted(set(result))
+
+
+def _alpha_vantage_sentiment(article: dict[str, Any]) -> str:
+    label = str(article.get("overall_sentiment_label") or "").lower()
+    if "bullish" in label:
+        return "positive"
+    if "bearish" in label:
+        return "negative"
+    return "neutral"
 
 
 def get_existing_hashes(conn, hashes: list[str]) -> set[str]:
@@ -340,6 +450,34 @@ def generate_summary(client: OpenAI | None, title: str, content: str) -> dict[st
         return {"summary": title[:500], "tickers": tickers, "sentiment": "neutral"}
 
 
+def merge_provider_classification(
+    article: dict[str, Any],
+    summary_data: dict[str, Any],
+) -> dict[str, Any]:
+    """Preserve provider-supplied ticker/sentiment attribution."""
+    tickers = {
+        str(ticker).strip().upper()
+        for ticker in summary_data.get("tickers", [])
+        if str(ticker).strip()
+    }
+    tickers.update(
+        str(ticker).strip().upper()
+        for ticker in article.get("provider_tickers", [])
+        if str(ticker).strip()
+    )
+    sentiment = str(summary_data.get("sentiment") or "neutral").lower()
+    provider_sentiment = str(article.get("provider_sentiment") or "").lower()
+    if sentiment == "neutral" and provider_sentiment in {"positive", "negative"}:
+        sentiment = provider_sentiment
+    if sentiment not in {"positive", "negative", "neutral"}:
+        sentiment = "neutral"
+    return {
+        **summary_data,
+        "tickers": sorted(tickers),
+        "sentiment": sentiment,
+    }
+
+
 def _chat_completion_options(
     model: str, max_tokens: int, temperature: float
 ) -> dict[str, Any]:
@@ -415,7 +553,7 @@ def build_news_collection_summary(
     failed_sources: list[str] | None = None,
     article_failures: int = 0,
 ) -> dict[str, Any]:
-    sources_total = 2
+    sources_total = 3
     return {
         "status": status,
         "sources_total": sources_total,
@@ -491,6 +629,7 @@ def collect_news(tickers: list[str] | None = None) -> dict[str, Any]:
     # Fetch from all sources
     newsapi_articles = fetch_newsapi_articles(tickers=tickers)
     finnhub_articles = fetch_finnhub_articles(tickers=tickers)
+    alpha_vantage_articles = fetch_alpha_vantage_articles(tickers=tickers)
 
     # Track source availability
     sources_available = 0
@@ -498,16 +637,20 @@ def collect_news(tickers: list[str] | None = None) -> dict[str, Any]:
         sources_available += 1
     if finnhub_articles:
         sources_available += 1
+    if alpha_vantage_articles:
+        sources_available += 1
     failed_sources = []
     if not newsapi_articles:
         failed_sources.append("newsapi")
     if not finnhub_articles:
         failed_sources.append("finnhub")
+    if not alpha_vantage_articles:
+        failed_sources.append("alpha_vantage")
 
     # Check if all sources failed
     if sources_available == 0:
         raise_all_sources_failed_alert()
-        emit_metrics(articles_processed=0, sources_available=0, sources_total=2)
+        emit_metrics(articles_processed=0, sources_available=0, sources_total=3)
         summary = build_news_collection_summary(
             status="failed",
             articles_processed=0,
@@ -529,7 +672,7 @@ def collect_news(tickers: list[str] | None = None) -> dict[str, Any]:
         return result
 
     # Combine all articles
-    all_articles = newsapi_articles + finnhub_articles
+    all_articles = newsapi_articles + finnhub_articles + alpha_vantage_articles
 
     # Compute hashes for deduplication
     article_hashes = []
@@ -567,6 +710,7 @@ def collect_news(tickers: list[str] | None = None) -> dict[str, Any]:
                     article["title"],
                     article.get("content", ""),
                 )
+                summary_data = merge_provider_classification(article, summary_data)
                 store_article(conn, article, summary_data, article["_hash"])
                 articles_stored += 1
             except Exception as e:
@@ -587,7 +731,7 @@ def collect_news(tickers: list[str] | None = None) -> dict[str, Any]:
     emit_metrics(
         articles_processed=articles_stored,
         sources_available=sources_available,
-        sources_total=2,
+        sources_total=3,
     )
 
     status = "success"
@@ -606,7 +750,7 @@ def collect_news(tickers: list[str] | None = None) -> dict[str, Any]:
     emit_news_collection_summary_metrics(summary)
 
     result = {
-        "status": "success",
+        "status": status,
         "articles_processed": articles_stored,
         "sources_available": sources_available,
         "total_fetched": len(all_articles),
