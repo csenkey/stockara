@@ -813,12 +813,18 @@ def test_analysis_close_price_prefers_adjusted_close_when_available():
 def test_run_phase1_pipeline_suppresses_publication_when_no_ticker_is_eligible():
     with (
         patch("src.analysis.phase1_pipeline.DatabasePool"),
+        patch("src.analysis.phase1_pipeline.ARTIFACT_BUCKET", "artifact-bucket"),
+        patch("src.analysis.phase1_pipeline._collection_gate_response", return_value=None),
         patch(
             "src.analysis.phase1_pipeline.store.active_stock_metadata",
             return_value=[{"ticker": "NVDA", "latest_stock_data_date": "2026-06-01"}],
         ),
         patch("src.analysis.phase1_pipeline.store.get_stock_data", return_value=[]),
         patch("src.analysis.phase1_pipeline.store.last_news_collection", return_value=None),
+        patch(
+            "src.analysis.phase1_pipeline._with_collection_manifest_quality",
+            side_effect=lambda quality, run_date: quality,
+        ),
         patch("src.analysis.phase1_pipeline.publish_payload") as publish_payload,
         patch("src.analysis.phase1_pipeline.score_candidates") as score_candidates,
         patch("src.analysis.phase1_pipeline.select_shortlist"),
@@ -829,7 +835,11 @@ def test_run_phase1_pipeline_suppresses_publication_when_no_ticker_is_eligible()
 
     assert result["statusCode"] == 200
     assert "Publication suppressed" in result["body"]
-    publish_payload.assert_not_called()
+    payload = publish_payload.call_args.args[0]
+    assert payload["publication_status"] == "suppressed"
+    assert payload["suppression_reason"] == "no_eligible_tickers"
+    assert payload["publication_date"] == "2026-06-17"
+    assert payload["top_picks"] == []
     score_candidates.assert_not_called()
 
 
@@ -879,7 +889,11 @@ def test_run_phase1_pipeline_suppresses_when_collection_gates_fail():
     assert result["body"]["status"] == "suppressed"
     assert result["body"]["failed_gates"][0]["name"] == "price_freshness"
     score_candidates.assert_not_called()
-    publish_payload.assert_not_called()
+    payload = publish_payload.call_args.args[0]
+    assert payload["publication_status"] == "suppressed"
+    assert payload["suppression_reason"] == "collection_coverage_gates_failed"
+    assert payload["publication_date"] == "2026-06-17"
+    assert payload["data_quality"]["collection_manifest"]["manifest_date"] == "2026-06-17"
 
 
 def test_collection_manifest_quality_metadata_is_added_when_available():

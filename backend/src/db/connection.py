@@ -848,6 +848,8 @@ class DynamoStore:
                 "entity": "publication",
                 "publication_date": date_key,
                 "generated_at": payload["generated_at"],
+                "publication_status": payload.get("publication_status", "published"),
+                "suppression_reason": payload.get("suppression_reason"),
                 "top_pick_count": len(payload.get("top_picks", [])),
                 "sell_alert_count": len(payload.get("sell_alerts", [])),
                 "candidate_count": int(payload.get("candidate_count", 0)),
@@ -858,7 +860,8 @@ class DynamoStore:
                 "news_stale": bool(data_quality.get("news_stale", False)),
             }
         )
-        self._put_system_status("PUBLICATION", payload["generated_at"])
+        if payload.get("publication_status") != "suppressed":
+            self._put_system_status("PUBLICATION", payload["generated_at"])
 
     def last_analysis(self) -> str | None:
         return self._get_system_status_timestamp("ANALYSIS")

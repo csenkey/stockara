@@ -120,6 +120,31 @@ def test_last_collection_methods_use_system_status_records():
     store._scan.assert_not_called()
 
 
+def test_suppressed_publication_record_does_not_update_success_status():
+    table = MagicMock()
+    store = _TestableDynamoStore(table)
+    store._put_system_status = MagicMock()
+
+    store.put_publication_record(
+        date(2026, 6, 17),
+        {
+            "generated_at": "2026-06-17T22:00:00",
+            "publication_status": "suppressed",
+            "suppression_reason": "collection_coverage_gates_failed",
+            "top_picks": [],
+            "sell_alerts": [],
+            "candidate_count": 0,
+            "analyzed_count": 0,
+            "data_quality": {"coverage_status": "suppressed"},
+        },
+    )
+
+    item = table.put_item.call_args.kwargs["Item"]
+    assert item["publication_status"] == "suppressed"
+    assert item["suppression_reason"] == "collection_coverage_gates_failed"
+    store._put_system_status.assert_not_called()
+
+
 def test_news_for_ticker_queries_ticker_date_fanout():
     store = _TestableDynamoStore()
     store._query = MagicMock(

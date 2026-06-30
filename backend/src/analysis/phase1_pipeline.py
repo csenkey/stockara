@@ -107,12 +107,13 @@ def run_phase1_pipeline(event: dict | None = None) -> dict[str, Any]:
 
 
 def _run_full_phase(run_date: date) -> dict[str, Any]:
-    gate_response = _collection_gate_response(run_date)
+    gate_response = _collection_gate_response(run_date, publish_status_artifact=True)
     if gate_response:
         return gate_response
 
     context = _eligible_context(run_date)
     if context.get("response"):
+        _publish_suppressed_context_if_possible(run_date, context)
         return context["response"]
 
     eligible_stocks = context["eligible_stocks"]
@@ -226,7 +227,7 @@ def _run_daily_orchestration_phase(
     manifest, scores once, analyzes only missing shortlisted candidates in
     bounded batches, publishes once, then no-ops for the rest of the day.
     """
-    gate_response = _collection_gate_response(run_date)
+    gate_response = _collection_gate_response(run_date, publish_status_artifact=True)
     if gate_response:
         return gate_response
 
@@ -242,6 +243,7 @@ def _run_daily_orchestration_phase(
 
     context = _eligible_context(run_date)
     if context.get("response"):
+        _publish_suppressed_context_if_possible(run_date, context)
         return context["response"]
 
     scores = store.candidate_scores_for_date(run_date)
@@ -284,12 +286,13 @@ def _run_daily_orchestration_phase(
 
 
 def _run_publish_phase(run_date: date) -> dict[str, Any]:
-    gate_response = _collection_gate_response(run_date)
+    gate_response = _collection_gate_response(run_date, publish_status_artifact=True)
     if gate_response:
         return gate_response
 
     context = _eligible_context(run_date)
     if context.get("response"):
+        _publish_suppressed_context_if_possible(run_date, context)
         return context["response"]
 
     scores = store.candidate_scores_for_date(run_date)
@@ -310,6 +313,16 @@ def _publish_from_stored_state(
     if not analyses:
         logger.warning("phase1_publication_suppressed_no_candidate_analyses")
         _emit_metric("publication_suppressed", 1)
+        _publish_suppressed_publication(
+            run_date,
+            reason="no_candidate_analyses",
+            warnings=["Publication suppressed: no candidate analyses available."],
+            data_quality=_with_collection_manifest_quality(
+                publication_data_quality(context["freshness"]),
+                run_date,
+            ),
+            candidate_count=len(scores),
+        )
         return {
             "statusCode": 200,
             "body": "Publication suppressed: no candidate analyses available",
@@ -354,13 +367,22 @@ def _publication_exists_for_date(run_date: date) -> bool:
     return bool(last_publication and last_publication.date() == run_date)
 
 
-def _collection_gate_response(run_date: date) -> dict[str, Any] | None:
+def _collection_gate_response(
+    run_date: date,
+    publish_status_artifact: bool = False,
+) -> dict[str, Any] | None:
     if not ARTIFACT_BUCKET:
         return None
     manifest = _load_collection_manifest(run_date)
     if manifest is None:
         logger.warning("phase1_collection_manifest_missing", run_date=run_date.isoformat())
         _emit_metric("publication_suppressed", 1)
+        if publish_status_artifact:
+            _publish_suppressed_publication(
+                run_date,
+                reason="collection_manifest_missing",
+                warnings=["Publication suppressed: collection manifest is missing."],
+            )
         return {
             "statusCode": 200,
             "body": "Publication suppressed: collection manifest is missing",
@@ -374,6 +396,26 @@ def _collection_gate_response(run_date: date) -> dict[str, Any] | None:
         manifest_key=manifest.s3_key,
     )
     _emit_metric("publication_suppressed", 1)
+    if publish_status_artifact:
+        failed_gate_names = [gate.name for gate in failed_gates]
+        _publish_suppressed_publication(
+            run_date,
+            reason="collection_coverage_gates_failed",
+            warnings=[
+                "Publication suppressed because collection coverage gates failed: "
+                f"{', '.join(failed_gate_names)}."
+            ],
+            data_quality={
+                "coverage_status": "suppressed",
+                "collection_manifest": {
+                    "manifest_key": manifest.s3_key,
+                    "manifest_date": manifest.manifest_date.isoformat(),
+                    "updated_at": manifest.updated_at.isoformat(),
+                    "active_ticker_count": manifest.active_ticker_count,
+                    "summary": manifest.summary.model_dump(mode="json"),
+                },
+            },
+        )
     return {
         "statusCode": 200,
         "body": {
@@ -450,12 +492,64 @@ def _eligible_context(run_date: date) -> dict[str, Any]:
         )
         _emit_metric("publication_suppressed", 1)
         return {
+            "freshness": freshness,
             "response": {
                 "statusCode": 200,
                 "body": "Publication suppressed: no eligible tickers passed data freshness gates",
             },
         }
     return {"stocks": stocks, "freshness": freshness, "eligible_stocks": eligible_stocks}
+
+
+def _publish_suppressed_context_if_possible(
+    run_date: date,
+    context: dict[str, Any],
+) -> None:
+    freshness = context.get("freshness")
+    if not freshness:
+        return
+    _publish_suppressed_publication(
+        run_date,
+        reason="no_eligible_tickers",
+        warnings=[
+            "Publication suppressed: no eligible tickers passed data freshness gates.",
+            *freshness.get("warnings", []),
+        ],
+        data_quality=_with_collection_manifest_quality(
+            publication_data_quality(freshness),
+            run_date,
+        ),
+    )
+
+
+def _publish_suppressed_publication(
+    run_date: date,
+    reason: str,
+    warnings: list[str],
+    data_quality: dict[str, Any] | None = None,
+    candidate_count: int = 0,
+) -> None:
+    if not ARTIFACT_BUCKET:
+        return
+    payload = {
+        "publication_date": run_date.isoformat(),
+        "generated_at": datetime.utcnow().isoformat(),
+        "publication_status": "suppressed",
+        "suppression_reason": reason,
+        "publication_scope": "top_opportunities_among_eligible_tickers",
+        "fallback_policy": {},
+        "review_policy": {},
+        "review_rejections": [],
+        "top_picks": [],
+        "sell_alerts": [],
+        "upcoming_earnings": [],
+        "upcoming_dividends": [],
+        "candidate_count": candidate_count,
+        "analyzed_count": 0,
+        "data_quality": data_quality or {},
+        "data_warnings": warnings,
+    }
+    publish_payload(payload, run_date)
 
 
 def score_candidates(stocks: list[dict[str, Any]], run_date: date) -> list[dict[str, Any]]:
