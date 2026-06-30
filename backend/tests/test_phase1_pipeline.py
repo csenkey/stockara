@@ -188,12 +188,43 @@ def test_price_volume_signals_include_stored_evidence_signals():
                 "title": "Ignored signal",
                 "summary": "Unsupported stored signal type.",
             },
+            {
+                "ticker": "NVDA",
+                "signal_date": "2026-06-17",
+                "signal_type": "analyst_rating",
+                "direction": "positive",
+                "score": 28,
+                "title": "Analyst rating upgraded",
+                "summary": "A firm upgraded NVDA from Neutral to Buy.",
+                "source": {
+                    "provider": "finnhub",
+                    "raw": {"action": "upgrade", "from_grade": "Neutral", "to_grade": "Buy"},
+                },
+            },
+            {
+                "ticker": "NVDA",
+                "signal_date": "2026-06-17",
+                "signal_type": "price_target",
+                "direction": "positive",
+                "score": 25,
+                "title": "Analyst price target update",
+                "summary": "Mean price target implies upside.",
+                "source": {
+                    "provider": "finnhub",
+                    "raw": {"target_mean": 125, "last_price": 100, "upside_percent": 25},
+                },
+            },
         ]
 
         signals = _price_volume_signals("NVDA", date(2026, 6, 17))
 
     signal_types = {signal["signal_type"] for signal in signals}
-    assert signal_types == {"sec_filing", "analyst_action"}
+    assert signal_types == {
+        "sec_filing",
+        "analyst_action",
+        "analyst_rating",
+        "price_target",
+    }
     sec_signal = next(signal for signal in signals if signal["signal_type"] == "sec_filing")
     analyst_signal = next(
         signal for signal in signals if signal["signal_type"] == "analyst_action"
@@ -202,6 +233,8 @@ def test_price_volume_signals_include_stored_evidence_signals():
     assert sec_signal["source"]["raw"]["form"] == "8-K"
     assert analyst_signal["source"]["provider"] == "finnhub"
     assert analyst_signal["source"]["raw"]["coverage"] == 16
+    assert any(signal["signal_type"] == "analyst_rating" for signal in signals)
+    assert any(signal["signal_type"] == "price_target" for signal in signals)
 
 
 def test_price_volume_signals_add_multi_day_market_context():

@@ -277,7 +277,7 @@ Phase 1 is a reliable stock analyzer for real business and investment decisions,
     - Add a manual GitHub Actions workflow for on-demand evidence collection before analysis
     - _Requirements: 2.1, 2.2, 4.1, 4.5, 9.1_
 
-  - [ ] 21.2 Expand analyst ratings and price-target feeds
+  - [x] 21.2 Expand analyst ratings and price-target feeds
     - Add provider-backed analyst upgrades, downgrades, initiations, reiterations, and price-target deltas when available
     - Keep analyst actions source-backed and separated from generic market news
     - _Requirements: 2.1, 2.2, 4.1, 4.5_

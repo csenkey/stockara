@@ -88,6 +88,8 @@ STORED_SIGNAL_TYPES = {
     "volume_move",
     "sec_filing",
     "analyst_action",
+    "analyst_rating",
+    "price_target",
 }
 
 

@@ -102,6 +102,8 @@ def test_collect_evidence_writes_sec_and_analyst_signals():
             "_analyst_action_signal",
             side_effect=lambda ticker: analyst_signal if ticker == "NVDA" else None,
         ),
+        patch.object(evidence_collector, "_finnhub_rating_signal", return_value=None),
+        patch.object(evidence_collector, "_finnhub_price_target_signal", return_value=None),
     ):
         result = evidence_collector.collect_evidence(tickers=["NVDA", "MSFT"])
 
@@ -110,6 +112,8 @@ def test_collect_evidence_writes_sec_and_analyst_signals():
     assert result["tickers_processed"] == 2
     assert result["sec_signals_written"] == 1
     assert result["analyst_signals_written"] == 1
+    assert result["analyst_rating_signals_written"] == 0
+    assert result["price_target_signals_written"] == 0
     assert put_market_signal.call_count == 2
     put_market_signal.assert_any_call(sec_signal)
     put_market_signal.assert_any_call(analyst_signal)
@@ -137,3 +141,83 @@ def test_sec_filing_signal_maps_submission_to_market_signal():
     assert signal["source"]["provider"] == "sec"
     assert signal["source"]["raw"]["form"] == "8-K"
     assert "000123456726000001" in signal["source"]["raw"]["source_url"]
+
+
+def test_rating_signal_from_upgrade_row_creates_positive_catalyst():
+    signal = evidence_collector._rating_signal_from_row(
+        "NVDA",
+        {
+            "gradeTime": date.today().isoformat(),
+            "company": "Example Securities",
+            "fromGrade": "Neutral",
+            "toGrade": "Buy",
+            "action": "upgrade",
+        },
+        "finnhub",
+    )
+
+    assert signal is not None
+    assert signal["signal_type"] == "analyst_rating"
+    assert signal["direction"] == "positive"
+    assert signal["score"] == 28
+    assert signal["title"] == "Analyst rating upgraded"
+    assert signal["source"]["provider"] == "finnhub"
+    assert signal["source"]["raw"]["firm"] == "Example Securities"
+    assert signal["source"]["raw"]["to_grade"] == "Buy"
+
+
+def test_rating_signal_from_downgrade_row_creates_negative_catalyst():
+    signal = evidence_collector._rating_signal_from_row(
+        "TSLA",
+        {
+            "gradeTime": date.today().isoformat(),
+            "company": "Example Securities",
+            "fromGrade": "Buy",
+            "toGrade": "Sell",
+            "action": "downgrade",
+        },
+        "finnhub",
+    )
+
+    assert signal is not None
+    assert signal["signal_type"] == "analyst_rating"
+    assert signal["direction"] == "negative"
+    assert signal["score"] == -28
+    assert signal["title"] == "Analyst rating downgraded"
+
+
+def test_price_target_signal_scores_target_upside():
+    signal = evidence_collector._price_target_signal_from_row(
+        "NVDA",
+        {
+            "updatedDate": date.today().isoformat(),
+            "targetMean": 125,
+            "targetMedian": 120,
+            "targetHigh": 150,
+            "targetLow": 90,
+            "lastClose": 100,
+        },
+        "finnhub",
+    )
+
+    assert signal is not None
+    assert signal["signal_type"] == "price_target"
+    assert signal["direction"] == "positive"
+    assert signal["score"] == 25
+    assert signal["source"]["provider"] == "finnhub"
+    assert signal["source"]["raw"]["target_mean"] == 125
+    assert signal["source"]["raw"]["upside_percent"] == 25.0
+
+
+def test_price_target_signal_ignores_stale_updates():
+    signal = evidence_collector._price_target_signal_from_row(
+        "NVDA",
+        {
+            "updatedDate": (date.today() - timedelta(days=120)).isoformat(),
+            "targetMean": 125,
+            "lastClose": 100,
+        },
+        "finnhub",
+    )
+
+    assert signal is None

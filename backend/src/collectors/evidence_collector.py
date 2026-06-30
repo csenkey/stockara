@@ -1,8 +1,9 @@
 """Collect high-signal evidence feeds for Phase 1 scoring.
 
-This collector turns SEC filing events and analyst recommendation actions into
-stored market signals. The Phase 1 analyzer then consumes these alongside price
-and volume signals without doing slow provider lookups during scoring.
+This collector turns SEC filing events, analyst recommendation actions, rating
+changes, and price-target updates into stored market signals. The Phase 1
+analyzer then consumes these alongside price and volume signals without doing
+slow provider lookups during scoring.
 """
 
 from __future__ import annotations
@@ -45,6 +46,8 @@ def collect_evidence(
         "tickers_processed": 0,
         "sec_signals_written": 0,
         "analyst_signals_written": 0,
+        "analyst_rating_signals_written": 0,
+        "price_target_signals_written": 0,
         "failed_tickers": [],
     }
 
@@ -60,6 +63,16 @@ def collect_evidence(
             if analyst_signal:
                 store.put_market_signal(analyst_signal)
                 result["analyst_signals_written"] += 1
+
+            analyst_rating_signal = _finnhub_rating_signal(ticker)
+            if analyst_rating_signal:
+                store.put_market_signal(analyst_rating_signal)
+                result["analyst_rating_signals_written"] += 1
+
+            price_target_signal = _finnhub_price_target_signal(ticker)
+            if price_target_signal:
+                store.put_market_signal(price_target_signal)
+                result["price_target_signals_written"] += 1
 
             result["tickers_processed"] += 1
         except Exception as exc:
@@ -231,6 +244,49 @@ def _finnhub_recommendation_signal(ticker: str) -> dict[str, Any] | None:
     return _recommendation_signal_from_counts(ticker, rows[0], "finnhub")
 
 
+def _finnhub_rating_signal(ticker: str) -> dict[str, Any] | None:
+    api_key = _finnhub_api_key()
+    if not api_key:
+        return None
+    cutoff = date.today() - timedelta(days=ANALYST_LOOKBACK_DAYS)
+    try:
+        response = requests.get(
+            "https://finnhub.io/api/v1/stock/upgrade-downgrade",
+            params={"symbol": ticker, "from": cutoff.isoformat(), "token": api_key},
+            timeout=20,
+        )
+        response.raise_for_status()
+        rows = response.json()
+    except Exception as exc:
+        logger.info("finnhub_rating_unavailable", ticker=ticker, error=str(exc))
+        return None
+
+    if not rows:
+        return None
+    return _rating_signal_from_row(ticker, rows[0], "finnhub")
+
+
+def _finnhub_price_target_signal(ticker: str) -> dict[str, Any] | None:
+    api_key = _finnhub_api_key()
+    if not api_key:
+        return None
+    try:
+        response = requests.get(
+            "https://finnhub.io/api/v1/stock/price-target",
+            params={"symbol": ticker, "token": api_key},
+            timeout=20,
+        )
+        response.raise_for_status()
+        row = response.json()
+    except Exception as exc:
+        logger.info("finnhub_price_target_unavailable", ticker=ticker, error=str(exc))
+        return None
+
+    if not row:
+        return None
+    return _price_target_signal_from_row(ticker, row, "finnhub")
+
+
 def _yfinance_recommendation_signal(ticker: str) -> dict[str, Any] | None:
     try:
         recs = yf.Ticker(ticker).recommendations
@@ -242,6 +298,15 @@ def _yfinance_recommendation_signal(ticker: str) -> dict[str, Any] | None:
 
     latest = recs.iloc[-1].to_dict()
     return _recommendation_signal_from_counts(ticker, latest, "yfinance")
+
+
+def _finnhub_api_key() -> str | None:
+    return get_provider_api_key(
+        "finnhub",
+        "FINNHUB_KEY",
+        "FINNHUB_KEY_SECRET_NAME",
+        supported_json_keys=("FINNHUB_KEY", "finnhub_key", "api_key"),
+    )
 
 
 def _recommendation_signal_from_counts(
@@ -299,6 +364,142 @@ def _recommendation_signal_from_counts(
     )
 
 
+def _rating_signal_from_row(
+    ticker: str,
+    row: dict[str, Any],
+    provider: str,
+) -> dict[str, Any] | None:
+    event_date = _parse_date(row.get("gradeTime") or row.get("grade_time") or row.get("date"))
+    if event_date is None or event_date < date.today() - timedelta(days=ANALYST_LOOKBACK_DAYS):
+        return None
+
+    action = str(row.get("action") or "").lower()
+    from_grade = str(row.get("fromGrade") or row.get("from_grade") or "").strip()
+    to_grade = str(row.get("toGrade") or row.get("to_grade") or "").strip()
+    firm = str(row.get("company") or row.get("firm") or "analyst").strip()
+
+    score = _rating_score(action, from_grade, to_grade)
+    if score == 0:
+        direction = "neutral"
+        title = "Analyst rating reiterated"
+    elif score > 0:
+        direction = "positive"
+        title = "Analyst rating upgraded"
+    else:
+        direction = "negative"
+        title = "Analyst rating downgraded"
+
+    grade_change = f"{from_grade or 'unknown'} to {to_grade or 'unknown'}"
+    return _market_signal(
+        ticker,
+        date.today(),
+        "analyst_rating",
+        direction,
+        score,
+        title,
+        f"{firm} changed {ticker}'s analyst rating from {grade_change}.",
+        {
+            "provider": provider,
+            "event_date": event_date.isoformat(),
+            "action": action,
+            "from_grade": from_grade,
+            "to_grade": to_grade,
+            "firm": firm,
+        },
+    )
+
+
+def _price_target_signal_from_row(
+    ticker: str,
+    row: dict[str, Any],
+    provider: str,
+) -> dict[str, Any] | None:
+    updated_at = _parse_date(
+        row.get("updatedDate") or row.get("updated_date") or row.get("lastUpdated")
+    )
+    if updated_at is not None and updated_at < date.today() - timedelta(days=ANALYST_LOOKBACK_DAYS):
+        return None
+
+    target_mean = _float(row.get("targetMean") or row.get("target_mean"))
+    target_median = _float(row.get("targetMedian") or row.get("target_median"))
+    target_high = _float(row.get("targetHigh") or row.get("target_high"))
+    target_low = _float(row.get("targetLow") or row.get("target_low"))
+    last_price = _float(
+        row.get("lastClose")
+        or row.get("last_close")
+        or row.get("close")
+        or row.get("currentPrice")
+    )
+    target = target_mean or target_median
+    if target is None or target <= 0:
+        return None
+
+    upside_percent = _pct_delta(last_price, target) if last_price else None
+    if upside_percent is None:
+        direction = "neutral"
+        score = 12
+    elif upside_percent >= 15:
+        direction = "positive"
+        score = min(35, int(upside_percent))
+    elif upside_percent <= -10:
+        direction = "negative"
+        score = max(-35, int(upside_percent))
+    else:
+        direction = "neutral"
+        score = max(8, min(18, int(abs(upside_percent))))
+
+    summary_suffix = (
+        f", implying {upside_percent:.1f}% upside versus the latest close"
+        if upside_percent is not None
+        else ""
+    )
+    return _market_signal(
+        ticker,
+        date.today(),
+        "price_target",
+        direction,
+        score,
+        "Analyst price target update",
+        f"{ticker}'s analyst mean price target is {target:.2f}{summary_suffix}.",
+        {
+            "provider": provider,
+            "updated_at": updated_at.isoformat() if updated_at else None,
+            "target_mean": target_mean,
+            "target_median": target_median,
+            "target_high": target_high,
+            "target_low": target_low,
+            "last_price": last_price,
+            "upside_percent": round(upside_percent, 2) if upside_percent is not None else None,
+        },
+    )
+
+
+def _rating_score(action: str, from_grade: str, to_grade: str) -> int:
+    if "upgrade" in action:
+        return 28
+    if "downgrade" in action:
+        return -28
+    if "initiat" in action:
+        return _grade_sentiment_score(to_grade, default=16)
+    if "reit" in action or "maintain" in action:
+        return _grade_sentiment_score(to_grade, default=8)
+
+    from_score = _grade_sentiment_score(from_grade, default=0)
+    to_score = _grade_sentiment_score(to_grade, default=0)
+    return max(-28, min(28, (to_score - from_score) * 7))
+
+
+def _grade_sentiment_score(grade: str, default: int) -> int:
+    grade_text = grade.lower()
+    if any(word in grade_text for word in ("buy", "outperform", "overweight", "positive")):
+        return 2
+    if any(word in grade_text for word in ("sell", "underperform", "underweight", "negative")):
+        return -2
+    if any(word in grade_text for word in ("hold", "neutral", "market perform", "equal")):
+        return 0
+    return default
+
+
 def _market_signal(
     ticker: str,
     signal_date: date,
@@ -343,6 +544,21 @@ def _int(value: Any) -> int:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _pct_delta(previous: float | None, current: float) -> float | None:
+    if previous is None or previous <= 0:
+        return None
+    return (current - previous) / previous * 100
 
 
 def _event_tickers(event: dict[str, Any]) -> list[str] | None:
