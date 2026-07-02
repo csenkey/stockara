@@ -844,6 +844,7 @@ def _news_article_row(article: dict[str, Any]) -> dict[str, Any]:
         "published_at": article.get("published_at"),
         "summary": article.get("summary", ""),
         "sentiment": article.get("sentiment", "neutral"),
+        "url": article.get("url"),
     }
 
 

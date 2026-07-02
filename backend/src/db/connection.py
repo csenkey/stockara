@@ -739,6 +739,8 @@ class DynamoStore:
             "collected_at": _now(),
             "title_source_hash": title_source_hash,
         }
+        if article.get("url"):
+            item["url"] = str(article["url"])[:1000]
         try:
             self.table.put_item(
                 Item=item,

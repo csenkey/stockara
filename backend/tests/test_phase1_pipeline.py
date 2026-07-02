@@ -132,6 +132,108 @@ def test_build_publication_payload_includes_static_price_chart_data():
     assert chart["trend_line"]["slope_per_session"] > 0
 
 
+def test_static_price_chart_uses_prewindow_history_for_visible_sma():
+    rows = [
+        {
+            "ticker": "NVDA",
+            "trading_date": date(2026, 4, 1) + timedelta(days=index),
+            "open_price": Decimal("100") + Decimal(index),
+            "high_price": Decimal("102") + Decimal(index),
+            "low_price": Decimal("99") + Decimal(index),
+            "close_price": Decimal("101") + Decimal(index),
+            "volume": 1000 + index,
+            "currency": "USD",
+        }
+        for index in range(70)
+    ]
+
+    with patch("src.analysis.phase1_pipeline.store.get_stock_data", return_value=rows):
+        chart = phase1_pipeline._price_chart_for_ticker("NVDA", date(2026, 6, 17))
+
+    assert chart is not None
+    assert len(chart["candles"]) == 45
+    assert len(chart["sma_20"]) == 45
+    assert chart["sma_20"][0]["date"] == chart["candles"][0]["date"]
+
+
+def test_build_publication_payload_includes_news_events_and_deduped_evidence():
+    stocks = [{"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology"}]
+    duplicate_summary = "NVDA analyst recommendation mix: 14 strong buy, 24 buy."
+    scores = [
+        {
+            "ticker": "NVDA",
+            "opportunity_score": 80,
+            "negative_score": 5,
+            "signals": [
+                {
+                    "signal_type": "analyst_action",
+                    "score": 40,
+                    "summary": duplicate_summary,
+                    "source": {"provider": "yfinance"},
+                },
+                {
+                    "signal_type": "analyst_action",
+                    "score": 35,
+                    "summary": duplicate_summary,
+                    "source": {"provider": "finnhub"},
+                },
+            ],
+        }
+    ]
+    analyses = [
+        {
+            "ticker": "NVDA",
+            "recommendation": "BUY",
+            "risk_level": "MEDIUM",
+            "confidence_score": 84,
+            "catalyst": "Analyst support",
+            "expected_timeframe": "1-30 days",
+            "reasoning": "Consensus is supportive.",
+            "invalidation_criteria": "Consensus weakens.",
+            "opportunity_score": 80,
+            "negative_score": 5,
+            "signals": scores[0]["signals"],
+        }
+    ]
+
+    with (
+        patch("src.analysis.phase1_pipeline.store.sell_alert_tickers", return_value=[]),
+        patch("src.analysis.phase1_pipeline.store.get_stock_data", return_value=[]),
+        patch(
+            "src.analysis.phase1_pipeline.store.news_for_ticker",
+            return_value=[
+                {
+                    "title": "NVIDIA launches platform",
+                    "source": "Reuters",
+                    "published_at": "2026-06-17T12:00:00Z",
+                    "summary": "NVIDIA announced a new platform.",
+                    "sentiment": "positive",
+                    "url": "https://example.com/nvda",
+                }
+            ],
+        ),
+        patch(
+            "src.analysis.phase1_pipeline.store.earnings_events_for_ticker",
+            return_value=[
+                {
+                    "event_date": "2026-07-01",
+                    "is_upcoming": True,
+                    "provider": "finnhub",
+                    "source_url": "https://finnhub.io/calendar/earnings",
+                }
+            ],
+        ),
+        patch("src.analysis.phase1_pipeline.store.dividend_events_for_ticker", return_value=[]),
+    ):
+        payload = build_publication_payload(analyses, scores, stocks, date(2026, 6, 17))
+
+    pick = payload["top_picks"][0]
+    assert pick["supporting_evidence"] == [duplicate_summary]
+    assert pick["related_news"][0]["url"] == "https://example.com/nvda"
+    assert pick["upcoming_events"][0]["event_type"] == "earnings"
+    assert pick["upcoming_events"][0]["event_date"] == "2026-07-01"
+
+
 def test_build_publication_payload_includes_partial_coverage_quality():
     stocks = [{"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology"}]
     scores = [
@@ -725,6 +827,10 @@ def test_review_rejection_suppresses_public_publication():
 
     with (
         patch("src.analysis.phase1_pipeline.store.sell_alert_tickers", return_value=[]),
+        patch("src.analysis.phase1_pipeline.store.news_for_ticker", return_value=[]),
+        patch("src.analysis.phase1_pipeline.store.earnings_events_for_ticker", return_value=[]),
+        patch("src.analysis.phase1_pipeline.store.dividend_events_for_ticker", return_value=[]),
+        patch("src.analysis.phase1_pipeline.store.get_stock_data", return_value=[]),
         patch("src.analysis.phase1_pipeline._emit_metric") as emit_metric,
     ):
         payload = build_publication_payload(analyses, scores, stocks, date(2026, 6, 17))
@@ -739,6 +845,7 @@ def test_review_rejection_suppresses_public_publication():
             "ticker": "NVDA",
             "company_name": "NVIDIA",
             "sector": "Technology",
+            "logo_url": None,
             "analysis_method": "ai",
             "analysis_model": "gpt-5.4-mini",
             "recommendation": "BUY",
@@ -759,6 +866,8 @@ def test_review_rejection_suppresses_public_publication():
                 "rejection_category": "insufficient_evidence",
                 "what_would_make_approvable": "More durable catalyst evidence.",
             },
+            "related_news": [],
+            "upcoming_events": [],
         }
     ]
     assert "withheld by the review model" in payload["data_warnings"][-1]

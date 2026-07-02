@@ -338,11 +338,30 @@ class PriceChart(BaseModel):
     resistance: Optional[Decimal] = None
 
 
+class RelatedNewsArticle(BaseModel):
+    title: str
+    source: str
+    published_at: Optional[str] = None
+    summary: str
+    sentiment: str = "neutral"
+    url: Optional[str] = None
+
+
+class UpcomingTickerEvent(BaseModel):
+    event_type: str
+    event_date: date
+    title: str
+    provider: Optional[str] = None
+    source_url: Optional[str] = None
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
 class TopPick(BaseModel):
     rank: int
     ticker: str
     company_name: str
     sector: str
+    logo_url: Optional[str] = None
     analysis_method: AnalysisMethod = AnalysisMethod.AI
     recommendation: Recommendation
     risk_level: RiskLevel
@@ -354,6 +373,8 @@ class TopPick(BaseModel):
     supporting_evidence: list[str]
     source_traceability: list[SignalSource]
     price_chart: Optional[PriceChart] = None
+    related_news: list[RelatedNewsArticle] = Field(default_factory=list)
+    upcoming_events: list[UpcomingTickerEvent] = Field(default_factory=list)
 
 
 class SellAlert(BaseModel):
@@ -361,6 +382,7 @@ class SellAlert(BaseModel):
     ticker: str
     company_name: str
     sector: str
+    logo_url: Optional[str] = None
     analysis_method: AnalysisMethod = AnalysisMethod.AI
     severity: str
     risk_level: RiskLevel
@@ -370,12 +392,15 @@ class SellAlert(BaseModel):
     supporting_evidence: list[str]
     source_traceability: list[SignalSource]
     price_chart: Optional[PriceChart] = None
+    related_news: list[RelatedNewsArticle] = Field(default_factory=list)
+    upcoming_events: list[UpcomingTickerEvent] = Field(default_factory=list)
 
 
 class ReviewRejection(BaseModel):
     ticker: str
     company_name: str
     sector: Optional[str] = None
+    logo_url: Optional[str] = None
     analysis_method: AnalysisMethod = AnalysisMethod.AI
     analysis_model: Optional[str] = None
     recommendation: Recommendation
@@ -389,6 +414,8 @@ class ReviewRejection(BaseModel):
     supporting_evidence: list[str] = Field(default_factory=list)
     ai_review: dict[str, Any]
     price_chart: Optional[PriceChart] = None
+    related_news: list[RelatedNewsArticle] = Field(default_factory=list)
+    upcoming_events: list[UpcomingTickerEvent] = Field(default_factory=list)
 
 
 class PublishedTopPicks(BaseModel):

@@ -28,6 +28,9 @@ TOP_PICK_COUNT = int(os.environ.get("PHASE1_TOP_PICK_COUNT", "10"))
 ANALYSIS_BATCH_SIZE = int(os.environ.get("PHASE1_ANALYSIS_BATCH_SIZE", "5"))
 PRICE_CHART_LOOKBACK_DAYS = int(os.environ.get("PHASE1_PRICE_CHART_LOOKBACK_DAYS", "60"))
 PRICE_CHART_MAX_ROWS = int(os.environ.get("PHASE1_PRICE_CHART_MAX_ROWS", "45"))
+PRICE_CHART_SMA_WINDOW = 20
+RELATED_NEWS_LOOKBACK_DAYS = int(os.environ.get("PHASE1_RELATED_NEWS_LOOKBACK_DAYS", "7"))
+RELATED_NEWS_MAX_ARTICLES = int(os.environ.get("PHASE1_RELATED_NEWS_MAX_ARTICLES", "5"))
 STOCK_FRESHNESS_MAX_AGE_DAYS = int(os.environ.get("PHASE1_STOCK_FRESHNESS_MAX_AGE_DAYS", "3"))
 MIN_HISTORY_CALENDAR_DAYS = int(os.environ.get("PHASE1_MIN_HISTORY_CALENDAR_DAYS", "30"))
 MIN_HISTORY_ROWS = int(os.environ.get("PHASE1_MIN_HISTORY_ROWS", "20"))
@@ -812,12 +815,13 @@ def build_publication_payload(
     for rank, row in enumerate(buy_candidates[:TOP_PICK_COUNT], start=1):
         stock = stock_map[row["ticker"]]
         top_picks.append(
-            _with_price_chart(
+            _with_recommendation_context(
                 {
                     "rank": rank,
                     "ticker": row["ticker"],
                     "company_name": stock["company_name"],
                     "sector": stock["sector"],
+                    "logo_url": _stock_logo_url(stock),
                     "analysis_method": row.get("analysis_method", "ai"),
                     "recommendation": row["recommendation"],
                     "risk_level": row["risk_level"],
@@ -850,12 +854,13 @@ def build_publication_payload(
     for rank, row in enumerate(sell_candidates[:TOP_PICK_COUNT], start=1):
         stock = stock_map[row["ticker"]]
         sell_alerts.append(
-            _with_price_chart(
+            _with_recommendation_context(
                 {
                     "rank": rank,
                     "ticker": row["ticker"],
                     "company_name": stock["company_name"],
                     "sector": stock["sector"],
+                    "logo_url": _stock_logo_url(stock),
                     "analysis_method": row.get("analysis_method", "ai"),
                     "severity": "critical" if row["negative_score"] >= 80 else "high",
                     "risk_level": row["risk_level"],
@@ -1958,7 +1963,18 @@ def _primary_signal(signals: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 
 def _evidence(signals: list[dict[str, Any]]) -> list[str]:
-    return [signal["summary"] for signal in sorted(signals, key=lambda s: abs(s["score"]), reverse=True)[:5]]
+    evidence: list[str] = []
+    seen: set[str] = set()
+    for signal in sorted(signals, key=lambda s: abs(s["score"]), reverse=True):
+        summary = str(signal.get("summary", "")).strip()
+        key = " ".join(summary.lower().split())
+        if not summary or key in seen:
+            continue
+        seen.add(key)
+        evidence.append(summary)
+        if len(evidence) >= 5:
+            break
+    return evidence
 
 
 def _risk_weight(risk_level: str) -> int:
@@ -2036,13 +2052,122 @@ def _review_policy_summary(analyses: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _with_price_chart(
+def _with_recommendation_context(
     row: dict[str, Any], ticker: str, run_date: date
 ) -> dict[str, Any]:
+    enriched = {
+        **row,
+        "related_news": _related_news_for_ticker(ticker, run_date),
+        "upcoming_events": _upcoming_events_for_ticker(ticker, run_date),
+    }
     chart = _price_chart_for_ticker(ticker, run_date)
     if chart:
-        return {**row, "price_chart": chart}
-    return row
+        enriched["price_chart"] = chart
+    return enriched
+
+
+def _stock_logo_url(stock: dict[str, Any]) -> str | None:
+    value = stock.get("logo_url") or stock.get("logo")
+    return str(value).strip() if value else None
+
+
+def _related_news_for_ticker(ticker: str, run_date: date) -> list[dict[str, Any]]:
+    try:
+        rows = store.news_for_ticker(
+            ticker,
+            run_date - timedelta(days=RELATED_NEWS_LOOKBACK_DAYS),
+            run_date,
+        )
+    except Exception as exc:
+        logger.warning("related_news_lookup_failed", ticker=ticker, error=str(exc))
+        return []
+
+    articles: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for row in rows:
+        key = (str(row.get("title", "")).strip().lower(), str(row.get("source", "")).strip().lower())
+        if key in seen or not key[0]:
+            continue
+        seen.add(key)
+        article = {
+            "title": str(row.get("title", "")),
+            "source": str(row.get("source", "")),
+            "published_at": row.get("published_at"),
+            "summary": str(row.get("summary", "")),
+            "sentiment": str(row.get("sentiment", "neutral")),
+        }
+        if row.get("url"):
+            article["url"] = str(row["url"])
+        articles.append(article)
+        if len(articles) >= RELATED_NEWS_MAX_ARTICLES:
+            break
+    return articles
+
+
+def _upcoming_events_for_ticker(ticker: str, run_date: date) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    try:
+        earnings = store.earnings_events_for_ticker(
+            ticker,
+            run_date,
+            run_date + timedelta(days=EARNINGS_LOOKAHEAD_DAYS),
+        )
+    except Exception as exc:
+        logger.warning("recommendation_earnings_events_lookup_failed", ticker=ticker, error=str(exc))
+        earnings = []
+    for event in earnings:
+        if not event.get("is_upcoming"):
+            continue
+        event_date = _parse_date(event.get("event_date"))
+        if event_date is None:
+            continue
+        details = {
+            key: _jsonable_value(event.get(key))
+            for key in ("eps_estimate", "time_of_day")
+            if event.get(key) is not None
+        }
+        events.append(
+            {
+                "event_type": "earnings",
+                "event_date": event_date.isoformat(),
+                "title": "Upcoming earnings",
+                "provider": event.get("provider"),
+                "source_url": event.get("source_url"),
+                "details": details,
+            }
+        )
+
+    try:
+        dividends = store.dividend_events_for_ticker(
+            ticker,
+            run_date,
+            run_date + timedelta(days=DIVIDEND_LOOKAHEAD_DAYS),
+        )
+    except Exception as exc:
+        logger.warning("recommendation_dividend_events_lookup_failed", ticker=ticker, error=str(exc))
+        dividends = []
+    for event in dividends:
+        if not event.get("is_upcoming"):
+            continue
+        event_date = _parse_date(event.get("ex_dividend_date"))
+        if event_date is None:
+            continue
+        details = {
+            key: _jsonable_value(event.get(key))
+            for key in ("dividend_amount", "dividend_yield", "pay_date")
+            if event.get(key) is not None
+        }
+        events.append(
+            {
+                "event_type": "dividend",
+                "event_date": event_date.isoformat(),
+                "title": "Upcoming ex-dividend date",
+                "provider": event.get("provider"),
+                "source_url": event.get("source_url"),
+                "details": details,
+            }
+        )
+    return sorted(events, key=lambda item: (item["event_date"], item["event_type"]))[:6]
 
 
 def _price_chart_for_ticker(ticker: str, run_date: date) -> dict[str, Any] | None:
@@ -2050,21 +2175,24 @@ def _price_chart_for_ticker(ticker: str, run_date: date) -> dict[str, Any] | Non
     try:
         rows = store.get_stock_data(
             ticker,
-            run_date - timedelta(days=PRICE_CHART_LOOKBACK_DAYS),
+            run_date
+            - timedelta(days=PRICE_CHART_LOOKBACK_DAYS + PRICE_CHART_SMA_WINDOW * 3),
             run_date,
         )
     except Exception as exc:
         logger.warning("price_chart_lookup_failed", ticker=ticker, error=str(exc))
         return None
 
-    ordered = _ordered_stock_rows(rows)[-PRICE_CHART_MAX_ROWS:]
-    if len(ordered) < 2:
+    ordered = _ordered_stock_rows(rows)
+    visible_rows = ordered[-PRICE_CHART_MAX_ROWS:]
+    if len(visible_rows) < 2:
         return None
 
     candles: list[dict[str, Any]] = []
+    all_candles: list[dict[str, Any]] = []
     for row in ordered:
         try:
-            candles.append(
+            all_candles.append(
                 {
                     "date": str(row["trading_date"])[:10],
                     "open": _jsonable_value(row["open_price"]),
@@ -2081,18 +2209,21 @@ def _price_chart_for_ticker(ticker: str, run_date: date) -> dict[str, Any] | Non
                 trading_date=row.get("trading_date"),
                 error=str(exc),
             )
+    visible_dates = {str(row["trading_date"])[:10] for row in visible_rows}
+    candles = [candle for candle in all_candles if candle["date"] in visible_dates]
     if len(candles) < 2:
         return None
 
+    all_closes = [Decimal(str(candle["close"])) for candle in all_candles]
     closes = [Decimal(str(candle["close"])) for candle in candles]
     lows = [Decimal(str(candle["low"])) for candle in candles]
     highs = [Decimal(str(candle["high"])) for candle in candles]
-    sma_20 = _sma_chart_points(candles, closes, 20)
+    sma_20 = _sma_chart_points(all_candles, all_closes, PRICE_CHART_SMA_WINDOW, visible_dates)
     trend_line = _trend_line_for_candles(candles, closes)
     support_window = lows[-20:] if len(lows) >= 20 else lows
     resistance_window = highs[-20:] if len(highs) >= 20 else highs
 
-    latest = ordered[-1]
+    latest = visible_rows[-1]
     return {
         "period_start": candles[0]["date"],
         "period_end": candles[-1]["date"],
@@ -2106,12 +2237,17 @@ def _price_chart_for_ticker(ticker: str, run_date: date) -> dict[str, Any] | Non
 
 
 def _sma_chart_points(
-    candles: list[dict[str, Any]], closes: list[Decimal], window: int
+    candles: list[dict[str, Any]],
+    closes: list[Decimal],
+    window: int,
+    visible_dates: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     if len(closes) < window:
         return []
     points = []
     for index in range(window - 1, len(closes)):
+        if visible_dates is not None and candles[index]["date"] not in visible_dates:
+            continue
         value = _average_decimal(closes[index - window + 1 : index + 1])
         points.append({"date": candles[index]["date"], "value": _jsonable_value(value)})
     return points
@@ -2168,11 +2304,12 @@ def _review_rejection_audit(
     for row in suppressed[:50]:
         stock = stock_map.get(row["ticker"], {})
         audit_rows.append(
-            _with_price_chart(
+            _with_recommendation_context(
                 {
                     "ticker": row["ticker"],
                     "company_name": stock.get("company_name", row["ticker"]),
                     "sector": stock.get("sector"),
+                    "logo_url": _stock_logo_url(stock),
                     "analysis_method": row.get("analysis_method", "ai"),
                     "analysis_model": row.get("analysis_model", OPENAI_ANALYSIS_MODEL),
                     "recommendation": row["recommendation"],

@@ -48,11 +48,30 @@ interface PriceChart {
   resistance?: number | string | null;
 }
 
+interface RelatedNewsArticle {
+  title: string;
+  source: string;
+  published_at?: string | null;
+  summary: string;
+  sentiment?: string;
+  url?: string | null;
+}
+
+interface UpcomingTickerEvent {
+  event_type: string;
+  event_date: string;
+  title: string;
+  provider?: string | null;
+  source_url?: string | null;
+  details?: Record<string, number | string | null>;
+}
+
 interface TopPick {
   rank: number;
   ticker: string;
   company_name: string;
   sector: string;
+  logo_url?: string | null;
   recommendation: "BUY" | "HOLD" | "SELL";
   risk_level: "LOW" | "MEDIUM" | "HIGH";
   confidence_score: number;
@@ -63,6 +82,8 @@ interface TopPick {
   supporting_evidence: string[];
   source_traceability: SignalSource[];
   price_chart?: PriceChart | null;
+  related_news?: RelatedNewsArticle[];
+  upcoming_events?: UpcomingTickerEvent[];
 }
 
 interface SellAlert {
@@ -70,6 +91,7 @@ interface SellAlert {
   ticker: string;
   company_name: string;
   sector: string;
+  logo_url?: string | null;
   severity: string;
   risk_level: "LOW" | "MEDIUM" | "HIGH";
   confidence_score: number;
@@ -78,6 +100,8 @@ interface SellAlert {
   supporting_evidence: string[];
   source_traceability: SignalSource[];
   price_chart?: PriceChart | null;
+  related_news?: RelatedNewsArticle[];
+  upcoming_events?: UpcomingTickerEvent[];
 }
 
 interface ReviewRejection {
@@ -95,6 +119,8 @@ interface ReviewRejection {
   supporting_evidence: string[];
   ai_review: AiReview;
   price_chart?: PriceChart | null;
+  related_news?: RelatedNewsArticle[];
+  upcoming_events?: UpcomingTickerEvent[];
 }
 
 interface DataQuality {
@@ -119,6 +145,7 @@ interface TopPicksPayload {
 
 const TOP_PICKS_URL =
   import.meta.env.VITE_TOP_PICKS_URL || "/top-picks/latest.json";
+const DEV_DEMO_PAYLOAD = createDemoPayload();
 
 function badgeClass(value: string) {
   switch (value) {
@@ -134,10 +161,240 @@ function badgeClass(value: string) {
   }
 }
 
+function createDemoPayload(): TopPicksPayload {
+  const candles = demoCandles();
+  const price_chart: PriceChart = {
+    period_start: candles[0].date,
+    period_end: candles[candles.length - 1].date,
+    currency: "USD",
+    candles,
+    sma_20: candles.map((candle, index) => ({
+      date: candle.date,
+      value: 193 + index * 1.22,
+    })),
+    trend_line: {
+      start_date: candles[0].date,
+      start_value: 192.1,
+      end_date: candles[candles.length - 1].date,
+      end_value: 225.7,
+      slope_per_session: 1.4,
+    },
+    support: 214.0,
+    resistance: 230.0,
+  };
+
+  return {
+    publication_date: "2026-07-02",
+    generated_at: "2026-07-02T17:40:00Z",
+    top_picks: [
+      {
+        rank: 1,
+        ticker: "AAPL",
+        company_name: "Apple Inc.",
+        sector: "Technology",
+        recommendation: "BUY",
+        risk_level: "MEDIUM",
+        confidence_score: 78,
+        catalyst: "Improving demand checks and analyst support",
+        expected_timeframe: "1-30 days",
+        rationale:
+          "Apple has a constructive blend of price momentum, resilient services revenue, and positive analyst revisions. The setup still needs confirmation from upcoming earnings, so position sizing should stay disciplined.",
+        invalidation_criteria:
+          "Breakdown below support or weaker demand commentary would invalidate the near-term setup.",
+        supporting_evidence: [
+          "AAPL traded above its 20-session average while volume expanded across the latest sessions.",
+          "Analyst recommendation mix remains constructive with more buy-side support than sell-side pressure.",
+          "Recent ticker-related news flow points to improving demand checks.",
+        ],
+        source_traceability: [
+          { provider: "demo_price_data", observed_at: "2026-07-02T17:00:00Z" },
+          { provider: "demo_news", observed_at: "2026-07-02T17:00:00Z" },
+        ],
+        price_chart,
+        related_news: [
+          {
+            title: "Apple suppliers rise as demand checks improve",
+            source: "Demo Wire",
+            published_at: "2026-07-01T14:30:00Z",
+            summary:
+              "Recent channel checks point to stronger near-term device demand and better availability in premium models.",
+            sentiment: "positive",
+            url: "https://example.com/apple-demand-demo",
+          },
+          {
+            title: "Analysts lift Apple estimates before product cycle update",
+            source: "Market Demo",
+            published_at: "2026-06-30T11:15:00Z",
+            summary:
+              "Several analysts highlighted resilient services revenue and a cleaner setup into the next hardware cycle.",
+            sentiment: "positive",
+            url: "https://example.com/apple-analyst-demo",
+          },
+        ],
+        upcoming_events: [
+          {
+            event_type: "earnings",
+            event_date: "2026-07-30",
+            title: "Upcoming earnings",
+            provider: "demo",
+            source_url: "https://example.com/apple-earnings-demo",
+            details: { time_of_day: "after_market" },
+          },
+          {
+            event_type: "dividend",
+            event_date: "2026-08-10",
+            title: "Upcoming ex-dividend date",
+            provider: "demo",
+            source_url: "https://example.com/apple-dividend-demo",
+            details: { dividend_amount: 0.26 },
+          },
+        ],
+      },
+    ],
+    sell_alerts: [
+      {
+        rank: 1,
+        ticker: "TSLA",
+        company_name: "Tesla, Inc.",
+        sector: "Consumer Discretionary",
+        severity: "high",
+        risk_level: "HIGH",
+        confidence_score: 66,
+        negative_catalyst: "Weak delivery narrative and elevated volatility",
+        rationale:
+          "Tesla's recent price action is choppy and negative news momentum is elevated. The signal is not a certainty, but it is strong enough to deserve risk attention.",
+        supporting_evidence: [
+          "TSLA closed below short-term support after several high-volume down sessions.",
+          "Recent coverage emphasized delivery uncertainty and margin pressure.",
+        ],
+        source_traceability: [
+          { provider: "demo_price_data", observed_at: "2026-07-02T17:00:00Z" },
+        ],
+        price_chart: demoSellChart(candles),
+        related_news: [
+          {
+            title: "Tesla delivery debate weighs on investor sentiment",
+            source: "Demo Wire",
+            published_at: "2026-07-01T13:00:00Z",
+            summary:
+              "Investors remain focused on delivery mix, pricing pressure, and whether margins can stabilize.",
+            sentiment: "negative",
+            url: "https://example.com/tesla-delivery-demo",
+          },
+        ],
+        upcoming_events: [
+          {
+            event_type: "earnings",
+            event_date: "2026-07-23",
+            title: "Upcoming earnings",
+            provider: "demo",
+            source_url: "https://example.com/tesla-earnings-demo",
+            details: { time_of_day: "after_market" },
+          },
+        ],
+      },
+    ],
+    review_rejections: [],
+    candidate_count: 42,
+    analyzed_count: 8,
+    data_quality: {
+      coverage_status: "demo",
+      active_ticker_count: 1003,
+      eligible_ticker_count: 812,
+      excluded_ticker_count: 191,
+      exclusion_reason_counts: { stale_price_data: 121, missing_news: 70 },
+    },
+    data_warnings: [
+      "Local demo data is shown because /top-picks/latest.json is not available from the Vite dev server.",
+    ],
+  };
+}
+
+function demoCandles(): PriceCandle[] {
+  return [
+    [0, 191.2, 193.5, 190.6, 192.4, 42100000],
+    [1, 192.5, 195.1, 191.8, 194.9, 43800000],
+    [2, 195.0, 197.2, 194.1, 196.8, 46200000],
+    [3, 197.1, 198.4, 195.6, 196.2, 40500000],
+    [4, 196.3, 199.8, 195.9, 199.1, 51400000],
+    [5, 199.5, 202.2, 198.7, 201.6, 55200000],
+    [6, 201.2, 203.8, 200.9, 203.1, 48900000],
+    [7, 202.8, 204.4, 201.5, 202.3, 44500000],
+    [8, 202.5, 205.7, 201.8, 205.2, 57100000],
+    [9, 205.6, 207.3, 204.4, 206.8, 59900000],
+    [10, 206.1, 208.8, 205.5, 208.2, 61200000],
+    [11, 208.5, 211.0, 207.4, 210.4, 65500000],
+    [12, 210.1, 212.6, 208.8, 209.7, 58200000],
+    [13, 209.2, 211.8, 208.3, 211.3, 53000000],
+    [14, 211.5, 214.1, 210.9, 213.5, 68800000],
+    [15, 213.8, 216.4, 212.7, 215.9, 72100000],
+    [16, 215.1, 217.2, 213.9, 214.4, 60300000],
+    [17, 214.7, 216.8, 213.6, 216.1, 56600000],
+    [18, 216.6, 219.4, 215.8, 218.9, 74500000],
+    [19, 219.2, 221.0, 217.5, 220.3, 76800000],
+    [20, 220.0, 222.7, 219.1, 222.1, 81200000],
+    [21, 222.4, 224.5, 220.8, 221.2, 69000000],
+    [22, 221.5, 225.1, 220.9, 224.4, 85500000],
+    [23, 224.7, 227.3, 223.8, 226.8, 90200000],
+    [24, 226.2, 229.6, 225.4, 228.9, 94700000],
+  ].map(([offset, open, high, low, close, volume]) => ({
+    date: demoDate(offset),
+    open,
+    high,
+    low,
+    close,
+    volume,
+  }));
+}
+
+function demoSellChart(candles: PriceCandle[]): PriceChart {
+  const sellCandles = candles.map((candle, index) => ({
+    ...candle,
+    open: 186 - index * 1.8,
+    high: 189 - index * 1.7,
+    low: 182 - index * 1.9,
+    close: 184 - index * 1.85,
+    volume: candle.volume + index * 900000,
+  }));
+  return {
+    period_start: sellCandles[0].date,
+    period_end: sellCandles[sellCandles.length - 1].date,
+    currency: "USD",
+    candles: sellCandles,
+    sma_20: sellCandles.map((candle, index) => ({
+      date: candle.date,
+      value: 185 - index * 1.1,
+    })),
+    trend_line: {
+      start_date: sellCandles[0].date,
+      start_value: 185.5,
+      end_date: sellCandles[sellCandles.length - 1].date,
+      end_value: 142.0,
+      slope_per_session: -1.81,
+    },
+    support: 139.5,
+    resistance: 176.2,
+  };
+}
+
+function demoDate(offset: number) {
+  const base = new Date("2026-06-01T00:00:00Z");
+  base.setUTCDate(base.getUTCDate() + offset);
+  return base.toISOString().slice(0, 10);
+}
+
 function formatDate(value: string) {
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: "medium",
     timeStyle: "short",
+  }).format(new Date(value));
+}
+
+function formatShortDate(value: string) {
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
   }).format(new Date(value));
 }
 
@@ -160,6 +417,10 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
       }
       setPayload(await response.json());
     } catch {
+      if (import.meta.env.DEV) {
+        setPayload(DEV_DEMO_PAYLOAD);
+        return;
+      }
       setError("Daily top picks have not been published yet.");
     } finally {
       setLoading(false);
@@ -422,12 +683,15 @@ function PickRow({ pick }: { pick: TopPick }) {
   return (
     <article className="border border-slate-800 bg-slate-900 p-5">
       <div className="flex items-start justify-between gap-4">
-        <div>
-          <div className="text-xs text-slate-400">#{pick.rank}</div>
-          <h3 className="mt-1 text-xl font-semibold">{pick.ticker}</h3>
-          <p className="mt-1 text-sm text-slate-400">
-            {pick.company_name} · {pick.sector}
-          </p>
+        <div className="flex min-w-0 items-start gap-3">
+          <TickerLogo ticker={pick.ticker} companyName={pick.company_name} logoUrl={pick.logo_url} />
+          <div className="min-w-0">
+            <div className="text-xs text-slate-400">#{pick.rank}</div>
+            <h3 className="mt-1 text-xl font-semibold leading-tight">{pick.company_name}</h3>
+            <p className="mt-1 text-sm text-slate-400">
+              {pick.ticker} · {pick.sector}
+            </p>
+          </div>
         </div>
         <div className="flex flex-wrap justify-end gap-2">
           <span className="border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">
@@ -446,6 +710,8 @@ function PickRow({ pick }: { pick: TopPick }) {
         <Fact label="Timeframe" value={pick.expected_timeframe} />
       </div>
       <Evidence items={pick.supporting_evidence} />
+      <RelatedNews items={pick.related_news ?? []} tone="slate" />
+      <UpcomingEvents items={pick.upcoming_events ?? []} tone="slate" />
     </article>
   );
 }
@@ -454,12 +720,20 @@ function SellAlertRow({ alert }: { alert: SellAlert }) {
   return (
     <article className="border border-red-900 bg-red-950 p-5">
       <div className="flex items-start justify-between gap-4">
-        <div>
-          <div className="text-xs text-red-200">#{alert.rank}</div>
-          <h3 className="mt-1 text-xl font-semibold">{alert.ticker}</h3>
-          <p className="mt-1 text-sm text-red-200">
-            {alert.company_name} · {alert.sector}
-          </p>
+        <div className="flex min-w-0 items-start gap-3">
+          <TickerLogo
+            ticker={alert.ticker}
+            companyName={alert.company_name}
+            logoUrl={alert.logo_url}
+            tone="red"
+          />
+          <div className="min-w-0">
+            <div className="text-xs text-red-200">#{alert.rank}</div>
+            <h3 className="mt-1 text-xl font-semibold leading-tight">{alert.company_name}</h3>
+            <p className="mt-1 text-sm text-red-200">
+              {alert.ticker} · {alert.sector}
+            </p>
+          </div>
         </div>
         <span className={`border px-2 py-1 text-xs ${badgeClass(alert.severity)}`}>
           {alert.severity}
@@ -475,7 +749,44 @@ function SellAlertRow({ alert }: { alert: SellAlert }) {
         <Fact label="Risk" value={alert.risk_level} />
       </div>
       <Evidence items={alert.supporting_evidence} />
+      <RelatedNews items={alert.related_news ?? []} tone="red" />
+      <UpcomingEvents items={alert.upcoming_events ?? []} tone="red" />
     </article>
+  );
+}
+
+function TickerLogo({
+  ticker,
+  companyName,
+  logoUrl,
+  tone = "slate",
+}: {
+  ticker: string;
+  companyName: string;
+  logoUrl?: string | null;
+  tone?: "slate" | "red";
+}) {
+  const initials = companyName
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((word) => word[0]?.toUpperCase())
+    .join("") || ticker.slice(0, 2).toUpperCase();
+  const base =
+    tone === "red"
+      ? "border-red-800 bg-red-900 text-red-100"
+      : "border-slate-700 bg-slate-800 text-slate-100";
+  return (
+    <div
+      className={`flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden border text-xs font-semibold ${base}`}
+      aria-label={`${ticker} logo`}
+    >
+      {logoUrl ? (
+        <img src={logoUrl} alt="" className="h-full w-full object-contain" />
+      ) : (
+        initials
+      )}
+    </div>
   );
 }
 
@@ -486,6 +797,8 @@ function PriceChartPanel({
   chart?: PriceChart | null;
   tone: "slate" | "red";
 }) {
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+
   if (!chart || chart.candles.length < 2) {
     return (
       <div
@@ -515,12 +828,14 @@ function PriceChartPanel({
   if (candles.length < 2) return null;
 
   const width = 720;
+  const plotRight = 662;
+  const yAxisX = 674;
   const priceTop = 12;
   const priceHeight = 150;
   const volumeTop = 184;
   const volumeHeight = 38;
   const xPadding = 18;
-  const step = (width - xPadding * 2) / Math.max(1, candles.length - 1);
+  const step = (plotRight - xPadding) / Math.max(1, candles.length - 1);
   const candleWidth = Math.max(3, Math.min(9, step * 0.52));
   const support = chart.support == null ? null : toNumber(chart.support);
   const resistance = chart.resistance == null ? null : toNumber(chart.resistance);
@@ -568,10 +883,15 @@ function PriceChartPanel({
   const smaPath = linePath(smaPoints.map((point) => [point.x ?? 0, yForPrice(point.value)]));
   const trendPath =
     trend && Number.isFinite(trend.start) && Number.isFinite(trend.end)
-      ? `M ${xForIndex(0)} ${yForPrice(trend.start)} L ${xForIndex(candles.length - 1)} ${yForPrice(
-          trend.end,
-        )}`
+      ? `M ${xForIndex(0)} ${yForPrice(trend.start)} L ${xForIndex(
+          candles.length - 1,
+        )} ${yForPrice(trend.end)}`
       : "";
+  const priceTicks = [paddedMax, paddedMin + (paddedMax - paddedMin) / 2, paddedMin];
+  const hovered =
+    hoveredIndex == null || !candles[hoveredIndex] ? null : candles[hoveredIndex];
+  const hoverX = hoveredIndex == null ? 0 : xForIndex(hoveredIndex);
+  const tooltipX = Math.min(Math.max(hoverX - 68, xPadding), plotRight - 136);
 
   return (
     <div className={`mt-4 border-t ${borderBase} pt-4`}>
@@ -605,22 +925,43 @@ function PriceChartPanel({
         aria-label={`Static OHLCV chart from ${chart.period_start} to ${chart.period_end}`}
         className="h-56 w-full overflow-visible"
         preserveAspectRatio="none"
+        onMouseLeave={() => setHoveredIndex(null)}
       >
-        <line x1="0" y1={priceTop} x2={width} y2={priceTop} className={strokeBase} />
+        <line x1="0" y1={priceTop} x2={plotRight} y2={priceTop} className={strokeBase} />
         <line
           x1="0"
           y1={priceTop + priceHeight}
-          x2={width}
+          x2={plotRight}
           y2={priceTop + priceHeight}
           className={strokeBase}
         />
-        <line x1="0" y1={volumeTop} x2={width} y2={volumeTop} className={strokeBase} />
+        <line x1="0" y1={volumeTop} x2={plotRight} y2={volumeTop} className={strokeBase} />
+        <line x1={plotRight} y1={priceTop} x2={plotRight} y2={priceTop + priceHeight} className={strokeBase} />
+        {priceTicks.map((tick) => (
+          <g key={tick.toFixed(4)}>
+            <line
+              x1="0"
+              y1={yForPrice(tick)}
+              x2={plotRight}
+              y2={yForPrice(tick)}
+              className={strokeBase}
+              opacity="0.45"
+            />
+            <text
+              x={yAxisX}
+              y={yForPrice(tick) + 4}
+              className={tone === "red" ? "fill-red-200 text-[10px]" : "fill-slate-400 text-[10px]"}
+            >
+              {formatPrice(tick)}
+            </text>
+          </g>
+        ))}
 
         {support != null && (
           <ReferenceLine
             y={yForPrice(support)}
             label="support"
-            width={width}
+            width={plotRight}
             color="stroke-sky-400"
           />
         )}
@@ -628,7 +969,7 @@ function PriceChartPanel({
           <ReferenceLine
             y={yForPrice(resistance)}
             label="resistance"
-            width={width}
+            width={plotRight}
             color="stroke-amber-300"
           />
         )}
@@ -647,7 +988,7 @@ function PriceChartPanel({
           const bodyHeight = Math.max(2, bodyBottom - bodyTop);
           const volumeHeightValue = (candle.volume / maxVolume) * volumeHeight;
           return (
-            <g key={`${candle.date}-${index}`}>
+            <g key={`${candle.date}-${index}`} onMouseEnter={() => setHoveredIndex(index)}>
               <line
                 x1={x}
                 y1={yForPrice(candle.high)}
@@ -672,9 +1013,49 @@ function PriceChartPanel({
                 className={isUp ? "fill-emerald-700" : "fill-red-700"}
                 opacity="0.6"
               />
+              <rect
+                x={x - Math.max(step / 2, candleWidth)}
+                y={priceTop}
+                width={Math.max(step, candleWidth + 4)}
+                height={volumeTop + volumeHeight - priceTop}
+                fill="transparent"
+              />
             </g>
           );
         })}
+        {hovered && (
+          <g pointerEvents="none">
+            <line
+              x1={hoverX}
+              y1={priceTop}
+              x2={hoverX}
+              y2={volumeTop + volumeHeight}
+              className="stroke-white"
+              strokeWidth="1"
+              opacity="0.45"
+            />
+            <rect
+              x={tooltipX}
+              y="18"
+              width="136"
+              height="74"
+              className={tone === "red" ? "fill-red-950" : "fill-slate-950"}
+              opacity="0.94"
+            />
+            <text x={tooltipX + 8} y="34" className="fill-slate-100 text-[10px]">
+              {hovered.date}
+            </text>
+            <text x={tooltipX + 8} y="48" className="fill-slate-200 text-[10px]">
+              O {formatPrice(hovered.open)} H {formatPrice(hovered.high)}
+            </text>
+            <text x={tooltipX + 8} y="62" className="fill-slate-200 text-[10px]">
+              L {formatPrice(hovered.low)} C {formatPrice(hovered.close)}
+            </text>
+            <text x={tooltipX + 8} y="76" className="fill-slate-300 text-[10px]">
+              Vol {formatVolume(hovered.volume)}
+            </text>
+          </g>
+        )}
       </svg>
 
       <div className={`mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs ${mutedText}`}>
@@ -759,6 +1140,13 @@ function formatPrice(value: number) {
   return value >= 100 ? value.toFixed(1) : value.toFixed(2);
 }
 
+function formatVolume(value: number) {
+  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)}B`;
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+  return value.toString();
+}
+
 function formatCompactNumber(value: number) {
   if (Math.abs(value) >= 1) return value.toFixed(2);
   return value.toFixed(4);
@@ -777,9 +1165,111 @@ function Evidence({ items }: { items: string[] }) {
   if (items.length === 0) return null;
   return (
     <ul className="mt-4 space-y-2 border-t border-slate-800 pt-4 text-sm text-slate-300">
-      {items.slice(0, 3).map((item) => (
+      {dedupeText(items).slice(0, 3).map((item) => (
         <li key={item}>{item}</li>
       ))}
     </ul>
   );
+}
+
+function RelatedNews({
+  items,
+  tone,
+}: {
+  items: RelatedNewsArticle[];
+  tone: "slate" | "red";
+}) {
+  const border = tone === "red" ? "border-red-900" : "border-slate-800";
+  const title = tone === "red" ? "text-red-100" : "text-slate-100";
+  const muted = tone === "red" ? "text-red-200" : "text-slate-400";
+  return (
+    <section className={`mt-4 border-t ${border} pt-4`}>
+      <h4 className={`text-xs font-semibold uppercase ${muted}`}>Related news</h4>
+      {items.length === 0 ? (
+        <p className={`mt-2 text-sm ${muted}`}>No recent ticker-related articles available.</p>
+      ) : (
+        <div className="mt-3 space-y-3">
+          {items.slice(0, 3).map((item) => {
+            const heading = item.url ? (
+              <a
+                href={item.url}
+                target="_blank"
+                rel="noreferrer"
+                className={`${title} underline decoration-slate-500 underline-offset-4`}
+              >
+                {item.title}
+              </a>
+            ) : (
+              <span className={title}>{item.title}</span>
+            );
+            return (
+              <article key={`${item.source}-${item.title}`}>
+                <div className="text-sm font-medium leading-5">{heading}</div>
+                <p className={`mt-1 text-xs ${muted}`}>
+                  {item.source}
+                  {item.published_at ? ` · ${formatShortDate(item.published_at)}` : ""}
+                </p>
+                {item.summary && (
+                  <p className={`mt-1 text-sm leading-5 ${tone === "red" ? "text-red-100" : "text-slate-300"}`}>
+                    {item.summary}
+                  </p>
+                )}
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function UpcomingEvents({
+  items,
+  tone,
+}: {
+  items: UpcomingTickerEvent[];
+  tone: "slate" | "red";
+}) {
+  const border = tone === "red" ? "border-red-900" : "border-slate-800";
+  const muted = tone === "red" ? "text-red-200" : "text-slate-400";
+  return (
+    <section className={`mt-4 border-t ${border} pt-4`}>
+      <h4 className={`text-xs font-semibold uppercase ${muted}`}>Upcoming events</h4>
+      {items.length === 0 ? (
+        <p className={`mt-2 text-sm ${muted}`}>No upcoming earnings or dividend events available.</p>
+      ) : (
+        <div className="mt-3 grid gap-2 md:grid-cols-2">
+          {items.slice(0, 4).map((item) => (
+            <div key={`${item.event_type}-${item.event_date}`} className={`border ${border} p-3`}>
+              <div className="text-sm font-medium text-slate-100">{item.title}</div>
+              <p className={`mt-1 text-xs ${muted}`}>
+                {formatShortDate(item.event_date)}
+                {item.provider ? ` · ${item.provider}` : ""}
+              </p>
+              {item.source_url && (
+                <a
+                  href={item.source_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className={`mt-2 inline-block text-xs underline underline-offset-4 ${muted}`}
+                >
+                  Source
+                </a>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function dedupeText(items: string[]) {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = item.trim().toLowerCase().replace(/\s+/g, " ");
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }

@@ -151,6 +151,12 @@ Execution tasks:
 - [ ] Implement institutional-flow signal collection with provider fallback behavior.
 - [ ] Implement social/news momentum signal collection with provider fallback behavior.
 - [ ] Implement sector ETF movement collection and ticker-to-sector-ETF mapping.
+- [ ] Make yfinance enrichment signals safe under Yahoo rate limits during Phase 1 scoring.
+  - 2026-06-30 production run note: `Analyze Phase 1 Now` score batch 0 hit Yahoo `429 Too Many Requests` and `crumb=Edge: Too Many Requests` while fetching optional yfinance quoteSummary/options/holder/recommendation data and sector ETF context such as `XLK`.
+  - Treat options, analyst, insider, institutional, and sector-relative yfinance enrichments as optional signals with a circuit breaker after the first clear Yahoo throttling response in a Lambda invocation.
+  - Prefer stored OHLCV, stored market signals, news, earnings, and dividend data for baseline scoring so manual scoring can continue when Yahoo enrichment is unavailable.
+  - Add configuration to disable live yfinance enrichment during manual GitHub Actions scoring runs, or make it opt-in separately from normal stored-data scoring.
+  - Reduce log noise by emitting one structured provider-throttled warning/metric per invocation instead of repeated stack/log lines for each ticker.
 - [ ] Implement candidate scoring with configurable weights for earnings, dividends, price move, volume move, news, options, analyst, insider, institutional, social/news momentum, and sector-relative movement.
   - Current implementation has an initial scoring pipeline; remaining work is to add/configure the full provider signal set and weights.
 - [ ] Implement negative-signal scoring for urgent sell alerts with severity thresholds.
@@ -165,6 +171,13 @@ Execution tasks:
 - [x] Implement a static publisher Lambda or scheduled job that writes latest and historical JSON artifacts to S3.
 - [ ] Optionally generate static HTML pages for top picks and sell alerts after the JSON publisher is stable.
 - [ ] Update the frontend to render top picks and sell alerts from static JSON artifacts.
+- [ ] Improve the published recommendation detail cards for trust and usability.
+  - Show the ticker's real company name prominently, and add a company/ticker logo when a reliable source is available.
+  - Improve static price chart notation: show price values on the y-axis, expose date/price/OHLC/volume values on hover where the chart is interactive, and ensure SMA20 is computed from enough pre-window history so the line is available at the start of the displayed range when possible.
+  - Remove duplicated evidence lines such as repeated analyst recommendation mix text.
+  - Make related news easy to inspect, including article summaries, source/publication date, and links to the original articles.
+  - Add an event calendar section for upcoming earnings, dividends, and other collected ticker events when available.
+  - Keep empty states explicit when logos, news links, or upcoming events are unavailable.
 - [ ] Keep existing authenticated portfolio views separate from Phase 1 global picks.
 - [ ] Add unit tests for candidate scoring, negative-signal thresholds, ranking, and static artifact generation.
   - Candidate scoring, ranking, publication gating, artifact generation, and fallback behavior have unit coverage; remaining work is expanded tests for future provider-backed signal weights and negative thresholds.
