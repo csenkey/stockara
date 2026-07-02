@@ -271,11 +271,9 @@ def _dispatch_ready_tasks(
 ) -> list[str]:
     lambda_client = boto3.client("lambda")
     dispatched: list[str] = []
-    for task in manifest.tasks:
+    for task in _ready_tasks_by_type(manifest, now):
         if len(dispatched) >= MAX_TASKS_PER_RUN:
             break
-        if not _task_is_ready(task, now):
-            continue
         function_name = _worker_function_name(task.task_type)
         if not function_name:
             task.status = CollectionTaskStatus.FAILED
@@ -302,6 +300,36 @@ def _dispatch_ready_tasks(
         )
         dispatched.append(task.task_id)
     return dispatched
+
+
+def _ready_tasks_by_type(
+    manifest: CollectionManifest,
+    now: datetime,
+) -> list[CollectionTask]:
+    """Return ready tasks in a fair task-type round-robin order.
+
+    Manifests contain all price chunks first, followed by news, earnings, and
+    dividend chunks. Walking the raw manifest order can starve the later task
+    types when only a small number of tasks is dispatched each run.
+    """
+    grouped: dict[CollectionTaskType, list[CollectionTask]] = {
+        task_type: [] for task_type in manifest.task_types
+    }
+    for task in manifest.tasks:
+        if _task_is_ready(task, now):
+            grouped.setdefault(task.task_type, []).append(task)
+
+    ordered: list[CollectionTask] = []
+    while True:
+        added = False
+        for task_type in manifest.task_types:
+            tasks = grouped.get(task_type) or []
+            if tasks:
+                ordered.append(tasks.pop(0))
+                added = True
+        if not added:
+            break
+    return ordered
 
 
 def _task_is_ready(task: CollectionTask, now: datetime) -> bool:

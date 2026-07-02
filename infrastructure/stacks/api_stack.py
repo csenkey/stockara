@@ -366,7 +366,7 @@ class ApiStack(Stack):
                 "COLLECTION_PRICE_TASK_CHUNK_SIZE": "10",
                 "COLLECTION_NEWS_TASK_CHUNK_SIZE": "50",
                 "COLLECTION_CALENDAR_TASK_CHUNK_SIZE": "50",
-                "COLLECTION_MAX_TASKS_PER_RUN": "1",
+                "COLLECTION_MAX_TASKS_PER_RUN": "4",
                 "COLLECTION_ANALYSIS_HOUR_UTC": "22",
             },
             description="Creates the daily S3 manifest for bounded collector work",

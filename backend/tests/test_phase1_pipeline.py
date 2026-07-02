@@ -19,6 +19,7 @@ from src.analysis.phase1_pipeline import (
     evaluate_data_freshness,
     publish_payload,
     run_phase1_pipeline,
+    score_candidates,
     select_shortlist,
     upcoming_dividends_summary,
     upcoming_earnings_summary,
@@ -343,6 +344,31 @@ def test_price_volume_signals_include_stored_evidence_signals():
     assert any(signal["signal_type"] == "earnings_transcript" for signal in signals)
     assert any(signal["signal_type"] == "sector_context" for signal in signals)
     assert any(signal["signal_type"] == "macro_context" for signal in signals)
+
+
+def test_score_candidates_skips_live_provider_enrichment_by_default():
+    stock = {"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology"}
+    with (
+        patch.object(phase1_pipeline, "ENABLE_LIVE_SCORING_PROVIDER_SIGNALS", False),
+        patch("src.analysis.phase1_pipeline._price_volume_signals", return_value=[]),
+        patch("src.analysis.phase1_pipeline._news_signals", return_value=[]),
+        patch("src.analysis.phase1_pipeline._event_signals", return_value=[]),
+        patch("src.analysis.phase1_pipeline._options_signals") as options,
+        patch("src.analysis.phase1_pipeline._analyst_signals") as analyst,
+        patch("src.analysis.phase1_pipeline._insider_signals") as insider,
+        patch("src.analysis.phase1_pipeline._institutional_signals") as institutional,
+        patch("src.analysis.phase1_pipeline._sector_relative_signals") as sector,
+        patch("src.analysis.phase1_pipeline.store.put_candidate_score") as put_score,
+    ):
+        scores = score_candidates([stock], date(2026, 6, 17))
+
+    assert scores[0]["ticker"] == "NVDA"
+    options.assert_not_called()
+    analyst.assert_not_called()
+    insider.assert_not_called()
+    institutional.assert_not_called()
+    sector.assert_not_called()
+    put_score.assert_called_once()
 
 
 def test_price_volume_signals_add_multi_day_market_context():

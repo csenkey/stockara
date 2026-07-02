@@ -42,6 +42,10 @@ ALLOW_FALLBACK_ACTIONABLE_RECOMMENDATIONS = (
     os.environ.get("PHASE1_ALLOW_FALLBACK_ACTIONABLE_RECOMMENDATIONS", "false").lower()
     == "true"
 )
+ENABLE_LIVE_SCORING_PROVIDER_SIGNALS = (
+    os.environ.get("PHASE1_ENABLE_LIVE_SCORING_PROVIDER_SIGNALS", "false").lower()
+    == "true"
+)
 
 SECTOR_ETFS = {
     "Technology": "XLK",
@@ -556,11 +560,12 @@ def score_candidates(stocks: list[dict[str, Any]], run_date: date) -> list[dict[
         signals.extend(_price_volume_signals(ticker, run_date))
         signals.extend(_news_signals(ticker, run_date))
         signals.extend(_event_signals(ticker, run_date))
-        signals.extend(_options_signals(ticker))
-        signals.extend(_analyst_signals(ticker))
-        signals.extend(_insider_signals(ticker))
-        signals.extend(_institutional_signals(ticker))
-        signals.extend(_sector_relative_signals(stock, run_date))
+        if ENABLE_LIVE_SCORING_PROVIDER_SIGNALS:
+            signals.extend(_options_signals(ticker))
+            signals.extend(_analyst_signals(ticker))
+            signals.extend(_insider_signals(ticker))
+            signals.extend(_institutional_signals(ticker))
+            signals.extend(_sector_relative_signals(stock, run_date))
 
         opportunity_score = sum(max(0, signal["score"]) for signal in signals)
         negative_score = abs(sum(min(0, signal["score"]) for signal in signals))

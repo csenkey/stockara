@@ -4,6 +4,7 @@ import json
 from datetime import date, datetime, timezone
 from unittest.mock import MagicMock, patch
 
+from src.collectors import collection_distributor
 from src.collectors.collection_distributor import build_manifest, handler
 from src.models.schemas import CollectionTaskStatus, CollectionTaskType
 
@@ -104,6 +105,45 @@ def test_handler_writes_manifest_to_s3(mock_pool, mock_active_stocks, mock_boto_
     assert health_payload["task_counts"]["total"] == 4
     assert health_payload["tasks_by_type"]["price"]["leased"] == 1
     lambda_client.invoke.assert_called_once()
+
+
+@patch("src.collectors.collection_distributor.boto3.client")
+def test_dispatch_ready_tasks_round_robins_task_types(mock_boto_client, monkeypatch):
+    s3 = MagicMock()
+    lambda_client = MagicMock()
+    mock_boto_client.side_effect = lambda service: {
+        "s3": s3,
+        "lambda": lambda_client,
+        "cloudwatch": MagicMock(),
+    }[service]
+    monkeypatch.setattr(collection_distributor, "PRICE_COLLECTOR_FUNCTION_NAME", "price-fn")
+    monkeypatch.setattr(collection_distributor, "NEWS_COLLECTOR_FUNCTION_NAME", "news-fn")
+    monkeypatch.setattr(collection_distributor, "EARNINGS_COLLECTOR_FUNCTION_NAME", "earnings-fn")
+    monkeypatch.setattr(collection_distributor, "DIVIDEND_COLLECTOR_FUNCTION_NAME", "dividend-fn")
+    monkeypatch.setattr(collection_distributor, "MAX_TASKS_PER_RUN", 4)
+    manifest = build_manifest(
+        [{"ticker": f"T{index:03d}"} for index in range(1, 26)],
+        manifest_date=date(2026, 6, 20),
+        generated_at=datetime(2026, 6, 20, 7, 30, tzinfo=timezone.utc),
+    )
+
+    dispatched = collection_distributor._dispatch_ready_tasks(
+        "stockara-artifacts",
+        "collection_manifest/2026-06-20.json",
+        manifest,
+        datetime(2026, 6, 20, 7, 31, tzinfo=timezone.utc),
+    )
+
+    assert dispatched == [
+        "price-0000-T001-T010",
+        "news-0000-T001-T025",
+        "earnings-0000-T001-T025",
+        "dividend-0000-T001-T025",
+    ]
+    invoked_functions = [
+        call.kwargs["FunctionName"] for call in lambda_client.invoke.call_args_list
+    ]
+    assert invoked_functions == ["price-fn", "news-fn", "earnings-fn", "dividend-fn"]
 
 
 @patch("src.collectors.collection_distributor.DatabasePool")

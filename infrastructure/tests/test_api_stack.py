@@ -106,7 +106,7 @@ def test_calendar_collector_lambdas_and_schedules_are_created():
                         "COLLECTION_PRICE_TASK_CHUNK_SIZE": "10",
                         "COLLECTION_NEWS_TASK_CHUNK_SIZE": "50",
                         "COLLECTION_CALENDAR_TASK_CHUNK_SIZE": "50",
-                        "COLLECTION_MAX_TASKS_PER_RUN": "1",
+                        "COLLECTION_MAX_TASKS_PER_RUN": "4",
                     }
                 )
             },
