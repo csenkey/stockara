@@ -45,6 +45,18 @@ def test_cloudfront_distribution_created():
     )
 
 
+def test_cloudfront_ipv6_is_disabled():
+    """Verify CloudFront does not publish IPv6 addresses."""
+    app = cdk.App()
+    stack = FrontendStack(app, "TestFrontend")
+    template = assertions.Template.from_stack(stack)
+
+    template.has_resource_properties(
+        "AWS::CloudFront::Distribution",
+        {"DistributionConfig": {"IPV6Enabled": False}},
+    )
+
+
 def test_cloudfront_custom_error_responses_for_spa():
     """Verify 403 and 404 redirect to index.html for SPA routing."""
     app = cdk.App()

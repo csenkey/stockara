@@ -48,6 +48,9 @@ class FrontendStack(Stack):
         self.distribution = cloudfront.Distribution(
             self,
             "SiteDistribution",
+            # Some client networks advertise IPv6 but cannot complete CloudFront
+            # connections, causing browser timeouts before IPv4 fallback.
+            enable_ipv6=False,
             default_behavior=cloudfront.BehaviorOptions(
                 origin=origins.S3BucketOrigin.with_origin_access_control(
                     self.site_bucket
