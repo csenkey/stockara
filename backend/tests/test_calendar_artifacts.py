@@ -19,6 +19,10 @@ def test_publish_calendar_artifacts_writes_latest_collection_and_ticker_views(mo
         range_start=date(2021, 7, 4),
         range_end=date(2026, 10, 31),
         selected_tickers=["AAPL", "MSFT"],
+        collection_status="degraded",
+        provider_health={"status": "degraded", "provider": "yfinance"},
+        warnings=["provider warning"],
+        zero_event_tickers=["MSFT"],
         events=[
             {
                 "ticker": "AAPL",
@@ -49,6 +53,10 @@ def test_publish_calendar_artifacts_writes_latest_collection_and_ticker_views(mo
     assert latest_payload["range_start"] == "2021-07-04"
     assert latest_payload["range_end"] == "2026-10-31"
     assert latest_payload["event_count"] == 2
+    assert latest_payload["collection_status"] == "degraded"
+    assert latest_payload["provider_health"]["provider"] == "yfinance"
+    assert latest_payload["warnings"] == ["provider warning"]
+    assert latest_payload["zero_event_tickers"] == ["MSFT"]
     assert latest_payload["events"][0]["event_date"] == "2026-07-30"
 
 

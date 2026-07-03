@@ -22,6 +22,10 @@ def publish_calendar_artifacts(
     range_start: date,
     range_end: date,
     selected_tickers: list[str],
+    collection_status: str = "success",
+    provider_health: dict[str, Any] | None = None,
+    warnings: list[str] | None = None,
+    zero_event_tickers: list[str] | None = None,
 ) -> None:
     """Publish normalized calendar events to stable S3 paths."""
     if not bucket:
@@ -36,6 +40,10 @@ def publish_calendar_artifacts(
         "selected_ticker_count": len(selected_tickers),
         "selected_tickers": sorted(set(selected_tickers)),
         "event_count": len(normalized_events),
+        "collection_status": collection_status,
+        "provider_health": provider_health or {"status": "ok"},
+        "warnings": warnings or [],
+        "zero_event_tickers": sorted(set(zero_event_tickers or [])),
         "events": normalized_events,
     }
     _safe_publish(

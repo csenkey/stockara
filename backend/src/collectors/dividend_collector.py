@@ -69,6 +69,7 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
         failed_tickers: list[str] = []
         collected_events: list[dict[str, Any]] = []
         provider_events: list[dict[str, Any]] = []
+        zero_event_tickers: list[str] = []
 
         for stock in stocks:
             ticker = stock["ticker"]
@@ -86,10 +87,20 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
                     store.put_dividend_event(enriched)
                     collected_events.append(enriched)
                     stored_count += 1
+                if not events:
+                    zero_event_tickers.append(ticker)
             except Exception as exc:
                 failed_tickers.append(ticker)
                 log.warning("dividend_ticker_collection_failed", ticker=ticker, error=str(exc))
 
+        provider_health = _build_provider_health(
+            selected_ticker_count=len(stocks),
+            stored_count=stored_count,
+            provider_event_count=len(provider_events),
+            failed_tickers=failed_tickers,
+        )
+        warnings = _calendar_warnings(provider_health)
+        response_status = _response_status(failed_tickers, provider_health)
         publish_calendar_artifacts(
             bucket=str(event.get("artifact_bucket") or ARTIFACT_BUCKET),
             event_type="dividends",
@@ -98,6 +109,10 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
             range_start=range_start,
             range_end=range_end,
             selected_tickers=[stock["ticker"] for stock in stocks],
+            collection_status=response_status,
+            provider_health=provider_health,
+            warnings=warnings,
+            zero_event_tickers=zero_event_tickers,
         )
         publish_calendar_provider_snapshots(
             bucket=str(event.get("artifact_bucket") or ARTIFACT_BUCKET),
@@ -111,11 +126,17 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
 
         _emit_metric("dividend_events_collected", stored_count)
         _emit_metric("dividend_collection_failed_tickers", len(failed_tickers))
+        _emit_metric("dividend_zero_event_tickers", len(zero_event_tickers))
+        _emit_metric(
+            "dividend_provider_degraded_runs",
+            1 if provider_health["status"] == "degraded" else 0,
+        )
         log.info(
             "dividend_collector_completed",
             selected_ticker_count=len(stocks),
             events_collected=stored_count,
             failed_ticker_count=len(failed_tickers),
+            provider_health=provider_health,
         )
         if manifest_task_run:
             _complete_manifest_task_run(
@@ -127,10 +148,13 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
         return {
             "statusCode": 200,
             "body": {
-                "status": "partial" if failed_tickers else "success",
+                "status": response_status,
                 "events_collected": stored_count,
                 "selected_ticker_count": len(stocks),
                 "failed_tickers": failed_tickers,
+                "zero_event_tickers": zero_event_tickers,
+                "provider_health": provider_health,
+                "warnings": warnings,
             },
         }
     except Exception as exc:
@@ -147,6 +171,46 @@ def _select_stocks(stocks: list[dict[str, Any]], event: dict[str, Any]) -> list[
         stocks = [stock for stock in stocks if stock["ticker"] in requested]
     max_tickers = int(event.get("max_tickers", MAX_TICKERS_PER_RUN))
     return sorted(stocks, key=lambda stock: stock["ticker"])[:max_tickers]
+
+
+def _build_provider_health(
+    *,
+    selected_ticker_count: int,
+    stored_count: int,
+    provider_event_count: int,
+    failed_tickers: list[str],
+) -> dict[str, Any]:
+    if selected_ticker_count <= 0:
+        return {"status": "ok", "provider": "yfinance"}
+    if stored_count == 0 and provider_event_count == 0 and not failed_tickers:
+        return {
+            "status": "degraded",
+            "provider": "yfinance",
+            "reason": "provider_returned_zero_events",
+            "message": (
+                "No dividend events or raw provider rows were collected for the "
+                "selected tickers. Recent runs show yfinance 429 throttling, so "
+                "this should be treated as a provider/data-quality gap."
+            ),
+        }
+    return {"status": "ok", "provider": "yfinance"}
+
+
+def _calendar_warnings(provider_health: dict[str, Any]) -> list[str]:
+    if provider_health.get("status") == "degraded":
+        return [str(provider_health.get("message") or provider_health.get("reason"))]
+    return []
+
+
+def _response_status(
+    failed_tickers: list[str],
+    provider_health: dict[str, Any],
+) -> str:
+    if provider_health.get("status") == "degraded":
+        return "degraded"
+    if failed_tickers:
+        return "partial"
+    return "success"
 
 
 def _prepare_manifest_task_run(

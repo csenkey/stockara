@@ -151,6 +151,42 @@ def test_handler_collects_and_stores_events(mock_store, mock_pool, mock_fetch, m
     mock_metric.assert_any_call("dividend_events_collected", 1)
 
 
+@patch("backend.src.collectors.dividend_collector.publish_calendar_artifacts")
+@patch("backend.src.collectors.dividend_collector.publish_calendar_provider_snapshots")
+@patch("backend.src.collectors.dividend_collector._emit_metric")
+@patch("backend.src.collectors.dividend_collector.fetch_dividend_events")
+@patch("backend.src.collectors.dividend_collector.DatabasePool")
+@patch("backend.src.collectors.dividend_collector.store")
+def test_handler_marks_zero_provider_rows_as_degraded(
+    mock_store,
+    mock_pool,
+    mock_fetch,
+    mock_metric,
+    mock_provider_publish,
+    mock_calendar_publish,
+):
+    mock_store.active_stock_metadata.return_value = [
+        {"ticker": "AAPL", "company_name": "Apple"},
+        {"ticker": "MSFT", "company_name": "Microsoft"},
+    ]
+    mock_fetch.return_value = []
+
+    result = handler({"max_tickers": 2}, None)
+
+    body = result["body"]
+    assert body["status"] == "degraded"
+    assert body["events_collected"] == 0
+    assert body["zero_event_tickers"] == ["AAPL", "MSFT"]
+    assert body["provider_health"]["reason"] == "provider_returned_zero_events"
+    mock_metric.assert_any_call("dividend_provider_degraded_runs", 1)
+    mock_calendar_publish.assert_called_once()
+    assert mock_calendar_publish.call_args.kwargs["collection_status"] == "degraded"
+    assert (
+        mock_calendar_publish.call_args.kwargs["provider_health"]["reason"]
+        == "provider_returned_zero_events"
+    )
+
+
 @patch("backend.src.collectors.dividend_collector.write_manifest")
 @patch("backend.src.collectors.dividend_collector.load_manifest")
 @patch("backend.src.collectors.dividend_collector._emit_metric")
