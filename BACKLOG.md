@@ -48,13 +48,63 @@ Execution tasks:
 - [x] Add a collector runbook covering secret setup, first daily run, manual retry, provider outage triage, and how to quarantine bad tickers.
 - [x] Add integration tests with mocked providers for manifest creation, task claiming, retry behavior, partial provider failure, and analysis gating.
 
-Nice-to-have follow-up:
+Critical calendar follow-up:
 
-- [ ] Improve earnings and dividend calendar completeness.
-  - Add top-level calendar visibility to the public frontend so missing upcoming events are obvious instead of hidden inside recommendation cards.
+- [ ] Build an S3 calendar data lake for earnings and dividends.
+  - Treat calendar events as source-of-truth market data, like ticker OHLCV price files.
+  - Persist raw provider responses in S3 before normalization so provider gaps, schema changes, and bad rows can be reprocessed without refetching.
+  - Persist normalized daily calendar artifacts in S3 for earnings and dividends, partitioned by event type, provider, collection date, and event date.
+  - Suggested paths:
+    - `calendar/raw/earnings/provider={provider}/collection_date={YYYY-MM-DD}/...`
+    - `calendar/raw/dividends/provider={provider}/collection_date={YYYY-MM-DD}/...`
+    - `calendar/normalized/earnings/event_date={YYYY-MM-DD}/events.json`
+    - `calendar/normalized/dividends/event_date={YYYY-MM-DD}/events.json`
+    - `calendar/by-ticker/{ticker}/earnings.json`
+    - `calendar/by-ticker/{ticker}/dividends.json`
+  - Include provider symbol, canonical ticker, provider name, fetched URL or endpoint, collected timestamp, normalized timestamp, and row-level validation status.
+  - Keep S3 as the durable truth even if normalized/indexed records are also written to DynamoDB.
+- [ ] Index normalized calendar events into DynamoDB for analysis.
+  - Store derived/indexed event records for fast analyzer lookup by ticker and event date.
+  - Earnings fields should include ticker, company name, fiscal quarter/year, event date, time of day, confirmed/estimated status, EPS estimate, EPS actual, revenue estimate, revenue actual, surprise percent, provider, source URL, and confidence/provenance.
+  - Dividend fields should include ticker, company name, ex-dividend date, pay date, declaration date when available, record date when available, amount, currency, yield, frequency, provider, source URL, and confidence/provenance.
+  - Preserve idempotency with deterministic keys such as `EARNINGS#{ticker}#{event_date}` and `DIVIDEND#{ticker}#{ex_dividend_date}`.
+  - Add duplicate/provider-conflict handling so multiple providers can enrich the same canonical event without overwriting stronger fields with weaker empty values.
+- [ ] Add provider coverage and fallback strategy for calendar collection.
   - Earnings collection should use bulk provider calendars during manifest chunks, not only per-ticker yfinance rows.
-  - Dividend collection still needs a second source or fallback strategy for future ex-dividend/pay-date coverage because current collection depends mostly on Yahoo dividend history and quote metadata.
+  - Dividend collection needs a second source or fallback strategy for future ex-dividend/pay-date coverage because current collection depends mostly on Yahoo dividend history and quote metadata.
+  - Evaluate and add at least one secondary calendar provider for earnings and dividends, such as Finnhub, Nasdaq, Alpha Vantage, Financial Modeling Prep, Polygon, or another affordable source.
+  - Track provider health separately for `raw_fetch_failed`, `empty_response`, `unsupported_symbol`, `schema_changed`, `rate_limited`, and `symbol_mapping_needed`.
   - Publish explicit warnings when the latest artifact has no earnings or no dividend calendar signals.
+- [ ] Backfill historical earnings and dividend events.
+  - Backfill at least 2 years of historical earnings events for the active watchlist, with a path to extend to 5 years when provider limits and cost allow.
+  - Backfill dividend history where available, including ex-dividend date, amount, and pay date when a provider supplies it.
+  - Run backfills as bounded manifest tasks or Step Functions/SQS-style jobs rather than long single Lambda invocations.
+  - Store every backfilled raw response and normalized result in S3, then index normalized events into DynamoDB.
+  - Add progress/coverage artifacts so the frontend and data-health page can distinguish "collector has not run yet" from "provider returned no events".
+- [ ] Build historical earnings reaction features.
+  - Join normalized historical earnings events with stored OHLCV prices.
+  - Compute close-before to close-after move, next-open gap, 1-day/3-day/5-day/10-day post-earnings returns, pre-earnings 5-day/20-day trend, post-earnings trend, and volume spike.
+  - Compute average move, average absolute move, beat/miss reaction, positive-surprise reaction, negative-surprise reaction, and sample size per ticker.
+  - Tag events by reported result: EPS beat/miss/inline, revenue beat/miss/inline, surprise magnitude, and guidance/news tone where available.
+  - Persist reaction features to S3 under `calendar/features/earnings-reactions/ticker={ticker}/...` and index summary features for analyzer use.
+- [ ] Add upcoming earnings expectation scoring.
+  - For each upcoming earnings event, estimate better-than-expected, worse-than-expected, and high-volatility probabilities.
+  - Inputs should include historical ticker beat/miss rate, average earnings reaction, recent estimate revisions, related news sentiment, price/volume trend, sector trend, prior guidance, and peer earnings where available.
+  - Output a compact analyzer feature block with event date/time, EPS/revenue estimates, historical reaction profile, current setup, missing evidence, and confidence.
+  - Do not let the model treat upcoming earnings as a bullish catalyst by default; separate expected direction from expected volatility.
+- [ ] Integrate calendar intelligence into candidate scoring and AI analysis.
+  - Candidate scoring should prioritize near-term earnings/dividend events only when supported by historical reaction and current setup evidence.
+  - AI prompts should include compact event context: next event, estimates, past reaction statistics, beat/miss history, recent revisions, and missing data warnings.
+  - Review-gate criteria should reject recommendations that cite earnings without showing the expected result, historical reaction, and event risk.
+  - Withheld recommendation `needed_evidence` should point to concrete missing calendar artifacts or reaction features when earnings/dividend context is absent.
+- [ ] Upgrade the public calendar UI into a decision-support surface.
+  - Keep the top-level calendar page and show upcoming earnings/dividends even when no recommendations exist.
+  - Add ticker-level event detail with historical reaction averages, last earnings result, EPS/revenue expectation, beat/miss history, expected volatility, and data completeness status.
+  - Show empty states that distinguish "no upcoming events found", "collector did not run", "provider failed", and "event exists but lacks estimates/reaction history".
+  - Link calendar events from Top Picks, Urgent Sell Alerts, and Withheld recommendation cards.
+  - Include data freshness/provenance for each event so humans can trust or discount it.
+
+Nice-to-have follow-up:
 - [ ] Rework one-time 5-year historical OHLCV restoration to avoid Lambda recursive-loop detection.
   - Context: AWS reported recursive invocation termination on 2026-06-19, likely from the chained Stooq/historical backfill path. That may explain why roughly one year of stock history loaded instead of the intended five years.
   - Prefer Step Functions, SQS, or EventBridge Scheduler over Lambda self-invocation for long backfill runs.
