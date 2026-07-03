@@ -27,7 +27,7 @@ logger = structlog.get_logger(__name__)
 
 CLOUDWATCH_NAMESPACE = "StockMonitoring"
 DEFAULT_LOOKBACK_DAYS = 730
-DEFAULT_LOOKAHEAD_DAYS = int(os.environ.get("EARNINGS_CALENDAR_LOOKAHEAD_DAYS", "14"))
+DEFAULT_LOOKAHEAD_DAYS = int(os.environ.get("EARNINGS_CALENDAR_LOOKAHEAD_DAYS", "45"))
 DEFAULT_LIMIT = 12
 MAX_TICKERS_PER_RUN = 50
 FINNHUB_EARNINGS_CALENDAR_URL = "https://finnhub.io/api/v1/calendar/earnings"
