@@ -178,6 +178,35 @@ Execution tasks:
   - Make related news easy to inspect, including article summaries, source/publication date, and links to the original articles.
   - Add an event calendar section for upcoming earnings, dividends, and other collected ticker events when available.
   - Keep empty states explicit when logos, news links, or upcoming events are unavailable.
+- [ ] Add company intelligence details to ticker cards.
+  - Prefer a compact inline expansion or side drawer opened from the ticker card/info icon, rather than a blocking modal, so users can compare Top Picks, Urgent Sell Alerts, and Withheld recommendations without losing page context.
+  - Include a brief company description, top products or business segments, brief history, headquarters/exchange/industry when available, website, and metadata provenance.
+  - Extend the stock metadata contract and enrichment collector if current metadata is missing these fields; cache provider results and keep empty states explicit when a profile source is unavailable.
+  - Make the interaction keyboard accessible and mobile-friendly, with one expanded/detail surface at a time on small screens.
+  - Add frontend tests or build fixtures for cards with full company info, partial info, and no info.
+- [ ] Give Withheld AI Recommendations the same decision-support context as published picks.
+  - Render supporting evidence, recent related news, and upcoming event calendar details for withheld recommendations, not only Top Picks and Urgent Sell Alerts.
+  - Ensure `review_rejections` in `top-picks/latest.json` includes `related_news`, `upcoming_events`, `price_chart`, `supporting_evidence`, source traceability, and company metadata with the same shape used by public picks/alerts where possible.
+  - Group withheld rows by rejection category or missing-evidence theme so the section is useful for human research instead of reading like discarded output.
+  - Keep reviewer concerns and "Needed" text visible, but add links from each needed item to the evidence/news/events/company sections that could resolve it.
+  - Add empty states that distinguish "no relevant evidence found" from "collector did not run or provider failed".
+- [ ] Convert latest withheld recommendation "Needed" notes into a data collection plan.
+  - Fetch the latest published `top-picks/latest.json` artifact, inspect `review_rejections`, and summarize withheld tickers by recommendation, rejection category, concern, and `what_would_make_approvable`.
+  - Latest inspected artifact: `https://dbrz5lfasrion.cloudfront.net/top-picks/latest.json`, publication date `2026-07-02`, generated at `2026-07-02T22:03:47.805829`, with 904 candidates, 50 analyzed, 0 top picks, 0 sell alerts, and 13 withheld actionable AI recommendations.
+  - Latest withheld distribution: 10 BUY and 3 SELL recommendations; 12 rejected as `insufficient_support` and 1 as `insufficient_support_and_data_quality`.
+  - Latest withheld tickers: BUY `AXON`, `ABBV`, `AAL`, `ADPT`, `ACHC`, `AGIO`, `AMPL`, `AGYS`, `ALGM`, `ANET`; SELL `VZ`, `SMCI`, `T`.
+  - Classify each needed item into actionable collection gaps such as fresh ticker-specific news, earnings transcript or guidance, multi-day OHLCV confirmation, sector-relative movement, analyst rating change, insider/institutional activity, options activity, social/news momentum, or company profile context.
+  - Highest-priority latest gaps:
+    - Extract and summarize SEC 8-K substance instead of citing the filing generically; most withheld BUY rows mention an unexplained 8-K.
+    - Add valuation and fundamental context: revenue, margins, guidance, peer/history valuation, downside risk, and business impact.
+    - Correct metadata/sector quality for misclassified tickers such as `AAL`, `AGIO`, `VZ`, and `T`.
+    - Add company-specific catalyst verification so broad market/news items do not masquerade as ticker evidence.
+    - Add technical confirmation context for momentum-driven calls: support/resistance, breakout/invalidation levels, multi-session volume confirmation, relative performance, and trade horizon.
+    - For SELL calls, require recent company-specific negative catalysts such as earnings/guidance deterioration, analyst estimate cuts, adverse news, margin/order concerns, regulatory/accounting risk, or sustained relative underperformance.
+  - Add a structured `needed_evidence` array to withheld rows so the frontend can show "what is missing", "how to collect it", "provider/status", and "next retry or fallback" instead of only free-text reviewer prose.
+  - Wire collector manifests and provider health into the needed evidence plan so missing data can point to concrete tasks, unsupported tickers, rate limits, stale inputs, or symbol-mapping work.
+  - Prioritize new collectors/fallbacks based on the latest withheld distribution, with the first implementation pass focused on the evidence gaps that suppress the most otherwise-actionable recommendations.
+  - Current artifact shape note: withheld rows already include `related_news` for 9 of 13 rows, `price_chart` for all 13, `supporting_evidence` for all 13, and `upcoming_events` as empty arrays; they do not currently include `source_traceability`.
 - [ ] Keep existing authenticated portfolio views separate from Phase 1 global picks.
 - [ ] Add unit tests for candidate scoring, negative-signal thresholds, ranking, and static artifact generation.
   - Candidate scoring, ranking, publication gating, artifact generation, and fallback behavior have unit coverage; remaining work is expanded tests for future provider-backed signal weights and negative thresholds.

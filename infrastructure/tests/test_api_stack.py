@@ -120,6 +120,13 @@ def test_calendar_collector_lambdas_and_schedules_are_created():
         },
     )
     template.has_resource_properties(
+        "AWS::CloudFormation::CustomResource",
+        {
+            "SellAlertTickers": "AAPL,MSFT,NVDA",
+            "SeedHash": assertions.Match.string_like_regexp("^[0-9a-f]{64}$"),
+        },
+    )
+    template.has_resource_properties(
         "AWS::Lambda::Function",
         {
             "FunctionName": "stockara-codex-test-earnings-collector",

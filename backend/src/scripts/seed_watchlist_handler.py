@@ -218,7 +218,9 @@ def _update_stock_metadata(table: Any, item: dict[str, Any]) -> None:
     )
 
 
-def sync_static_metadata(table: Any, sell_alert_tickers: set[str]) -> dict[str, int]:
+def sync_static_metadata(
+    table: Any, sell_alert_tickers: set[str], *, strict: bool = True
+) -> dict[str, int]:
     summary = {
         "created": 0,
         "changed": 0,
@@ -231,7 +233,9 @@ def sync_static_metadata(table: Any, sell_alert_tickers: set[str]) -> dict[str, 
                 item = _build_stock_item(row, sell_alert_tickers)
             except ValueError:
                 summary["invalid"] += 1
-                raise
+                if strict:
+                    raise
+                continue
             existing = table.get_item(
                 Key={"PK": item["PK"], "SK": item["SK"]}
             ).get("Item")
@@ -278,9 +282,17 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         Limit=1,
     ).get("Count", 0)
     if existing:
+        summary = sync_static_metadata(table, sell_alert_tickers, strict=False)
         return {
             "PhysicalResourceId": f"{table_name}-watchlist-seed",
-            "Data": {"Seeded": 0, "Skipped": True},
+            "Data": {
+                "Seeded": summary["created"],
+                "Skipped": True,
+                "MetadataCreated": summary["created"],
+                "MetadataChanged": summary["changed"],
+                "MetadataUnchanged": summary["unchanged"],
+                "MetadataInvalid": summary["invalid"],
+            },
         }
 
     seeded = 0

@@ -66,12 +66,42 @@ interface UpcomingTickerEvent {
   details?: Record<string, number | string | null>;
 }
 
+interface CompanyInfo {
+  description?: string;
+  top_products?: string[];
+  revenue_segments?: string[];
+  industry?: string;
+  exchange?: string;
+  currency?: string;
+  country?: string;
+  website?: string;
+  founded_year?: number | string;
+  headquarters?: string;
+  ipo_year?: number | string;
+  market_cap?: number | string;
+  competitive_position?: string;
+  key_static_risks?: string[];
+  metadata_source?: string;
+  metadata_source_url?: string;
+  metadata_as_of?: string;
+  brief_history?: string;
+}
+
+interface NeededEvidence {
+  gap_type: string;
+  title: string;
+  status: string;
+  collection_plan: string;
+  source_candidates: string[];
+}
+
 interface TopPick {
   rank: number;
   ticker: string;
   company_name: string;
   sector: string;
   logo_url?: string | null;
+  company_info?: CompanyInfo;
   recommendation: "BUY" | "HOLD" | "SELL";
   risk_level: "LOW" | "MEDIUM" | "HIGH";
   confidence_score: number;
@@ -92,6 +122,7 @@ interface SellAlert {
   company_name: string;
   sector: string;
   logo_url?: string | null;
+  company_info?: CompanyInfo;
   severity: string;
   risk_level: "LOW" | "MEDIUM" | "HIGH";
   confidence_score: number;
@@ -108,6 +139,8 @@ interface ReviewRejection {
   ticker: string;
   company_name: string;
   sector?: string;
+  logo_url?: string | null;
+  company_info?: CompanyInfo;
   recommendation: "BUY" | "SELL";
   risk_level: "LOW" | "MEDIUM" | "HIGH";
   confidence_score: number;
@@ -117,6 +150,8 @@ interface ReviewRejection {
   analyst_reasoning: string;
   invalidation_criteria: string;
   supporting_evidence: string[];
+  source_traceability?: SignalSource[];
+  needed_evidence?: NeededEvidence[];
   ai_review: AiReview;
   price_chart?: PriceChart | null;
   related_news?: RelatedNewsArticle[];
@@ -192,6 +227,24 @@ function createDemoPayload(): TopPicksPayload {
         ticker: "AAPL",
         company_name: "Apple Inc.",
         sector: "Technology",
+        company_info: {
+          description:
+            "Apple designs consumer electronics, software platforms, and services around an integrated hardware and ecosystem strategy.",
+          top_products: ["iPhone", "Mac", "iPad", "Services"],
+          revenue_segments: ["Products", "Services"],
+          industry: "Consumer Electronics",
+          exchange: "NASDAQ",
+          currency: "USD",
+          country: "United States",
+          website: "https://www.apple.com",
+          founded_year: 1976,
+          headquarters: "Cupertino, California",
+          ipo_year: 1980,
+          metadata_source: "demo_company_profile",
+          metadata_as_of: "2026-07-02",
+          brief_history:
+            "Founded in 1976; headquartered in Cupertino, California; IPO in 1980.",
+        },
         recommendation: "BUY",
         risk_level: "MEDIUM",
         confidence_score: 78,
@@ -257,6 +310,24 @@ function createDemoPayload(): TopPicksPayload {
         ticker: "TSLA",
         company_name: "Tesla, Inc.",
         sector: "Consumer Discretionary",
+        company_info: {
+          description:
+            "Tesla designs electric vehicles, energy storage systems, solar products, and related software-enabled services.",
+          top_products: ["Model Y", "Model 3", "Energy storage"],
+          revenue_segments: ["Automotive", "Energy generation and storage", "Services"],
+          industry: "Auto Manufacturing",
+          exchange: "NASDAQ",
+          currency: "USD",
+          country: "United States",
+          website: "https://www.tesla.com",
+          founded_year: 2003,
+          headquarters: "Austin, Texas",
+          ipo_year: 2010,
+          metadata_source: "demo_company_profile",
+          metadata_as_of: "2026-07-02",
+          brief_history:
+            "Founded in 2003; headquartered in Austin, Texas; IPO in 2010.",
+        },
         severity: "high",
         risk_level: "HIGH",
         confidence_score: 66,
@@ -294,7 +365,65 @@ function createDemoPayload(): TopPicksPayload {
         ],
       },
     ],
-    review_rejections: [],
+    review_rejections: [
+      {
+        ticker: "AXON",
+        company_name: "Axon Enterprise, Inc.",
+        sector: "Industrials",
+        recommendation: "BUY",
+        risk_level: "MEDIUM",
+        confidence_score: 71,
+        opportunity_score: 436,
+        negative_score: 0,
+        catalyst: "Momentum and public-safety demand signals need stronger confirmation",
+        analyst_reasoning:
+          "The analyst setup is interesting, but the reviewer withheld publication until the evidence explains fundamental impact and downside risk.",
+        invalidation_criteria:
+          "Breakout failure, weaker public-safety demand, or lack of follow-through would invalidate the setup.",
+        supporting_evidence: [
+          "AXON traded above recent moving averages with expanded volume.",
+          "Reviewer requested clearer earnings, guidance, valuation, and company-specific catalyst evidence.",
+        ],
+        source_traceability: [
+          { provider: "demo_price_data", observed_at: "2026-07-02T17:00:00Z" },
+        ],
+        needed_evidence: [
+          {
+            gap_type: "fundamental_valuation_context",
+            title: "Fundamental and valuation context",
+            status: "needed",
+            collection_plan:
+              "Collect recent earnings metrics, guidance changes, valuation context, and downside risk before publication.",
+            source_candidates: ["earnings release", "SEC filing", "fundamentals provider"],
+          },
+          {
+            gap_type: "technical_confirmation",
+            title: "Technical confirmation and trade horizon",
+            status: "needed",
+            collection_plan:
+              "Add breakout level, invalidation price, multi-session volume confirmation, and trade horizon.",
+            source_candidates: ["stored OHLCV", "sector ETF context"],
+          },
+        ],
+        ai_review: {
+          status: "rejected",
+          model: "gpt-5.4",
+          approved: false,
+          rationale:
+            "The thesis relies too heavily on price momentum without enough company-specific support.",
+          concerns: [
+            "Overreliance on recent price momentum",
+            "No valuation or downside context",
+          ],
+          rejection_category: "insufficient_support",
+          what_would_make_approvable:
+            "Add concrete earnings metrics, guidance changes, valuation context, and explicit invalidation levels.",
+        },
+        price_chart,
+        related_news: [],
+        upcoming_events: [],
+      },
+    ],
     candidate_count: 42,
     analyzed_count: 8,
     data_quality: {
@@ -594,15 +723,18 @@ function ReviewRejectionRow({ row }: { row: ReviewRejection }) {
   return (
     <article className="border border-slate-700 bg-slate-900 p-4">
       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-        <div>
-          <div className="text-xs uppercase text-slate-500">
-            Analyst proposed {row.recommendation}
+        <div className="flex min-w-0 items-start gap-3">
+          <TickerLogo ticker={row.ticker} companyName={row.company_name} logoUrl={row.logo_url} />
+          <div className="min-w-0">
+            <div className="text-xs uppercase text-slate-500">
+              Analyst proposed {row.recommendation}
+            </div>
+            <h3 className="mt-1 text-lg font-semibold">{row.ticker}</h3>
+            <p className="mt-1 text-sm text-slate-400">
+              {row.company_name}
+              {row.sector ? ` · ${row.sector}` : ""}
+            </p>
           </div>
-          <h3 className="mt-1 text-lg font-semibold">{row.ticker}</h3>
-          <p className="mt-1 text-sm text-slate-400">
-            {row.company_name}
-            {row.sector ? ` · ${row.sector}` : ""}
-          </p>
         </div>
         <div className="flex flex-wrap gap-2 text-xs">
           <span className={`border px-2 py-1 ${badgeClass(row.risk_level)}`}>
@@ -620,6 +752,7 @@ function ReviewRejectionRow({ row }: { row: ReviewRejection }) {
         </div>
       </div>
 
+      <CompanyInfoPanel companyName={row.company_name} info={row.company_info} tone="slate" />
       <PriceChartPanel chart={row.price_chart} tone="slate" />
 
       <div className="mt-4 grid gap-4 text-sm lg:grid-cols-2">
@@ -648,6 +781,8 @@ function ReviewRejectionRow({ row }: { row: ReviewRejection }) {
         </div>
       </div>
 
+      <NeededEvidence items={row.needed_evidence ?? []} />
+
       {row.ai_review.concerns.length > 0 && (
         <ul className="mt-4 space-y-1 border-t border-slate-800 pt-3 text-sm text-slate-400">
           {row.ai_review.concerns.map((concern) => (
@@ -655,6 +790,11 @@ function ReviewRejectionRow({ row }: { row: ReviewRejection }) {
           ))}
         </ul>
       )}
+
+      <Evidence items={row.supporting_evidence} />
+      <RelatedNews items={row.related_news ?? []} tone="slate" />
+      <UpcomingEvents items={row.upcoming_events ?? []} tone="slate" />
+      <SourceTraceability items={row.source_traceability ?? []} tone="slate" />
     </article>
   );
 }
@@ -702,6 +842,7 @@ function PickRow({ pick }: { pick: TopPick }) {
           </span>
         </div>
       </div>
+      <CompanyInfoPanel companyName={pick.company_name} info={pick.company_info} tone="slate" />
       <p className="mt-4 text-sm font-medium text-slate-100">{pick.catalyst}</p>
       <p className="mt-2 text-sm leading-6 text-slate-300">{pick.rationale}</p>
       <PriceChartPanel chart={pick.price_chart} tone="slate" />
@@ -739,6 +880,7 @@ function SellAlertRow({ alert }: { alert: SellAlert }) {
           {alert.severity}
         </span>
       </div>
+      <CompanyInfoPanel companyName={alert.company_name} info={alert.company_info} tone="red" />
       <p className="mt-4 text-sm font-medium text-red-50">
         {alert.negative_catalyst}
       </p>
@@ -752,6 +894,168 @@ function SellAlertRow({ alert }: { alert: SellAlert }) {
       <RelatedNews items={alert.related_news ?? []} tone="red" />
       <UpcomingEvents items={alert.upcoming_events ?? []} tone="red" />
     </article>
+  );
+}
+
+function CompanyInfoPanel({
+  companyName,
+  info,
+  tone,
+}: {
+  companyName: string;
+  info?: CompanyInfo;
+  tone: "slate" | "red";
+}) {
+  if (!info || Object.keys(info).length === 0) return null;
+  const border = tone === "red" ? "border-red-900" : "border-slate-800";
+  const title = tone === "red" ? "text-red-50" : "text-slate-100";
+  const text = tone === "red" ? "text-red-100" : "text-slate-300";
+  const muted = tone === "red" ? "text-red-200" : "text-slate-400";
+  const chips = [
+    info.industry,
+    info.exchange,
+    info.country,
+    info.currency,
+    info.founded_year ? `Founded ${info.founded_year}` : "",
+    info.ipo_year ? `IPO ${info.ipo_year}` : "",
+  ].filter(Boolean);
+
+  return (
+    <details className={`mt-4 border-t ${border} pt-4`}>
+      <summary className={`cursor-pointer text-sm font-semibold ${title}`}>
+        Company info
+      </summary>
+      <div className="mt-3 space-y-3">
+        {info.description ? (
+          <p className={`text-sm leading-6 ${text}`}>{info.description}</p>
+        ) : (
+          <p className={`text-sm ${muted}`}>No source-backed company description available.</p>
+        )}
+        {info.brief_history && (
+          <p className={`text-sm leading-6 ${text}`}>{info.brief_history}</p>
+        )}
+        {chips.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {chips.map((chip) => (
+              <span key={String(chip)} className={`border ${border} px-2 py-1 text-xs ${muted}`}>
+                {chip}
+              </span>
+            ))}
+          </div>
+        )}
+        <InfoList label="Top products" items={info.top_products ?? []} tone={tone} />
+        <InfoList label="Revenue segments" items={info.revenue_segments ?? []} tone={tone} />
+        {info.competitive_position && (
+          <InfoText label="Position" value={info.competitive_position} tone={tone} />
+        )}
+        <InfoList label="Static risks" items={info.key_static_risks ?? []} tone={tone} />
+        <div className={`grid gap-3 text-sm md:grid-cols-2 ${text}`}>
+          {info.headquarters && <Fact label="Headquarters" value={info.headquarters} />}
+          {info.market_cap && <Fact label="Market cap" value={formatMarketCap(info.market_cap)} />}
+          {info.website && (
+            <div>
+              <div className="text-xs uppercase text-slate-500">Website</div>
+              <a
+                className={`mt-1 inline-block underline underline-offset-4 ${muted}`}
+                href={info.website}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {companyName}
+              </a>
+            </div>
+          )}
+          {(info.metadata_source || info.metadata_as_of) && (
+            <div>
+              <div className="text-xs uppercase text-slate-500">Metadata</div>
+              {info.metadata_source_url ? (
+                <a
+                  className={`mt-1 inline-block underline underline-offset-4 ${muted}`}
+                  href={info.metadata_source_url}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {info.metadata_source ?? "Source"}
+                </a>
+              ) : (
+                <div className={`mt-1 ${muted}`}>{info.metadata_source}</div>
+              )}
+              {info.metadata_as_of && (
+                <div className={`mt-1 text-xs ${muted}`}>As of {formatShortDate(info.metadata_as_of)}</div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </details>
+  );
+}
+
+function InfoList({
+  label,
+  items,
+  tone,
+}: {
+  label: string;
+  items: string[];
+  tone: "slate" | "red";
+}) {
+  if (items.length === 0) return null;
+  const muted = tone === "red" ? "text-red-200" : "text-slate-400";
+  const text = tone === "red" ? "text-red-100" : "text-slate-300";
+  return (
+    <div>
+      <div className={`text-xs font-semibold uppercase ${muted}`}>{label}</div>
+      <div className={`mt-1 text-sm leading-6 ${text}`}>{items.join(", ")}</div>
+    </div>
+  );
+}
+
+function InfoText({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "slate" | "red";
+}) {
+  const muted = tone === "red" ? "text-red-200" : "text-slate-400";
+  const text = tone === "red" ? "text-red-100" : "text-slate-300";
+  return (
+    <div>
+      <div className={`text-xs font-semibold uppercase ${muted}`}>{label}</div>
+      <p className={`mt-1 text-sm leading-6 ${text}`}>{value}</p>
+    </div>
+  );
+}
+
+function NeededEvidence({ items }: { items: NeededEvidence[] }) {
+  if (items.length === 0) return null;
+  return (
+    <section className="mt-4 border-t border-amber-900 pt-4">
+      <h4 className="text-xs font-semibold uppercase text-amber-200">
+        Needed evidence plan
+      </h4>
+      <div className="mt-3 grid gap-3 lg:grid-cols-2">
+        {items.map((item) => (
+          <div key={item.gap_type} className="border border-amber-900 bg-amber-950 p-3">
+            <div className="flex items-start justify-between gap-2">
+              <h5 className="text-sm font-semibold text-amber-50">{item.title}</h5>
+              <span className="border border-amber-700 px-2 py-1 text-xs text-amber-100">
+                {item.status}
+              </span>
+            </div>
+            <p className="mt-2 text-sm leading-5 text-amber-100">{item.collection_plan}</p>
+            {item.source_candidates.length > 0 && (
+              <p className="mt-2 text-xs text-amber-200">
+                Sources: {item.source_candidates.join(", ")}
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -1152,6 +1456,15 @@ function formatCompactNumber(value: number) {
   return value.toFixed(4);
 }
 
+function formatMarketCap(value: number | string) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return String(value);
+  if (numeric >= 1_000_000_000_000) return `$${(numeric / 1_000_000_000_000).toFixed(2)}T`;
+  if (numeric >= 1_000_000_000) return `$${(numeric / 1_000_000_000).toFixed(1)}B`;
+  if (numeric >= 1_000_000) return `$${(numeric / 1_000_000).toFixed(1)}M`;
+  return `$${numeric.toLocaleString()}`;
+}
+
 function Fact({ label, value }: { label: string; value: string }) {
   return (
     <div>
@@ -1169,6 +1482,34 @@ function Evidence({ items }: { items: string[] }) {
         <li key={item}>{item}</li>
       ))}
     </ul>
+  );
+}
+
+function SourceTraceability({
+  items,
+  tone,
+}: {
+  items: SignalSource[];
+  tone: "slate" | "red";
+}) {
+  if (items.length === 0) return null;
+  const border = tone === "red" ? "border-red-900" : "border-slate-800";
+  const muted = tone === "red" ? "text-red-200" : "text-slate-400";
+  const labels = items
+    .map((item) => [item.provider, item.observed_at ? formatShortDate(item.observed_at) : ""].filter(Boolean).join(" · "))
+    .filter(Boolean);
+  if (labels.length === 0) return null;
+  return (
+    <section className={`mt-4 border-t ${border} pt-4`}>
+      <h4 className={`text-xs font-semibold uppercase ${muted}`}>Source traceability</h4>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {dedupeText(labels).map((label) => (
+          <span key={label} className={`border ${border} px-2 py-1 text-xs ${muted}`}>
+            {label}
+          </span>
+        ))}
+      </div>
+    </section>
   );
 }
 

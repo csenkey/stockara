@@ -246,6 +246,9 @@ def _sec_filing_signal(ticker: str, sec_ticker_map: dict[str, str]) -> dict[str,
     form = latest["form"]
     score = _sec_form_score(form)
     accession = latest.get("accession_number", "")
+    items = latest.get("items", "")
+    primary_document = latest.get("primary_document", "")
+    primary_doc_description = latest.get("primary_doc_description", "")
     source_url = (
         f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/"
         f"{accession.replace('-', '')}/{accession}-index.html"
@@ -259,13 +262,16 @@ def _sec_filing_signal(ticker: str, sec_ticker_map: dict[str, str]) -> dict[str,
         "neutral" if score < 15 else "positive",
         score,
         f"Recent SEC {form} filing",
-        f"{ticker} filed a {form} with the SEC on {filed_at.isoformat()}.",
+        _sec_filing_summary(ticker, form, filed_at, items, primary_doc_description),
         {
             "provider": "sec",
             "cik": cik,
             "form": form,
             "filing_date": filed_at.isoformat(),
             "accession_number": accession,
+            "items": items,
+            "primary_document": primary_document,
+            "primary_doc_description": primary_doc_description,
             "source_url": source_url,
         },
     )
@@ -275,6 +281,9 @@ def _latest_material_filing(recent: dict[str, list[Any]]) -> dict[str, Any] | No
     forms = recent.get("form") or []
     filing_dates = recent.get("filingDate") or []
     accession_numbers = recent.get("accessionNumber") or []
+    items = recent.get("items") or []
+    primary_documents = recent.get("primaryDocument") or []
+    primary_doc_descriptions = recent.get("primaryDocDescription") or []
     cutoff = date.today() - timedelta(days=SEC_FILING_LOOKBACK_DAYS)
 
     for index, form_value in enumerate(forms):
@@ -290,8 +299,37 @@ def _latest_material_filing(recent: dict[str, list[Any]]) -> dict[str, Any] | No
             "accession_number": (
                 str(accession_numbers[index]) if index < len(accession_numbers) else ""
             ),
+            "items": str(items[index]) if index < len(items) else "",
+            "primary_document": (
+                str(primary_documents[index]) if index < len(primary_documents) else ""
+            ),
+            "primary_doc_description": (
+                str(primary_doc_descriptions[index])
+                if index < len(primary_doc_descriptions)
+                else ""
+            ),
         }
     return None
+
+
+def _sec_filing_summary(
+    ticker: str,
+    form: str,
+    filed_at: date,
+    items: str,
+    primary_doc_description: str,
+) -> str:
+    details: list[str] = []
+    if items:
+        details.append(f"items {items}")
+    if primary_doc_description:
+        details.append(primary_doc_description)
+    if details:
+        return (
+            f"{ticker} filed a {form} with the SEC on {filed_at.isoformat()} "
+            f"covering {', '.join(details)}."
+        )
+    return f"{ticker} filed a {form} with the SEC on {filed_at.isoformat()}."
 
 
 def _sec_form_score(form: str) -> int:

@@ -1,5 +1,6 @@
 """CDK stack for the Phase 1 API, collectors, analyzer, and publisher."""
 
+import hashlib
 import os
 
 from aws_cdk import (
@@ -30,6 +31,12 @@ BACKEND_ASSET_PATH = os.path.abspath(
 PROJECT_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..")
 )
+WATCHLIST_SEED_PATH = os.path.join(PROJECT_ROOT, "data", "watchlist_seed.csv")
+
+
+def _file_sha256(path: str) -> str:
+    with open(path, "rb") as file:
+        return hashlib.sha256(file.read()).hexdigest()
 
 
 class ApiStack(Stack):
@@ -455,6 +462,7 @@ class ApiStack(Stack):
             properties={
                 "TableName": data_table.table_name,
                 "SellAlertTickers": "AAPL,MSFT,NVDA",
+                "SeedHash": _file_sha256(WATCHLIST_SEED_PATH),
             },
         )
 

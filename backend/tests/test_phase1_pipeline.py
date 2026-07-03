@@ -234,6 +234,64 @@ def test_build_publication_payload_includes_news_events_and_deduped_evidence():
     assert pick["upcoming_events"][0]["event_date"] == "2026-07-01"
 
 
+def test_build_publication_payload_includes_company_info():
+    stocks = [
+        {
+            "ticker": "NVDA",
+            "company_name": "NVIDIA",
+            "sector": "Technology",
+            "industry": "Semiconductors",
+            "business_description": "NVIDIA designs accelerated computing platforms.",
+            "flagship_products": ["Data center GPUs", "CUDA"],
+            "revenue_segments": ["Data Center", "Gaming"],
+            "exchange": "NASDAQ",
+            "currency": "USD",
+            "country": "United States",
+            "website": "https://www.nvidia.com",
+            "founded_year": 1993,
+            "headquarters": "Santa Clara, California",
+            "ipo_year": 1999,
+            "metadata_source": "nasdaq_company_profile",
+            "metadata_source_url": "https://www.nasdaq.com/market-activity/stocks/nvda",
+            "metadata_as_of": "2026-06-17",
+        }
+    ]
+    scores = [{"ticker": "NVDA", "opportunity_score": 80, "negative_score": 5, "signals": []}]
+    analyses = [
+        {
+            "ticker": "NVDA",
+            "recommendation": "BUY",
+            "risk_level": "MEDIUM",
+            "confidence_score": 84,
+            "catalyst": "Accelerated computing demand",
+            "expected_timeframe": "1-30 days",
+            "reasoning": "Demand remains supportive.",
+            "invalidation_criteria": "Demand weakens.",
+            "opportunity_score": 80,
+            "negative_score": 5,
+            "signals": [],
+        }
+    ]
+
+    with (
+        patch("src.analysis.phase1_pipeline.store.sell_alert_tickers", return_value=[]),
+        patch("src.analysis.phase1_pipeline.store.get_stock_data", return_value=[]),
+        patch("src.analysis.phase1_pipeline.store.news_for_ticker", return_value=[]),
+        patch("src.analysis.phase1_pipeline.store.earnings_events_for_ticker", return_value=[]),
+        patch("src.analysis.phase1_pipeline.store.dividend_events_for_ticker", return_value=[]),
+    ):
+        payload = build_publication_payload(analyses, scores, stocks, date(2026, 6, 17))
+
+    info = payload["top_picks"][0]["company_info"]
+    assert info["description"] == "NVIDIA designs accelerated computing platforms."
+    assert info["top_products"] == ["Data center GPUs", "CUDA"]
+    assert info["revenue_segments"] == ["Data Center", "Gaming"]
+    assert info["brief_history"] == (
+        "Founded in 1993; headquartered in Santa Clara, California; IPO in 1999."
+    )
+    assert info["metadata_source"] == "nasdaq_company_profile"
+
+
 def test_build_publication_payload_includes_partial_coverage_quality():
     stocks = [{"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology"}]
     scores = [
@@ -840,36 +898,37 @@ def test_review_rejection_suppresses_public_publication():
     assert payload["review_policy"]["rejected_count"] == 1
     assert payload["review_policy"]["review_suppressed_count"] == 1
     assert payload["review_policy"]["review_rejection_audit_count"] == 1
-    assert payload["review_rejections"] == [
+    withheld = payload["review_rejections"][0]
+    assert withheld["ticker"] == "NVDA"
+    assert withheld["company_name"] == "NVIDIA"
+    assert withheld["sector"] == "Technology"
+    assert withheld["analysis_model"] == "gpt-5.4-mini"
+    assert withheld["recommendation"] == "BUY"
+    assert withheld["supporting_evidence"] == []
+    assert withheld["source_traceability"] == []
+    assert withheld["related_news"] == []
+    assert withheld["upcoming_events"] == []
+    assert withheld["needed_evidence"] == [
         {
-            "ticker": "NVDA",
-            "company_name": "NVIDIA",
-            "sector": "Technology",
-            "logo_url": None,
-            "analysis_method": "ai",
-            "analysis_model": "gpt-5.4-mini",
-            "recommendation": "BUY",
-            "risk_level": "MEDIUM",
-            "confidence_score": 84,
-            "opportunity_score": 90,
-            "negative_score": 5,
-            "catalyst": "Unusual volume",
-            "analyst_reasoning": "The setup looks interesting.",
-            "invalidation_criteria": "Momentum fades.",
-            "supporting_evidence": [],
-            "ai_review": {
-                "status": "rejected",
-                "model": "gpt-5.4",
-                "approved": False,
-                "rationale": "Evidence is too weak.",
-                "concerns": ["weak evidence"],
-                "rejection_category": "insufficient_evidence",
-                "what_would_make_approvable": "More durable catalyst evidence.",
-            },
-            "related_news": [],
-            "upcoming_events": [],
+            "gap_type": "reviewer_requested_evidence",
+            "title": "Reviewer-requested evidence",
+            "status": "temporary_suspended",
+            "collection_plan": (
+                "Turn the reviewer note into a specific collector task or source-backed "
+                "manual research item."
+            ),
+            "source_candidates": ["review model note"],
         }
     ]
+    assert withheld["ai_review"] == {
+        "status": "rejected",
+        "model": "gpt-5.4",
+        "approved": False,
+        "rationale": "Evidence is too weak.",
+        "concerns": ["weak evidence"],
+        "rejection_category": "insufficient_evidence",
+        "what_would_make_approvable": "More durable catalyst evidence.",
+    }
     assert "withheld by the review model" in payload["data_warnings"][-1]
     emit_metric.assert_called_once_with("review_publication_suppressed", 1)
 

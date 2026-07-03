@@ -822,6 +822,7 @@ def build_publication_payload(
                     "company_name": stock["company_name"],
                     "sector": stock["sector"],
                     "logo_url": _stock_logo_url(stock),
+                    "company_info": _company_info(stock),
                     "analysis_method": row.get("analysis_method", "ai"),
                     "recommendation": row["recommendation"],
                     "risk_level": row["risk_level"],
@@ -861,6 +862,7 @@ def build_publication_payload(
                     "company_name": stock["company_name"],
                     "sector": stock["sector"],
                     "logo_url": _stock_logo_url(stock),
+                    "company_info": _company_info(stock),
                     "analysis_method": row.get("analysis_method", "ai"),
                     "severity": "critical" if row["negative_score"] >= 80 else "high",
                     "risk_level": row["risk_level"],
@@ -2071,6 +2073,57 @@ def _stock_logo_url(stock: dict[str, Any]) -> str | None:
     return str(value).strip() if value else None
 
 
+def _company_info(stock: dict[str, Any]) -> dict[str, Any]:
+    """Return compact source-backed company context for recommendation cards."""
+    products = _metadata_list(stock.get("flagship_products"))
+    revenue_segments = _metadata_list(stock.get("revenue_segments"))
+    risks = _metadata_list(stock.get("key_static_risks"))
+    info = {
+        "description": _metadata_text(stock.get("business_description")),
+        "top_products": products,
+        "revenue_segments": revenue_segments,
+        "industry": _metadata_text(stock.get("industry")),
+        "exchange": _metadata_text(stock.get("exchange")),
+        "currency": _metadata_text(stock.get("currency")),
+        "country": _metadata_text(stock.get("country")),
+        "website": _metadata_text(stock.get("website")),
+        "founded_year": _jsonable_value(stock.get("founded_year")),
+        "headquarters": _metadata_text(stock.get("headquarters")),
+        "ipo_year": _jsonable_value(stock.get("ipo_year")),
+        "market_cap": _jsonable_value(stock.get("market_cap")),
+        "competitive_position": _metadata_text(stock.get("competitive_position")),
+        "key_static_risks": risks,
+        "metadata_source": _metadata_text(stock.get("metadata_source")),
+        "metadata_source_url": _metadata_text(stock.get("metadata_source_url")),
+        "metadata_as_of": _metadata_text(stock.get("metadata_as_of")),
+    }
+    history_parts = []
+    if info.get("founded_year"):
+        history_parts.append(f"Founded in {info['founded_year']}")
+    if info.get("headquarters"):
+        history_parts.append(f"headquartered in {info['headquarters']}")
+    if info.get("ipo_year"):
+        history_parts.append(f"IPO in {info['ipo_year']}")
+    if history_parts:
+        info["brief_history"] = "; ".join(history_parts) + "."
+    return {key: value for key, value in info.items() if value not in (None, "", [])}
+
+
+def _metadata_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _metadata_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [part.strip() for part in str(value).split("|") if part.strip()]
+
+
 def _related_news_for_ticker(ticker: str, run_date: date) -> list[dict[str, Any]]:
     try:
         rows = store.news_for_ticker(
@@ -2303,6 +2356,7 @@ def _review_rejection_audit(
     audit_rows: list[dict[str, Any]] = []
     for row in suppressed[:50]:
         stock = stock_map.get(row["ticker"], {})
+        signals = row.get("signals", [])
         audit_rows.append(
             _with_recommendation_context(
                 {
@@ -2310,6 +2364,7 @@ def _review_rejection_audit(
                     "company_name": stock.get("company_name", row["ticker"]),
                     "sector": stock.get("sector"),
                     "logo_url": _stock_logo_url(stock),
+                    "company_info": _company_info(stock),
                     "analysis_method": row.get("analysis_method", "ai"),
                     "analysis_model": row.get("analysis_model", OPENAI_ANALYSIS_MODEL),
                     "recommendation": row["recommendation"],
@@ -2320,7 +2375,9 @@ def _review_rejection_audit(
                     "catalyst": row["catalyst"],
                     "analyst_reasoning": row["reasoning"],
                     "invalidation_criteria": row["invalidation_criteria"],
-                    "supporting_evidence": _evidence(row.get("signals", [])),
+                    "supporting_evidence": _evidence(signals),
+                    "source_traceability": [signal["source"] for signal in signals[:5] if signal.get("source")],
+                    "needed_evidence": _needed_evidence_plan(row, stock),
                     "ai_review": row.get("ai_review"),
                 },
                 row["ticker"],
@@ -2328,6 +2385,100 @@ def _review_rejection_audit(
             )
         )
     return audit_rows
+
+
+def _needed_evidence_plan(
+    analysis: dict[str, Any], stock: dict[str, Any]
+) -> list[dict[str, Any]]:
+    review = analysis.get("ai_review") or {}
+    text = " ".join(
+        str(part or "")
+        for part in [
+            review.get("what_would_make_approvable"),
+            review.get("rationale"),
+            " ".join(review.get("concerns") or []),
+        ]
+    ).lower()
+    gaps: list[dict[str, Any]] = []
+
+    def add(
+        gap_type: str,
+        title: str,
+        collection_plan: str,
+        source_candidates: list[str],
+        status: str = "needed",
+    ) -> None:
+        if any(row["gap_type"] == gap_type for row in gaps):
+            return
+        gaps.append(
+            {
+                "gap_type": gap_type,
+                "title": title,
+                "status": status,
+                "collection_plan": collection_plan,
+                "source_candidates": source_candidates,
+            }
+        )
+
+    if "8-k" in text or "filing" in text:
+        add(
+            "sec_8k_substance",
+            "SEC filing substance",
+            "Fetch the latest 8-K filing text, extract item numbers and material business terms, and summarize why the filing is bullish, bearish, or neutral.",
+            ["SEC submissions API", "SEC filing text", "company investor relations"],
+        )
+    if any(term in text for term in ["valuation", "peer", "revenue", "margin", "guidance", "fundamental", "pipeline"]):
+        add(
+            "fundamental_valuation_context",
+            "Fundamental and valuation context",
+            "Collect recent revenue, margin, guidance, valuation multiple, peer/history comparison, and durable downside-risk context before publishing an actionable call.",
+            ["SEC 10-Q/10-K", "earnings release", "earnings transcript", "Financial Modeling Prep", "Finnhub fundamentals"],
+        )
+    if any(term in text for term in ["sector", "metadata", "company identification", "ticker/company", "identification is"]):
+        add(
+            "metadata_quality",
+            "Company metadata verification",
+            "Verify ticker, company name, sector, industry, exchange, and profile source before the candidate can be treated as decision-grade.",
+            ["watchlist metadata seed", "Nasdaq company profile", "SEC company tickers"],
+        )
+    if any(term in text for term in ["company-specific", "specific news", "negative catalyst", "material contract", "business impact", "unrelated"]):
+        add(
+            "company_specific_catalyst",
+            "Company-specific catalyst verification",
+            "Collect ticker-specific news or event evidence and reject broad market articles that do not materially explain this company.",
+            ["NewsAPI company query", "Finnhub company news", "company press releases"],
+        )
+    if any(term in text for term in ["momentum", "breakout", "support", "resistance", "technical", "follow-through", "time horizon", "mean-revert"]):
+        add(
+            "technical_confirmation",
+            "Technical confirmation and trade horizon",
+            "Add support/resistance, breakout or breakdown level, invalidation price, multi-session volume confirmation, relative performance, and explicit trade horizon.",
+            ["stored OHLCV", "sector ETF context", "relative strength calculations"],
+        )
+    if any(term in text for term in ["analyst", "upgrade", "target", "estimate cut", "estimate cuts"]):
+        add(
+            "analyst_action_recency",
+            "Recent analyst action context",
+            "Distinguish stale recommendation mix from recent upgrades, downgrades, estimate revisions, and price-target changes.",
+            ["Finnhub recommendation trends", "Finnhub upgrade/downgrade", "price-target provider"],
+        )
+    if any(term in text for term in ["accounting", "regulatory", "order", "orders"]):
+        add(
+            "negative_event_detail",
+            "Negative event detail",
+            "Collect specific adverse company evidence such as accounting, regulatory, order, margin, or guidance deterioration before publishing a SELL.",
+            ["company news", "SEC filings", "analyst estimate revisions"],
+        )
+
+    if not gaps and review.get("what_would_make_approvable"):
+        add(
+            "reviewer_requested_evidence",
+            "Reviewer-requested evidence",
+            "Turn the reviewer note into a specific collector task or source-backed manual research item.",
+            ["review model note"],
+            status="temporary_suspended",
+        )
+    return gaps
 
 
 def _parse_date(value: Any) -> date | None:

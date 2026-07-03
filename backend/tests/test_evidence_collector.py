@@ -15,6 +15,9 @@ def test_latest_material_filing_selects_recent_sec_8k():
             (date.today() - timedelta(days=80)).isoformat(),
         ],
         "accessionNumber": ["ignored", "0001234567-26-000001", "old"],
+        "items": ["", "2.02,9.01", ""],
+        "primaryDocument": ["", "nvda-20260617.htm", ""],
+        "primaryDocDescription": ["", "Results of Operations and Financial Condition", ""],
     }
 
     filing = evidence_collector._latest_material_filing(recent)
@@ -23,6 +26,9 @@ def test_latest_material_filing_selects_recent_sec_8k():
         "form": "8-K",
         "filing_date": date.today() - timedelta(days=2),
         "accession_number": "0001234567-26-000001",
+        "items": "2.02,9.01",
+        "primary_document": "nvda-20260617.htm",
+        "primary_doc_description": "Results of Operations and Financial Condition",
     }
 
 
@@ -135,6 +141,9 @@ def test_sec_filing_signal_maps_submission_to_market_signal():
                 "form": ["8-K"],
                 "filingDate": [date.today().isoformat()],
                 "accessionNumber": ["0001234567-26-000001"],
+                "items": ["2.02,9.01"],
+                "primaryDocument": ["nvda-20260617.htm"],
+                "primaryDocDescription": ["Results of Operations and Financial Condition"],
             }
         }
     }
@@ -145,8 +154,12 @@ def test_sec_filing_signal_maps_submission_to_market_signal():
     assert signal is not None
     assert signal["signal_type"] == "sec_filing"
     assert signal["direction"] == "positive"
+    assert "items 2.02,9.01" in signal["summary"]
+    assert "Results of Operations and Financial Condition" in signal["summary"]
     assert signal["source"]["provider"] == "sec"
     assert signal["source"]["raw"]["form"] == "8-K"
+    assert signal["source"]["raw"]["items"] == "2.02,9.01"
+    assert signal["source"]["raw"]["primary_document"] == "nvda-20260617.htm"
     assert "000123456726000001" in signal["source"]["raw"]["source_url"]
 
 

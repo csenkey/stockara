@@ -6,6 +6,7 @@ from backend.src.scripts.seed_watchlist_handler import (
     REQUIRED_METADATA_FIELDS,
     _build_stock_item,
     _validate_header,
+    handler,
     sync_static_metadata,
 )
 
@@ -126,6 +127,51 @@ def test_sync_static_metadata_creates_missing_stock(monkeypatch):
     assert table.items[("STOCK#AAPL", "META")]["company_name"] == "Apple Inc."
 
 
+def test_sync_static_metadata_can_skip_invalid_rows(monkeypatch):
+    existing = _build_stock_item(_complete_row(sector="Technology"), set())
+    table = _FakeTable([existing])
+    monkeypatch.setattr(
+        "backend.src.scripts.seed_watchlist_handler._load_seed_rows",
+        lambda: [_complete_row(sector="Consumer Discretionary"), _complete_row(ticker="BAD", sector="")],
+    )
+
+    summary = sync_static_metadata(table, {"AAPL"}, strict=False)
+
+    stored = table.items[("STOCK#AAPL", "META")]
+    assert summary == {"created": 0, "changed": 1, "unchanged": 0, "invalid": 1}
+    assert stored["sector"] == "Consumer Discretionary"
+
+
+def test_handler_syncs_existing_metadata_on_custom_resource_update(monkeypatch):
+    existing = _build_stock_item(_complete_row(sector="Technology"), set())
+    table = _FakeTable([existing])
+    monkeypatch.setattr(
+        "backend.src.scripts.seed_watchlist_handler._load_seed_rows",
+        lambda: [_complete_row(sector="Consumer Discretionary")],
+    )
+    monkeypatch.setattr(
+        "backend.src.scripts.seed_watchlist_handler.boto3.resource",
+        lambda _service: _FakeDynamo(table),
+    )
+
+    result = handler(
+        {
+            "RequestType": "Update",
+            "ResourceProperties": {
+                "TableName": "stockara",
+                "SellAlertTickers": "AAPL",
+                "SeedHash": "changed",
+            },
+        },
+        None,
+    )
+
+    stored = table.items[("STOCK#AAPL", "META")]
+    assert result["Data"]["Skipped"] is True
+    assert result["Data"]["MetadataChanged"] == 1
+    assert stored["sector"] == "Consumer Discretionary"
+
+
 class _FakeBatch:
     def __init__(self, table):
         self.table = table
@@ -151,6 +197,9 @@ class _FakeTable:
         item = self.items.get((Key["PK"], Key["SK"]))
         return {"Item": dict(item)} if item else {}
 
+    def query(self, **_kwargs):
+        return {"Count": len(self.items)}
+
     def update_item(
         self,
         Key,
@@ -166,3 +215,11 @@ class _FakeTable:
             item[ExpressionAttributeNames[name]] = ExpressionAttributeValues[value_name]
         for name in remove_expression.split(", ") if remove_expression else []:
             item.pop(ExpressionAttributeNames[name], None)
+
+
+class _FakeDynamo:
+    def __init__(self, table):
+        self.table = table
+
+    def Table(self, _name):
+        return self.table
