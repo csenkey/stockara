@@ -21,19 +21,21 @@ from src.services.collection_manifest import (
     mark_task_running,
     write_manifest,
 )
+from src.services.calendar_artifacts import publish_calendar_artifacts
 from src.services.secrets import get_provider_api_key
 
 logger = structlog.get_logger(__name__)
 
 CLOUDWATCH_NAMESPACE = "StockMonitoring"
-DEFAULT_LOOKBACK_DAYS = 730
-DEFAULT_LOOKAHEAD_DAYS = int(os.environ.get("EARNINGS_CALENDAR_LOOKAHEAD_DAYS", "45"))
-DEFAULT_LIMIT = 12
+DEFAULT_LOOKBACK_DAYS = int(os.environ.get("EARNINGS_CALENDAR_LOOKBACK_DAYS", "1825"))
+DEFAULT_LOOKAHEAD_DAYS = int(os.environ.get("EARNINGS_CALENDAR_LOOKAHEAD_DAYS", "120"))
+DEFAULT_LIMIT = int(os.environ.get("EARNINGS_CALENDAR_YFINANCE_LIMIT", "32"))
 MAX_TICKERS_PER_RUN = 50
 FINNHUB_EARNINGS_CALENDAR_URL = "https://finnhub.io/api/v1/calendar/earnings"
+ARTIFACT_BUCKET = os.environ.get("STOCKARA_ARTIFACT_BUCKET", "")
 COLLECTION_MANIFEST_BUCKET = os.environ.get(
     "COLLECTION_MANIFEST_BUCKET",
-    os.environ.get("STOCKARA_ARTIFACT_BUCKET", ""),
+    ARTIFACT_BUCKET,
 )
 
 
@@ -59,22 +61,43 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
             if manifest_task_run
             else sorted(stocks, key=lambda stock: stock["ticker"])
         )
-        stored_count = 0
+        collection_date = date.today()
+        range_start = collection_date - timedelta(
+            days=int(event.get("lookback_days", DEFAULT_LOOKBACK_DAYS))
+        )
+        range_end = collection_date + timedelta(
+            days=int(event.get("lookahead_days", DEFAULT_LOOKAHEAD_DAYS))
+        )
+        collected_events: list[dict[str, Any]] = []
         failed_tickers: list[str] = []
 
         if manifest_task_run:
-            stored_count, failed_tickers = _collect_per_ticker(selected, event, log)
+            collected_events, failed_tickers = _collect_per_ticker(
+                selected,
+                event,
+                log,
+                range_start=range_start,
+                range_end=range_end,
+            )
         else:
             events = fetch_earnings_calendar_events(
                 stocks,
-                lookahead_days=int(
-                    event.get("lookahead_days", DEFAULT_LOOKAHEAD_DAYS)
-                ),
+                start_date=range_start,
+                end_date=range_end,
             )
             for earnings_event in events:
-                enriched = enrich_price_reaction(earnings_event)
-                store.put_earnings_event(enriched)
-                stored_count += 1
+                collected_events.append(enrich_price_reaction(earnings_event))
+
+        stored_count = _store_events(collected_events)
+        publish_calendar_artifacts(
+            bucket=str(event.get("artifact_bucket") or ARTIFACT_BUCKET),
+            event_type="earnings",
+            events=collected_events,
+            collection_date=collection_date,
+            range_start=range_start,
+            range_end=range_end,
+            selected_tickers=[stock["ticker"] for stock in selected],
+        )
 
         _emit_metric("earnings_events_collected", stored_count)
         _emit_metric("earnings_collection_failed_tickers", len(failed_tickers))
@@ -120,14 +143,17 @@ def _collect_per_ticker(
     selected: list[dict[str, Any]],
     event: dict[str, Any],
     log: Any,
-) -> tuple[int, list[str]]:
-    stored_count = 0
+    *,
+    range_start: date,
+    range_end: date,
+) -> tuple[list[dict[str, Any]], list[str]]:
     failed_tickers: list[str] = []
     events_by_key: dict[tuple[str, date], dict[str, Any]] = {}
     try:
         for earnings_event in fetch_earnings_calendar_events(
             selected,
-            lookahead_days=int(event.get("lookahead_days", DEFAULT_LOOKAHEAD_DAYS)),
+            start_date=max(range_start, date.today()),
+            end_date=range_end,
         ):
             events_by_key[
                 (earnings_event["ticker"], earnings_event["event_date"])
@@ -142,6 +168,8 @@ def _collect_per_ticker(
                 ticker,
                 company_name=stock.get("company_name"),
                 limit=int(event.get("limit", DEFAULT_LIMIT)),
+                start_date=range_start,
+                end_date=range_end,
             )
             for earnings_event in events:
                 events_by_key[
@@ -150,11 +178,22 @@ def _collect_per_ticker(
         except Exception as exc:
             failed_tickers.append(ticker)
             log.warning("earnings_ticker_collection_failed", ticker=ticker, error=str(exc))
-    for earnings_event in events_by_key.values():
-        enriched = enrich_price_reaction(earnings_event)
-        store.put_earnings_event(enriched)
+    enriched_events = [
+        enrich_price_reaction(earnings_event)
+        for earnings_event in sorted(
+            events_by_key.values(),
+            key=lambda item: (item["ticker"], item["event_date"]),
+        )
+    ]
+    return enriched_events, failed_tickers
+
+
+def _store_events(events: list[dict[str, Any]]) -> int:
+    stored_count = 0
+    for earnings_event in events:
+        store.put_earnings_event(earnings_event)
         stored_count += 1
-    return stored_count, failed_tickers
+    return stored_count
 
 
 def _prepare_manifest_task_run(
@@ -236,6 +275,8 @@ def fetch_earnings_events(
     ticker: str,
     company_name: str | None = None,
     limit: int = DEFAULT_LIMIT,
+    start_date: date | None = None,
+    end_date: date | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch and normalize earnings calendar rows from yfinance."""
     yf_ticker = yf.Ticker(ticker)
@@ -251,6 +292,10 @@ def fetch_earnings_events(
     for raw_date, row in data.iterrows():
         event_date = _normalize_event_date(raw_date)
         if event_date is None:
+            continue
+        if start_date and event_date < start_date:
+            continue
+        if end_date and event_date > end_date:
             continue
         events.append(
             {
@@ -273,6 +318,8 @@ def fetch_earnings_events(
 def fetch_earnings_calendar_events(
     stocks: list[dict[str, Any]],
     lookahead_days: int = DEFAULT_LOOKAHEAD_DAYS,
+    start_date: date | None = None,
+    end_date: date | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch upcoming earnings in one date-range request, filtered to watchlist."""
     api_key = _finnhub_api_key()
@@ -281,12 +328,13 @@ def fetch_earnings_calendar_events(
         return []
 
     today = date.today()
-    end_date = today + timedelta(days=max(lookahead_days, 1))
+    range_start = start_date or today
+    range_end = end_date or today + timedelta(days=max(lookahead_days, 1))
     response = requests.get(
         FINNHUB_EARNINGS_CALENDAR_URL,
         params={
-            "from": today.isoformat(),
-            "to": end_date.isoformat(),
+            "from": range_start.isoformat(),
+            "to": range_end.isoformat(),
             "token": api_key,
         },
         timeout=30,

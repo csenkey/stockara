@@ -95,6 +95,32 @@ def test_fetch_earnings_calendar_events_fetches_date_range_for_watchlist(
     assert params["to"] == "2026-07-13"
 
 
+@patch("backend.src.collectors.earnings_collector.requests.get")
+def test_fetch_earnings_calendar_events_defaults_to_four_month_forward_window(
+    mock_get, monkeypatch
+):
+    monkeypatch.setenv("FINNHUB_KEY", "test-finnhub-key")
+    from backend.src.services.secrets import get_provider_api_key
+
+    get_provider_api_key.cache_clear()
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {"earningsCalendar": []}
+    mock_get.return_value = response
+
+    class FrozenDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 6, 29)
+
+    with patch("backend.src.collectors.earnings_collector.date", FrozenDate):
+        fetch_earnings_calendar_events([{"ticker": "AAPL", "company_name": "Apple"}])
+
+    params = mock_get.call_args.kwargs["params"]
+    assert params["from"] == "2026-06-29"
+    assert params["to"] == "2026-10-27"
+
+
 def test_enrich_price_reaction_uses_stored_prices_around_past_event():
     event = {
         "ticker": "NVDA",

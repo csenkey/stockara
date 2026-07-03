@@ -20,15 +20,19 @@ from src.services.collection_manifest import (
     mark_task_running,
     write_manifest,
 )
+from src.services.calendar_artifacts import publish_calendar_artifacts
 
 logger = structlog.get_logger(__name__)
 
 CLOUDWATCH_NAMESPACE = "StockMonitoring"
-DEFAULT_HISTORY_LIMIT = 10
+DEFAULT_LOOKBACK_DAYS = int(os.environ.get("DIVIDEND_CALENDAR_LOOKBACK_DAYS", "1825"))
+DEFAULT_LOOKAHEAD_DAYS = int(os.environ.get("DIVIDEND_CALENDAR_LOOKAHEAD_DAYS", "120"))
+DEFAULT_HISTORY_LIMIT = int(os.environ.get("DIVIDEND_CALENDAR_HISTORY_LIMIT", "80"))
 MAX_TICKERS_PER_RUN = 50
+ARTIFACT_BUCKET = os.environ.get("STOCKARA_ARTIFACT_BUCKET", "")
 COLLECTION_MANIFEST_BUCKET = os.environ.get(
     "COLLECTION_MANIFEST_BUCKET",
-    os.environ.get("STOCKARA_ARTIFACT_BUCKET", ""),
+    ARTIFACT_BUCKET,
 )
 
 
@@ -49,8 +53,16 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
     try:
         manifest_task_run = _prepare_manifest_task_run(event, context)
         stocks = _select_stocks(store.active_stock_metadata(), event)
+        collection_date = date.today()
+        range_start = collection_date - timedelta(
+            days=int(event.get("lookback_days", DEFAULT_LOOKBACK_DAYS))
+        )
+        range_end = collection_date + timedelta(
+            days=int(event.get("lookahead_days", DEFAULT_LOOKAHEAD_DAYS))
+        )
         stored_count = 0
         failed_tickers: list[str] = []
+        collected_events: list[dict[str, Any]] = []
 
         for stock in stocks:
             ticker = stock["ticker"]
@@ -59,14 +71,27 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
                     ticker,
                     company_name=stock.get("company_name"),
                     history_limit=int(event.get("history_limit", DEFAULT_HISTORY_LIMIT)),
+                    start_date=range_start,
+                    end_date=range_end,
                 )
                 for dividend_event in events:
                     enriched = enrich_price_reaction(dividend_event)
                     store.put_dividend_event(enriched)
+                    collected_events.append(enriched)
                     stored_count += 1
             except Exception as exc:
                 failed_tickers.append(ticker)
                 log.warning("dividend_ticker_collection_failed", ticker=ticker, error=str(exc))
+
+        publish_calendar_artifacts(
+            bucket=str(event.get("artifact_bucket") or ARTIFACT_BUCKET),
+            event_type="dividends",
+            events=collected_events,
+            collection_date=collection_date,
+            range_start=range_start,
+            range_end=range_end,
+            selected_tickers=[stock["ticker"] for stock in stocks],
+        )
 
         _emit_metric("dividend_events_collected", stored_count)
         _emit_metric("dividend_collection_failed_tickers", len(failed_tickers))
@@ -187,6 +212,8 @@ def fetch_dividend_events(
     ticker: str,
     company_name: str | None = None,
     history_limit: int = DEFAULT_HISTORY_LIMIT,
+    start_date: date | None = None,
+    end_date: date | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch historical and available upcoming dividend events from yfinance."""
     yf_ticker = yf.Ticker(ticker)
@@ -199,10 +226,20 @@ def fetch_dividend_events(
     events: list[dict[str, Any]] = []
     dividends = getattr(yf_ticker, "dividends", None)
     if dividends is not None and len(dividends) > 0:
-        recent = dividends.tail(history_limit)
+        recent = dividends
+        if start_date is not None:
+            recent = recent[
+                [
+                    (_normalize_date(raw_date) or date.min) >= start_date
+                    for raw_date in recent.index
+                ]
+            ]
+        recent = recent.tail(history_limit)
         for raw_date, amount in recent.items():
             ex_date = _normalize_date(raw_date)
             if ex_date is None:
+                continue
+            if end_date is not None and ex_date > end_date:
                 continue
             events.append(
                 _event(
@@ -216,6 +253,8 @@ def fetch_dividend_events(
             )
 
     upcoming = _upcoming_from_info(ticker, company_name, info, dividend_yield, today)
+    if upcoming and end_date is not None and upcoming["ex_dividend_date"] > end_date:
+        upcoming = None
     if upcoming and not any(
         event["ex_dividend_date"] == upcoming["ex_dividend_date"] for event in events
     ):

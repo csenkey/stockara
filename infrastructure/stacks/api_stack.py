@@ -323,7 +323,11 @@ class ApiStack(Stack):
             role=batch_role,
             environment={
                 **common_env,
+                "FINNHUB_KEY_SECRET_NAME": finnhub_key_secret_name,
                 "POWERTOOLS_SERVICE_NAME": "earnings-collector",
+                "EARNINGS_CALENDAR_LOOKBACK_DAYS": "1825",
+                "EARNINGS_CALENDAR_LOOKAHEAD_DAYS": "120",
+                "EARNINGS_CALENDAR_YFINANCE_LIMIT": "32",
             },
             description="Collects earnings calendar events and historical reactions",
         )
@@ -345,6 +349,9 @@ class ApiStack(Stack):
             environment={
                 **common_env,
                 "POWERTOOLS_SERVICE_NAME": "dividend-collector",
+                "DIVIDEND_CALENDAR_LOOKBACK_DAYS": "1825",
+                "DIVIDEND_CALENDAR_LOOKAHEAD_DAYS": "120",
+                "DIVIDEND_CALENDAR_HISTORY_LIMIT": "80",
             },
             description="Collects dividend calendar events and historical reactions",
         )
@@ -447,6 +454,7 @@ class ApiStack(Stack):
         newsapi_key_secret.grant_read(self.news_collector_fn)
         finnhub_key_secret.grant_read(self.news_collector_fn)
         finnhub_key_secret.grant_read(self.evidence_collector_fn)
+        finnhub_key_secret.grant_read(self.earnings_collector_fn)
         alpha_vantage_key_secret.grant_read(self.news_collector_fn)
         alpha_vantage_key_secret.grant_read(self.stock_collector_fn)
 

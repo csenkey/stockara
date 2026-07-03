@@ -48,6 +48,35 @@ def test_fetch_dividend_events_normalizes_history_and_upcoming_info():
     assert events[-1]["is_upcoming"] is True
 
 
+def test_fetch_dividend_events_keeps_five_year_history_window():
+    dividends = pd.Series(
+        [0.15, 0.20, 0.25],
+        index=pd.DatetimeIndex(["2020-01-15", "2022-03-15", "2026-06-15"]),
+    )
+    ticker = MagicMock()
+    ticker.dividends = dividends
+    ticker.info = {}
+
+    with (
+        patch("backend.src.collectors.dividend_collector.yf.Ticker", return_value=ticker),
+        patch("backend.src.collectors.dividend_collector.date") as mock_date,
+    ):
+        mock_date.today.return_value = date(2026, 7, 3)
+        mock_date.fromisoformat.side_effect = date.fromisoformat
+        events = fetch_dividend_events(
+            "aapl",
+            company_name="Apple",
+            start_date=date(2021, 7, 4),
+            end_date=date(2026, 10, 31),
+            history_limit=80,
+        )
+
+    assert [event["ex_dividend_date"] for event in events] == [
+        date(2022, 3, 15),
+        date(2026, 6, 15),
+    ]
+
+
 def test_enrich_price_reaction_uses_stored_prices_around_past_event():
     event = {
         "ticker": "AAPL",
