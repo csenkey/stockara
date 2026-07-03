@@ -528,7 +528,7 @@ function formatShortDate(value: string) {
 }
 
 interface DashboardProps {
-  onNavigate?: (view: "top-picks" | "data-health") => void;
+  onNavigate?: (view: "top-picks" | "calendar" | "data-health") => void;
 }
 
 export default function Dashboard({ onNavigate }: DashboardProps) {
@@ -581,12 +581,20 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
           </div>
           <div className="flex flex-wrap gap-2">
             {onNavigate && (
-              <button
-                onClick={() => onNavigate("data-health")}
-                className="inline-flex h-10 items-center justify-center rounded border border-slate-700 bg-slate-900 px-3 text-sm font-medium text-slate-200 hover:bg-slate-800"
-              >
-                Data Freshness
-              </button>
+              <>
+                <button
+                  onClick={() => onNavigate("calendar")}
+                  className="inline-flex h-10 items-center justify-center rounded border border-slate-700 bg-slate-900 px-3 text-sm font-medium text-slate-200 hover:bg-slate-800"
+                >
+                  Calendars
+                </button>
+                <button
+                  onClick={() => onNavigate("data-health")}
+                  className="inline-flex h-10 items-center justify-center rounded border border-slate-700 bg-slate-900 px-3 text-sm font-medium text-slate-200 hover:bg-slate-800"
+                >
+                  Data Freshness
+                </button>
+              </>
             )}
             <button
               onClick={loadTopPicks}

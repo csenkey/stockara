@@ -1984,9 +1984,12 @@ def _risk_weight(risk_level: str) -> int:
 
 
 def _source_warnings(scores: list[dict[str, Any]]) -> list[str]:
+    warnings: list[str] = []
     if not any(signal["signal_type"] == "earnings" for score in scores for signal in score["signals"]):
-        return ["No earnings-calendar signals were available from configured providers."]
-    return []
+        warnings.append("No earnings-calendar signals were available from configured providers.")
+    if not any(signal["signal_type"] == "dividend" for score in scores for signal in score["signals"]):
+        warnings.append("No dividend-calendar signals were available from configured providers.")
+    return warnings
 
 
 def _is_publication_allowed(analysis: dict[str, Any]) -> bool:

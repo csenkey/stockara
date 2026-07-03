@@ -50,6 +50,11 @@ Execution tasks:
 
 Nice-to-have follow-up:
 
+- [ ] Improve earnings and dividend calendar completeness.
+  - Add top-level calendar visibility to the public frontend so missing upcoming events are obvious instead of hidden inside recommendation cards.
+  - Earnings collection should use bulk provider calendars during manifest chunks, not only per-ticker yfinance rows.
+  - Dividend collection still needs a second source or fallback strategy for future ex-dividend/pay-date coverage because current collection depends mostly on Yahoo dividend history and quote metadata.
+  - Publish explicit warnings when the latest artifact has no earnings or no dividend calendar signals.
 - [ ] Rework one-time 5-year historical OHLCV restoration to avoid Lambda recursive-loop detection.
   - Context: AWS reported recursive invocation termination on 2026-06-19, likely from the chained Stooq/historical backfill path. That may explain why roughly one year of stock history loaded instead of the intended five years.
   - Prefer Step Functions, SQS, or EventBridge Scheduler over Lambda self-invocation for long backfill runs.

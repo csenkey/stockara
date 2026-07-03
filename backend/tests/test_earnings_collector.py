@@ -141,6 +141,7 @@ def test_handler_collects_and_stores_events(mock_store, mock_pool, mock_fetch, m
 @patch("backend.src.collectors.earnings_collector.write_manifest")
 @patch("backend.src.collectors.earnings_collector.load_manifest")
 @patch("backend.src.collectors.earnings_collector._emit_metric")
+@patch("backend.src.collectors.earnings_collector.fetch_earnings_calendar_events")
 @patch("backend.src.collectors.earnings_collector.fetch_earnings_events")
 @patch("backend.src.collectors.earnings_collector.DatabasePool")
 @patch("backend.src.collectors.earnings_collector.store")
@@ -148,6 +149,7 @@ def test_handler_processes_manifest_earnings_task(
     mock_store,
     mock_pool,
     mock_fetch,
+    mock_fetch_calendar,
     mock_metric,
     mock_load_manifest,
     mock_write_manifest,
@@ -168,8 +170,13 @@ def test_handler_processes_manifest_earnings_task(
         {"ticker": "MSFT", "company_name": "Microsoft"},
         {"ticker": "NVDA", "company_name": "NVIDIA"},
     ]
-    mock_fetch.return_value = [
-        {"ticker": "AAPL", "event_date": date(2026, 7, 20), "is_upcoming": True}
+    mock_fetch_calendar.return_value = []
+    mock_fetch.side_effect = lambda ticker, **kwargs: [
+        {
+            "ticker": ticker,
+            "event_date": date(2026, 7, 20),
+            "is_upcoming": True,
+        }
     ]
 
     result = handler(
@@ -189,3 +196,78 @@ def test_handler_processes_manifest_earnings_task(
     assert task.status == CollectionTaskStatus.SUCCEEDED
     assert task.output_counts.records_written == len(task.tickers)
     assert task.output_counts.successful_tickers == len(task.tickers)
+
+
+@patch("backend.src.collectors.earnings_collector.write_manifest")
+@patch("backend.src.collectors.earnings_collector.load_manifest")
+@patch("backend.src.collectors.earnings_collector._emit_metric")
+@patch("backend.src.collectors.earnings_collector.fetch_earnings_calendar_events")
+@patch("backend.src.collectors.earnings_collector.fetch_earnings_events")
+@patch("backend.src.collectors.earnings_collector.DatabasePool")
+@patch("backend.src.collectors.earnings_collector.store")
+def test_manifest_earnings_task_merges_range_calendar_events(
+    mock_store,
+    mock_pool,
+    mock_fetch,
+    mock_fetch_calendar,
+    mock_metric,
+    mock_load_manifest,
+    mock_write_manifest,
+):
+    manifest = build_manifest(
+        [{"ticker": "AAPL"}],
+        manifest_date=date(2026, 6, 20),
+        generated_at=datetime(2026, 6, 20, tzinfo=timezone.utc),
+    )
+    task = next(
+        candidate
+        for candidate in manifest.tasks
+        if candidate.task_type == CollectionTaskType.EARNINGS
+    )
+    mock_load_manifest.return_value = manifest
+    mock_store.active_stock_metadata.return_value = [
+        {"ticker": "AAPL", "company_name": "Apple"},
+    ]
+    mock_fetch_calendar.return_value = [
+        {
+            "ticker": "AAPL",
+            "event_date": date(2026, 7, 25),
+            "eps_estimate": Decimal("2.40"),
+            "is_upcoming": True,
+            "provider": "finnhub",
+        },
+    ]
+    mock_fetch.return_value = [
+        {
+            "ticker": "AAPL",
+            "event_date": date(2026, 7, 20),
+            "eps_estimate": Decimal("2.35"),
+            "is_upcoming": True,
+            "provider": "yfinance",
+        },
+        {
+            "ticker": "AAPL",
+            "event_date": date(2026, 7, 25),
+            "eps_estimate": Decimal("2.45"),
+            "is_upcoming": True,
+            "provider": "yfinance",
+        },
+    ]
+
+    result = handler(
+        {
+            "mode": "manifest_task",
+            "manifest_bucket": "bucket",
+            "manifest_key": manifest.s3_key,
+            "task_id": task.task_id,
+        },
+        MagicMock(aws_request_id="request-1"),
+    )
+
+    assert result["statusCode"] == 200
+    assert mock_store.put_earnings_event.call_count == 2
+    stored_dates = {
+        call.args[0]["event_date"] for call in mock_store.put_earnings_event.call_args_list
+    }
+    assert stored_dates == {date(2026, 7, 20), date(2026, 7, 25)}
+    assert task.output_counts.records_written == 2

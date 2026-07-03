@@ -105,7 +105,7 @@ const PRICE_GAPS_URL =
   import.meta.env.VITE_PRICE_GAPS_URL || "/price-gaps/latest.json";
 
 interface DataHealthProps {
-  onNavigate?: (view: "top-picks" | "data-health") => void;
+  onNavigate?: (view: "top-picks" | "calendar" | "data-health") => void;
 }
 
 export default function DataHealth({ onNavigate }: DataHealthProps) {
@@ -156,12 +156,20 @@ export default function DataHealth({ onNavigate }: DataHealthProps) {
           </div>
           <div className="flex flex-wrap gap-2">
             {onNavigate && (
-              <button
-                onClick={() => onNavigate("top-picks")}
-                className="inline-flex h-10 items-center justify-center rounded border border-slate-700 bg-slate-900 px-3 text-sm font-medium text-slate-200 hover:bg-slate-800"
-              >
-                Top Picks
-              </button>
+              <>
+                <button
+                  onClick={() => onNavigate("top-picks")}
+                  className="inline-flex h-10 items-center justify-center rounded border border-slate-700 bg-slate-900 px-3 text-sm font-medium text-slate-200 hover:bg-slate-800"
+                >
+                  Top Picks
+                </button>
+                <button
+                  onClick={() => onNavigate("calendar")}
+                  className="inline-flex h-10 items-center justify-center rounded border border-slate-700 bg-slate-900 px-3 text-sm font-medium text-slate-200 hover:bg-slate-800"
+                >
+                  Calendars
+                </button>
+              </>
             )}
             <button
               onClick={loadAll}

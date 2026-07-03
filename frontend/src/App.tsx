@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 
+import Calendar from "./pages/Calendar";
 import DataHealth from "./pages/DataHealth";
 import Dashboard from "./pages/Dashboard";
 
-type AppView = "top-picks" | "data-health";
+type AppView = "top-picks" | "calendar" | "data-health";
 
 function App() {
   const [view, setView] = useState<AppView>(() => viewFromHash());
@@ -17,10 +18,13 @@ function App() {
   }, []);
 
   function navigate(nextView: AppView) {
-    window.location.hash = nextView === "data-health" ? "data-health" : "";
+    window.location.hash = nextView === "top-picks" ? "" : nextView;
     setView(nextView);
   }
 
+  if (view === "calendar") {
+    return <Calendar onNavigate={navigate} />;
+  }
   if (view === "data-health") {
     return <DataHealth onNavigate={navigate} />;
   }
@@ -28,9 +32,9 @@ function App() {
 }
 
 function viewFromHash(): AppView {
-  return window.location.hash.replace("#", "") === "data-health"
-    ? "data-health"
-    : "top-picks";
+  const hash = window.location.hash.replace("#", "");
+  if (hash === "calendar" || hash === "data-health") return hash;
+  return "top-picks";
 }
 
 export default App;

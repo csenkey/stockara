@@ -123,6 +123,18 @@ def _collect_per_ticker(
 ) -> tuple[int, list[str]]:
     stored_count = 0
     failed_tickers: list[str] = []
+    events_by_key: dict[tuple[str, date], dict[str, Any]] = {}
+    try:
+        for earnings_event in fetch_earnings_calendar_events(
+            selected,
+            lookahead_days=int(event.get("lookahead_days", DEFAULT_LOOKAHEAD_DAYS)),
+        ):
+            events_by_key[
+                (earnings_event["ticker"], earnings_event["event_date"])
+            ] = earnings_event
+    except Exception as exc:
+        log.warning("earnings_calendar_range_collection_failed", error=str(exc))
+
     for stock in selected:
         ticker = stock["ticker"]
         try:
@@ -132,12 +144,16 @@ def _collect_per_ticker(
                 limit=int(event.get("limit", DEFAULT_LIMIT)),
             )
             for earnings_event in events:
-                enriched = enrich_price_reaction(earnings_event)
-                store.put_earnings_event(enriched)
-                stored_count += 1
+                events_by_key[
+                    (earnings_event["ticker"], earnings_event["event_date"])
+                ] = earnings_event
         except Exception as exc:
             failed_tickers.append(ticker)
             log.warning("earnings_ticker_collection_failed", ticker=ticker, error=str(exc))
+    for earnings_event in events_by_key.values():
+        enriched = enrich_price_reaction(earnings_event)
+        store.put_earnings_event(enriched)
+        stored_count += 1
     return stored_count, failed_tickers
 
 
