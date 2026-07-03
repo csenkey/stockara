@@ -21,10 +21,15 @@ from src.services.collection_manifest import (
     mark_task_running,
     write_manifest,
 )
-from src.services.calendar_artifacts import publish_calendar_artifacts
+from src.services.calendar_artifacts import (
+    publish_calendar_artifacts,
+    publish_calendar_provider_snapshots,
+)
 from src.services.secrets import get_provider_api_key
 
 logger = structlog.get_logger(__name__)
+DATE_TYPE = date
+DATETIME_TYPE = datetime
 
 CLOUDWATCH_NAMESPACE = "StockMonitoring"
 DEFAULT_LOOKBACK_DAYS = int(os.environ.get("EARNINGS_CALENDAR_LOOKBACK_DAYS", "1825"))
@@ -69,6 +74,7 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
             days=int(event.get("lookahead_days", DEFAULT_LOOKAHEAD_DAYS))
         )
         collected_events: list[dict[str, Any]] = []
+        provider_events: list[dict[str, Any]] = []
         failed_tickers: list[str] = []
 
         if manifest_task_run:
@@ -78,12 +84,14 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
                 log,
                 range_start=range_start,
                 range_end=range_end,
+                provider_events=provider_events,
             )
         else:
             events = fetch_earnings_calendar_events(
                 stocks,
                 start_date=range_start,
                 end_date=range_end,
+                provider_events=provider_events,
             )
             for earnings_event in events:
                 collected_events.append(enrich_price_reaction(earnings_event))
@@ -93,6 +101,15 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
             bucket=str(event.get("artifact_bucket") or ARTIFACT_BUCKET),
             event_type="earnings",
             events=collected_events,
+            collection_date=collection_date,
+            range_start=range_start,
+            range_end=range_end,
+            selected_tickers=[stock["ticker"] for stock in selected],
+        )
+        publish_calendar_provider_snapshots(
+            bucket=str(event.get("artifact_bucket") or ARTIFACT_BUCKET),
+            event_type="earnings",
+            provider_events=provider_events,
             collection_date=collection_date,
             range_start=range_start,
             range_end=range_end,
@@ -146,6 +163,7 @@ def _collect_per_ticker(
     *,
     range_start: date,
     range_end: date,
+    provider_events: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[str]]:
     failed_tickers: list[str] = []
     events_by_key: dict[tuple[str, date], dict[str, Any]] = {}
@@ -154,6 +172,7 @@ def _collect_per_ticker(
             selected,
             start_date=max(range_start, date.today()),
             end_date=range_end,
+            provider_events=provider_events,
         ):
             events_by_key[
                 (earnings_event["ticker"], earnings_event["event_date"])
@@ -170,6 +189,7 @@ def _collect_per_ticker(
                 limit=int(event.get("limit", DEFAULT_LIMIT)),
                 start_date=range_start,
                 end_date=range_end,
+                provider_events=provider_events,
             )
             for earnings_event in events:
                 events_by_key[
@@ -277,6 +297,7 @@ def fetch_earnings_events(
     limit: int = DEFAULT_LIMIT,
     start_date: date | None = None,
     end_date: date | None = None,
+    provider_events: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch and normalize earnings calendar rows from yfinance."""
     yf_ticker = yf.Ticker(ticker)
@@ -297,6 +318,20 @@ def fetch_earnings_events(
             continue
         if end_date and event_date > end_date:
             continue
+        if provider_events is not None:
+            provider_events.append(
+                _raw_provider_event(
+                    provider="yfinance",
+                    ticker=ticker.upper(),
+                    company_name=company_name,
+                    event_date=event_date,
+                    source_url=f"https://finance.yahoo.com/quote/{ticker.upper()}/analysis",
+                    raw_fields={
+                        str(key): _serialize_raw_value(value)
+                        for key, value in row.to_dict().items()
+                    },
+                )
+            )
         events.append(
             {
                 "ticker": ticker.upper(),
@@ -320,6 +355,7 @@ def fetch_earnings_calendar_events(
     lookahead_days: int = DEFAULT_LOOKAHEAD_DAYS,
     start_date: date | None = None,
     end_date: date | None = None,
+    provider_events: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch upcoming earnings in one date-range request, filtered to watchlist."""
     api_key = _finnhub_api_key()
@@ -355,6 +391,20 @@ def fetch_earnings_calendar_events(
         if event_date is None:
             continue
         stock = active_by_ticker[ticker]
+        if provider_events is not None:
+            provider_events.append(
+                _raw_provider_event(
+                    provider="finnhub",
+                    ticker=ticker,
+                    company_name=stock.get("company_name"),
+                    event_date=event_date,
+                    source_url="https://finnhub.io/calendar/earnings",
+                    raw_fields={
+                        str(key): _serialize_raw_value(value)
+                        for key, value in row.items()
+                    },
+                )
+            )
         events.append(
             {
                 "ticker": ticker,
@@ -381,6 +431,26 @@ def _finnhub_api_key() -> str | None:
         "FINNHUB_KEY_SECRET_NAME",
         supported_json_keys=("FINNHUB_KEY", "finnhub_key", "api_key"),
     )
+
+
+def _raw_provider_event(
+    *,
+    provider: str,
+    ticker: str,
+    company_name: str | None,
+    event_date: date,
+    source_url: str,
+    raw_fields: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "provider": provider,
+        "ticker": ticker,
+        "company_name": company_name,
+        "event_date": event_date,
+        "source_url": source_url,
+        "raw_fields": raw_fields,
+        "collected_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def enrich_price_reaction(event: dict[str, Any]) -> dict[str, Any]:
@@ -460,6 +530,25 @@ def _row_value(row: Any, column: str) -> Any:
         return row.get(column)
     except AttributeError:
         return None
+
+
+def _serialize_raw_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if isinstance(value, DATETIME_TYPE):
+        return value.isoformat()
+    if isinstance(value, DATE_TYPE):
+        return value.isoformat()
+    if pd.isna(value):
+        return None
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except ValueError:
+            return str(value)
+    return value
 
 
 def _to_decimal(value: Any) -> Decimal | None:

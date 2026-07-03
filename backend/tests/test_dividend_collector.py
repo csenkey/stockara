@@ -77,6 +77,38 @@ def test_fetch_dividend_events_keeps_five_year_history_window():
     ]
 
 
+def test_fetch_dividend_events_captures_raw_yfinance_provider_rows():
+    dividends = pd.Series([0.25], index=pd.DatetimeIndex(["2026-06-15"]))
+    ticker = MagicMock()
+    ticker.dividends = dividends
+    ticker.info = {
+        "exDividendDate": int(datetime(2026, 8, 15, tzinfo=timezone.utc).timestamp()),
+        "dividendRate": 1.2,
+        "dividendYield": 0.015,
+    }
+    provider_events: list[dict] = []
+
+    with (
+        patch("backend.src.collectors.dividend_collector.yf.Ticker", return_value=ticker),
+        patch("backend.src.collectors.dividend_collector.date") as mock_date,
+    ):
+        mock_date.today.return_value = date(2026, 6, 17)
+        mock_date.fromisoformat.side_effect = date.fromisoformat
+        fetch_dividend_events(
+            "aapl",
+            company_name="Apple",
+            history_limit=1,
+            provider_events=provider_events,
+        )
+
+    assert len(provider_events) == 2
+    assert provider_events[0]["provider"] == "yfinance"
+    assert provider_events[0]["ticker"] == "AAPL"
+    assert provider_events[0]["ex_dividend_date"] == date(2026, 6, 15)
+    assert provider_events[0]["raw_fields"]["dividend_amount"] == 0.25
+    assert provider_events[1]["raw_fields"]["source"] == "ticker_info"
+
+
 def test_enrich_price_reaction_uses_stored_prices_around_past_event():
     event = {
         "ticker": "AAPL",

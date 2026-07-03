@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from typing import Any
 
 import structlog
@@ -53,6 +54,40 @@ def publish_calendar_artifacts(
         _safe_publish(bucket, f"calendar/by-ticker/{ticker}/{event_type}.json", ticker_payload)
 
 
+def publish_calendar_provider_snapshots(
+    *,
+    bucket: str,
+    event_type: str,
+    provider_events: list[dict[str, Any]],
+    collection_date: date,
+    range_start: date,
+    range_end: date,
+    selected_tickers: list[str],
+) -> None:
+    """Publish raw provider calendar responses for audit and backfill debugging."""
+    if not bucket:
+        return
+    for provider, events in _events_by_provider(provider_events).items():
+        payload = {
+            "event_type": event_type,
+            "provider": provider,
+            "collection_date": collection_date.isoformat(),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "range_start": range_start.isoformat(),
+            "range_end": range_end.isoformat(),
+            "selected_ticker_count": len(selected_tickers),
+            "selected_tickers": sorted(set(selected_tickers)),
+            "raw_event_count": len(events),
+            "raw_events": events,
+        }
+        _safe_publish(
+            bucket,
+            f"calendar/raw/{provider}/{event_type}/collection_date={collection_date.isoformat()}/events.json",
+            payload,
+        )
+        _safe_publish(bucket, f"calendar/raw/{provider}/{event_type}/latest.json", payload)
+
+
 def _safe_publish(bucket: str, key: str, payload: dict[str, Any]) -> None:
     try:
         publish_json_artifact(bucket, key, payload)
@@ -70,6 +105,14 @@ def _events_by_ticker(events: list[dict[str, Any]]) -> dict[str, list[dict[str, 
     return grouped
 
 
+def _events_by_provider(events: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for event in events:
+        provider = str(event.get("provider") or "unknown").lower()
+        grouped.setdefault(provider, []).append(_jsonable_event(event))
+    return grouped
+
+
 def _jsonable_event(event: dict[str, Any]) -> dict[str, Any]:
     return {key: _jsonable_value(value) for key, value in event.items()}
 
@@ -79,4 +122,12 @@ def _jsonable_value(value: Any) -> Any:
         return value.isoformat()
     if isinstance(value, date):
         return value.isoformat()
+    if isinstance(value, Decimal):
+        if value == value.to_integral_value():
+            return int(value)
+        return float(value)
+    if isinstance(value, dict):
+        return {str(key): _jsonable_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_jsonable_value(item) for item in value]
     return value

@@ -47,6 +47,40 @@ def test_fetch_earnings_events_normalizes_yfinance_rows():
     assert events[1]["is_upcoming"] is False
 
 
+def test_fetch_earnings_events_captures_raw_yfinance_provider_rows():
+    rows = pd.DataFrame(
+        {"EPS Estimate": [2.15], "Reported EPS": [None]},
+        index=pd.DatetimeIndex(["2026-07-20"]),
+    )
+    ticker = MagicMock()
+    ticker.get_earnings_dates.return_value = rows
+    provider_events: list[dict] = []
+
+    with (
+        patch("backend.src.collectors.earnings_collector.yf.Ticker", return_value=ticker),
+        patch("backend.src.collectors.earnings_collector.date") as mock_date,
+    ):
+        mock_date.today.return_value = date(2026, 6, 17)
+        mock_date.fromisoformat.side_effect = date.fromisoformat
+        fetch_earnings_events(
+            "nvda",
+            company_name="NVIDIA",
+            provider_events=provider_events,
+        )
+
+    assert provider_events == [
+        {
+            "provider": "yfinance",
+            "ticker": "NVDA",
+            "company_name": "NVIDIA",
+            "event_date": date(2026, 7, 20),
+            "source_url": "https://finance.yahoo.com/quote/NVDA/analysis",
+            "raw_fields": {"EPS Estimate": 2.15, "Reported EPS": None},
+            "collected_at": provider_events[0]["collected_at"],
+        }
+    ]
+
+
 @patch("backend.src.collectors.earnings_collector.requests.get")
 def test_fetch_earnings_calendar_events_fetches_date_range_for_watchlist(
     mock_get, monkeypatch
@@ -79,10 +113,12 @@ def test_fetch_earnings_calendar_events_fetches_date_range_for_watchlist(
         def today(cls):
             return cls(2026, 6, 29)
 
+    provider_events: list[dict] = []
     with patch("backend.src.collectors.earnings_collector.date", FrozenDate):
         events = fetch_earnings_calendar_events(
             [{"ticker": "AAPL", "company_name": "Apple"}],
             lookahead_days=14,
+            provider_events=provider_events,
         )
 
     assert len(events) == 1
@@ -93,6 +129,9 @@ def test_fetch_earnings_calendar_events_fetches_date_range_for_watchlist(
     params = mock_get.call_args.kwargs["params"]
     assert params["from"] == "2026-06-29"
     assert params["to"] == "2026-07-13"
+    assert provider_events[0]["provider"] == "finnhub"
+    assert provider_events[0]["ticker"] == "AAPL"
+    assert provider_events[0]["raw_fields"]["epsEstimate"] == 2.15
 
 
 @patch("backend.src.collectors.earnings_collector.requests.get")

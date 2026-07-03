@@ -20,9 +20,14 @@ from src.services.collection_manifest import (
     mark_task_running,
     write_manifest,
 )
-from src.services.calendar_artifacts import publish_calendar_artifacts
+from src.services.calendar_artifacts import (
+    publish_calendar_artifacts,
+    publish_calendar_provider_snapshots,
+)
 
 logger = structlog.get_logger(__name__)
+DATE_TYPE = date
+DATETIME_TYPE = datetime
 
 CLOUDWATCH_NAMESPACE = "StockMonitoring"
 DEFAULT_LOOKBACK_DAYS = int(os.environ.get("DIVIDEND_CALENDAR_LOOKBACK_DAYS", "1825"))
@@ -63,6 +68,7 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
         stored_count = 0
         failed_tickers: list[str] = []
         collected_events: list[dict[str, Any]] = []
+        provider_events: list[dict[str, Any]] = []
 
         for stock in stocks:
             ticker = stock["ticker"]
@@ -73,6 +79,7 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
                     history_limit=int(event.get("history_limit", DEFAULT_HISTORY_LIMIT)),
                     start_date=range_start,
                     end_date=range_end,
+                    provider_events=provider_events,
                 )
                 for dividend_event in events:
                     enriched = enrich_price_reaction(dividend_event)
@@ -87,6 +94,15 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
             bucket=str(event.get("artifact_bucket") or ARTIFACT_BUCKET),
             event_type="dividends",
             events=collected_events,
+            collection_date=collection_date,
+            range_start=range_start,
+            range_end=range_end,
+            selected_tickers=[stock["ticker"] for stock in stocks],
+        )
+        publish_calendar_provider_snapshots(
+            bucket=str(event.get("artifact_bucket") or ARTIFACT_BUCKET),
+            event_type="dividends",
+            provider_events=provider_events,
             collection_date=collection_date,
             range_start=range_start,
             range_end=range_end,
@@ -214,6 +230,7 @@ def fetch_dividend_events(
     history_limit: int = DEFAULT_HISTORY_LIMIT,
     start_date: date | None = None,
     end_date: date | None = None,
+    provider_events: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch historical and available upcoming dividend events from yfinance."""
     yf_ticker = yf.Ticker(ticker)
@@ -241,6 +258,21 @@ def fetch_dividend_events(
                 continue
             if end_date is not None and ex_date > end_date:
                 continue
+            if provider_events is not None:
+                provider_events.append(
+                    _raw_provider_event(
+                        ticker=ticker.upper(),
+                        company_name=company_name,
+                        ex_dividend_date=ex_date,
+                        source_url=f"https://finance.yahoo.com/quote/{ticker.upper()}/history?filter=div",
+                        raw_fields={
+                            "ex_dividend_date": ex_date,
+                            "dividend_amount": _serialize_raw_value(amount),
+                            "dividend_yield": _serialize_raw_value(dividend_yield),
+                            "source": "dividends_series",
+                        },
+                    )
+                )
             events.append(
                 _event(
                     ticker,
@@ -258,6 +290,21 @@ def fetch_dividend_events(
     if upcoming and not any(
         event["ex_dividend_date"] == upcoming["ex_dividend_date"] for event in events
     ):
+        if provider_events is not None:
+            provider_events.append(
+                _raw_provider_event(
+                    ticker=ticker.upper(),
+                    company_name=company_name,
+                    ex_dividend_date=upcoming["ex_dividend_date"],
+                    source_url=f"https://finance.yahoo.com/quote/{ticker.upper()}/history?filter=div",
+                    raw_fields={
+                        "exDividendDate": _serialize_raw_value(info.get("exDividendDate")),
+                        "dividendRate": _serialize_raw_value(info.get("dividendRate")),
+                        "dividendYield": _serialize_raw_value(info.get("dividendYield")),
+                        "source": "ticker_info",
+                    },
+                )
+            )
         events.append(upcoming)
     return events
 
@@ -337,6 +384,48 @@ def _safe_info(yf_ticker: Any) -> dict[str, Any]:
         return getattr(yf_ticker, "info", {}) or {}
     except Exception:
         return {}
+
+
+def _raw_provider_event(
+    *,
+    ticker: str,
+    company_name: str | None,
+    ex_dividend_date: date,
+    source_url: str,
+    raw_fields: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "provider": "yfinance",
+        "ticker": ticker,
+        "company_name": company_name,
+        "ex_dividend_date": ex_dividend_date,
+        "source_url": source_url,
+        "raw_fields": raw_fields,
+        "collected_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _serialize_raw_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        if value == value.to_integral_value():
+            return int(value)
+        return float(value)
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if isinstance(value, DATETIME_TYPE):
+        return value.isoformat()
+    if isinstance(value, DATE_TYPE):
+        return value.isoformat()
+    if pd.isna(value):
+        return None
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except ValueError:
+            return str(value)
+    return value
 
 
 def _nearest_row_before(rows: list[dict[str, Any]], event_date: date) -> dict[str, Any] | None:
