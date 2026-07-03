@@ -1,0 +1,174 @@
+name: Run Calendar Backfill Now
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_stage:
+        description: "Deployment stage to run"
+        required: true
+        default: "prod"
+        type: choice
+        options:
+          - prod
+      max_tickers:
+        description: "Maximum tickers per collector invocation"
+        required: true
+        default: "50"
+      ticker_csv:
+        description: "Optional comma-separated ticker subset"
+        required: false
+        default: ""
+      lookback_days:
+        description: "Calendar history window in days"
+        required: true
+        default: "1825"
+      lookahead_days:
+        description: "Upcoming calendar window in days"
+        required: true
+        default: "120"
+      earnings_yfinance_limit:
+        description: "Maximum yfinance earnings rows per ticker"
+        required: true
+        default: "32"
+      dividend_history_limit:
+        description: "Maximum yfinance dividend rows per ticker"
+        required: true
+        default: "80"
+      run_earnings:
+        description: "Run earnings calendar collector"
+        required: true
+        default: true
+        type: boolean
+      run_dividends:
+        description: "Run dividend calendar collector"
+        required: true
+        default: true
+        type: boolean
+
+concurrency:
+  group: run-calendar-backfill-now-${{ inputs.deployment_stage }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+jobs:
+  run:
+    name: Invoke deployed calendar collectors
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate inputs
+        shell: bash
+        run: |
+          for value in "${{ inputs.max_tickers }}" "${{ inputs.lookback_days }}" "${{ inputs.lookahead_days }}" "${{ inputs.earnings_yfinance_limit }}" "${{ inputs.dividend_history_limit }}"; do
+            if ! [[ "$value" =~ ^[0-9]+$ ]] || [[ "$value" -lt 1 ]]; then
+              echo "Calendar limits and windows must be positive integers."
+              exit 1
+            fi
+          done
+
+      - name: Check AWS OIDC role configuration
+        run: |
+          if [[ -z "${{ secrets.AWS_ROLE_TO_ASSUME }}" ]]; then
+            echo "Missing GitHub secret AWS_ROLE_TO_ASSUME."
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: stockara-calendar-backfill-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve function names
+        shell: bash
+        run: |
+          stage="${{ inputs.deployment_stage }}"
+          if [[ "$stage" == "prod" ]]; then
+            echo "EARNINGS_COLLECTOR_FN=stockara-earnings-collector" >> "$GITHUB_ENV"
+            echo "DIVIDEND_COLLECTOR_FN=stockara-dividend-collector" >> "$GITHUB_ENV"
+          else
+            echo "Unsupported deployment stage: $stage"
+            exit 1
+          fi
+
+      - name: Build collector payloads
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+
+          tickers = [
+              ticker.strip().upper()
+              for ticker in os.environ["TICKER_CSV"].split(",")
+              if ticker.strip()
+          ]
+          base = {
+              "max_tickers": int(os.environ["MAX_TICKERS"]),
+              "lookback_days": int(os.environ["LOOKBACK_DAYS"]),
+              "lookahead_days": int(os.environ["LOOKAHEAD_DAYS"]),
+          }
+          if tickers:
+              base["tickers"] = tickers
+
+          earnings = {**base, "limit": int(os.environ["EARNINGS_YFINANCE_LIMIT"])}
+          dividends = {**base, "history_limit": int(os.environ["DIVIDEND_HISTORY_LIMIT"])}
+
+          with open("earnings-payload.json", "w", encoding="utf-8") as file:
+              json.dump(earnings, file)
+          with open("dividend-payload.json", "w", encoding="utf-8") as file:
+              json.dump(dividends, file)
+          print("earnings payload:", json.dumps(earnings, sort_keys=True))
+          print("dividend payload:", json.dumps(dividends, sort_keys=True))
+          PY
+        env:
+          MAX_TICKERS: ${{ inputs.max_tickers }}
+          TICKER_CSV: ${{ inputs.ticker_csv }}
+          LOOKBACK_DAYS: ${{ inputs.lookback_days }}
+          LOOKAHEAD_DAYS: ${{ inputs.lookahead_days }}
+          EARNINGS_YFINANCE_LIMIT: ${{ inputs.earnings_yfinance_limit }}
+          DIVIDEND_HISTORY_LIMIT: ${{ inputs.dividend_history_limit }}
+
+      - name: Invoke earnings calendar collector
+        if: ${{ inputs.run_earnings }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws lambda invoke \
+            --function-name "$EARNINGS_COLLECTOR_FN" \
+            --payload file://earnings-payload.json \
+            --log-type Tail \
+            --cli-read-timeout 900 \
+            --cli-binary-format raw-in-base64-out \
+            earnings-response.json > earnings-invoke.json
+          python -c "import base64, json; meta=json.load(open('earnings-invoke.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
+          python -c "import json, sys; meta=json.load(open('earnings-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
+          cat earnings-response.json
+          python -m json.tool earnings-response.json
+
+      - name: Invoke dividend calendar collector
+        if: ${{ inputs.run_dividends }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws lambda invoke \
+            --function-name "$DIVIDEND_COLLECTOR_FN" \
+            --payload file://dividend-payload.json \
+            --log-type Tail \
+            --cli-read-timeout 900 \
+            --cli-binary-format raw-in-base64-out \
+            dividend-response.json > dividend-invoke.json
+          python -c "import base64, json; meta=json.load(open('dividend-invoke.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
+          python -c "import json, sys; meta=json.load(open('dividend-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
+          cat dividend-response.json
+          python -m json.tool dividend-response.json
