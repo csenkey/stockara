@@ -152,8 +152,10 @@ def _select_stocks(stocks: list[dict[str, Any]], event: dict[str, Any]) -> list[
     requested = {str(ticker).upper() for ticker in event.get("tickers", [])}
     if requested:
         stocks = [stock for stock in stocks if stock["ticker"] in requested]
+    ticker_offset = max(int(event.get("ticker_offset", 0)), 0)
     max_tickers = int(event.get("max_tickers", MAX_TICKERS_PER_RUN))
-    return sorted(stocks, key=lambda stock: stock["ticker"])[:max_tickers]
+    sorted_stocks = sorted(stocks, key=lambda stock: stock["ticker"])
+    return sorted_stocks[ticker_offset : ticker_offset + max_tickers]
 
 
 def _collect_per_ticker(

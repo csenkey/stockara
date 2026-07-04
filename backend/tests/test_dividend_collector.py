@@ -17,6 +17,7 @@ from backend.src.collectors.dividend_collector import (
     fetch_finnhub_dividend_events,
     handler,
     _pace_alpha_vantage_request,
+    _select_stocks,
 )
 
 
@@ -286,6 +287,44 @@ def test_fetch_alpha_vantage_dividend_events_skips_when_quota_exhausted(
         "ticker": "AAPL",
         "reason": "quota_exhausted",
     }
+
+
+@patch("backend.src.collectors.dividend_collector.logger")
+@patch("backend.src.collectors.dividend_collector.requests.get")
+def test_fetch_alpha_vantage_dividend_events_skips_after_call_budget(
+    mock_get,
+    mock_logger,
+    monkeypatch,
+):
+    import backend.src.collectors.dividend_collector as collector
+
+    monkeypatch.setattr(collector, "_ALPHA_VANTAGE_DIVIDEND_QUOTA_EXHAUSTED", False)
+    monkeypatch.setattr(collector, "_ALPHA_VANTAGE_DIVIDEND_CALL_COUNT", 1)
+    monkeypatch.setattr(collector, "_ALPHA_VANTAGE_DIVIDEND_CALL_BUDGET", 1)
+    monkeypatch.setenv("ALPHA_VANTAGE_API_KEY", "test-alpha-key")
+    from backend.src.services.secrets import get_provider_api_key
+
+    get_provider_api_key.cache_clear()
+
+    assert fetch_alpha_vantage_dividend_events("aapl") == []
+    mock_get.assert_not_called()
+    assert mock_logger.warning.call_args.kwargs == {
+        "ticker": "AAPL",
+        "call_budget": 1,
+    }
+
+
+def test_select_stocks_honors_ticker_offset():
+    stocks = [
+        {"ticker": "MSFT"},
+        {"ticker": "AAPL"},
+        {"ticker": "NVDA"},
+        {"ticker": "AMZN"},
+    ]
+
+    selected = _select_stocks(stocks, {"ticker_offset": 1, "max_tickers": 2})
+
+    assert [stock["ticker"] for stock in selected] == ["AMZN", "MSFT"]
 
 
 def test_pace_alpha_vantage_request_sleeps_between_configured_calls(monkeypatch):

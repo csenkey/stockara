@@ -42,6 +42,9 @@ DEFAULT_HISTORY_LIMIT = int(os.environ.get("DIVIDEND_CALENDAR_HISTORY_LIMIT", "8
 DEFAULT_ALPHA_VANTAGE_REQUEST_INTERVAL_SECONDS = float(
     os.environ.get("DIVIDEND_ALPHA_VANTAGE_REQUEST_INTERVAL_SECONDS", "0")
 )
+DEFAULT_ALPHA_VANTAGE_MAX_CALLS_PER_INVOCATION = int(
+    os.environ.get("DIVIDEND_ALPHA_VANTAGE_MAX_CALLS_PER_INVOCATION", "25")
+)
 MAX_TICKERS_PER_RUN = 50
 ARTIFACT_BUCKET = os.environ.get("STOCKARA_ARTIFACT_BUCKET", "")
 COLLECTION_MANIFEST_BUCKET = os.environ.get(
@@ -50,6 +53,8 @@ COLLECTION_MANIFEST_BUCKET = os.environ.get(
 )
 _LAST_ALPHA_VANTAGE_REQUEST_AT = 0.0
 _ALPHA_VANTAGE_DIVIDEND_QUOTA_EXHAUSTED = False
+_ALPHA_VANTAGE_DIVIDEND_CALL_COUNT = 0
+_ALPHA_VANTAGE_DIVIDEND_CALL_BUDGET = DEFAULT_ALPHA_VANTAGE_MAX_CALLS_PER_INVOCATION
 
 
 @dataclass
@@ -67,6 +72,7 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
     manifest_task_run: ManifestTaskRun | None = None
     DatabasePool.initialize()
     try:
+        _reset_alpha_vantage_invocation_state(event)
         manifest_task_run = _prepare_manifest_task_run(event, context)
         stocks = _select_stocks(store.active_stock_metadata(), event)
         collection_date = date.today()
@@ -180,8 +186,10 @@ def _select_stocks(stocks: list[dict[str, Any]], event: dict[str, Any]) -> list[
     requested = {str(ticker).upper() for ticker in event.get("tickers", [])}
     if requested:
         stocks = [stock for stock in stocks if stock["ticker"] in requested]
+    ticker_offset = max(int(event.get("ticker_offset", 0)), 0)
     max_tickers = int(event.get("max_tickers", MAX_TICKERS_PER_RUN))
-    return sorted(stocks, key=lambda stock: stock["ticker"])[:max_tickers]
+    sorted_stocks = sorted(stocks, key=lambda stock: stock["ticker"])
+    return sorted_stocks[ticker_offset : ticker_offset + max_tickers]
 
 
 def _build_provider_health(
@@ -512,12 +520,20 @@ def fetch_alpha_vantage_dividend_events(
             reason="quota_exhausted",
         )
         return []
+    if _ALPHA_VANTAGE_DIVIDEND_CALL_COUNT >= _ALPHA_VANTAGE_DIVIDEND_CALL_BUDGET:
+        logger.warning(
+            "alpha_vantage_dividend_budget_skipped",
+            ticker=ticker.upper(),
+            call_budget=_ALPHA_VANTAGE_DIVIDEND_CALL_BUDGET,
+        )
+        return []
 
     today = date.today()
     range_start = start_date or today - timedelta(days=DEFAULT_LOOKBACK_DAYS)
     range_end = end_date or today + timedelta(days=DEFAULT_LOOKAHEAD_DAYS)
     try:
         _pace_alpha_vantage_request()
+        _record_alpha_vantage_call()
         response = requests.get(
             ALPHA_VANTAGE_URL,
             params={
@@ -726,6 +742,28 @@ def _pace_alpha_vantage_request() -> None:
         logger.info("alpha_vantage_dividend_request_paced", wait_seconds=wait_seconds)
         time.sleep(wait_seconds)
     _LAST_ALPHA_VANTAGE_REQUEST_AT = time.monotonic()
+
+
+def _reset_alpha_vantage_invocation_state(event: dict[str, Any]) -> None:
+    global _ALPHA_VANTAGE_DIVIDEND_QUOTA_EXHAUSTED
+    global _ALPHA_VANTAGE_DIVIDEND_CALL_COUNT
+    global _ALPHA_VANTAGE_DIVIDEND_CALL_BUDGET
+    _ALPHA_VANTAGE_DIVIDEND_QUOTA_EXHAUSTED = False
+    _ALPHA_VANTAGE_DIVIDEND_CALL_COUNT = 0
+    _ALPHA_VANTAGE_DIVIDEND_CALL_BUDGET = max(
+        int(
+            event.get(
+                "alpha_vantage_max_calls",
+                DEFAULT_ALPHA_VANTAGE_MAX_CALLS_PER_INVOCATION,
+            )
+        ),
+        0,
+    )
+
+
+def _record_alpha_vantage_call() -> None:
+    global _ALPHA_VANTAGE_DIVIDEND_CALL_COUNT
+    _ALPHA_VANTAGE_DIVIDEND_CALL_COUNT += 1
 
 
 def _safe_provider_error(error: object) -> str:

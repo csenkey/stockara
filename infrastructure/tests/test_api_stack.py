@@ -105,7 +105,7 @@ def test_calendar_collector_lambdas_and_schedules_are_created():
                         "POWERTOOLS_SERVICE_NAME": "collection-distributor",
                         "COLLECTION_PRICE_TASK_CHUNK_SIZE": "10",
                         "COLLECTION_NEWS_TASK_CHUNK_SIZE": "50",
-                        "COLLECTION_CALENDAR_TASK_CHUNK_SIZE": "50",
+                        "COLLECTION_CALENDAR_TASK_CHUNK_SIZE": "10",
                         "COLLECTION_MAX_TASKS_PER_RUN": "4",
                     }
                 )
@@ -161,6 +161,7 @@ def test_calendar_collector_lambdas_and_schedules_are_created():
                             "stockara/codex-test/alpha-vantage-api-key-current"
                         ),
                         "DIVIDEND_ALPHA_VANTAGE_REQUEST_INTERVAL_SECONDS": "1.25",
+                        "DIVIDEND_ALPHA_VANTAGE_MAX_CALLS_PER_INVOCATION": "20",
                     }
                 )
             },

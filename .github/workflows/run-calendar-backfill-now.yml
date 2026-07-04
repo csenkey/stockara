@@ -11,9 +11,17 @@ on:
         options:
           - prod
       max_tickers:
-        description: "Maximum tickers per collector invocation"
+        description: "Maximum tickers to process across all generated chunks"
         required: true
         default: "50"
+      chunk_size:
+        description: "Tickers per collector invocation; 0 runs as one invocation"
+        required: true
+        default: "0"
+      max_chunks:
+        description: "Maximum chunks to invoke when chunk_size is set; 0 means all chunks"
+        required: true
+        default: "0"
       ticker_csv:
         description: "Optional comma-separated ticker subset"
         required: false
@@ -74,6 +82,12 @@ jobs:
               exit 1
             fi
           done
+          for value in "${{ inputs.chunk_size }}" "${{ inputs.max_chunks }}"; do
+            if ! [[ "$value" =~ ^[0-9]+$ ]]; then
+              echo "Chunk controls must be non-negative integers."
+              exit 1
+            fi
+          done
 
       - name: Check AWS OIDC role configuration
         run: |
@@ -107,32 +121,68 @@ jobs:
           python - <<'PY'
           import json
           import os
+          from pathlib import Path
 
           tickers = [
               ticker.strip().upper()
               for ticker in os.environ["TICKER_CSV"].split(",")
               if ticker.strip()
           ]
-          base = {
-              "max_tickers": int(os.environ["MAX_TICKERS"]),
-              "lookback_days": int(os.environ["LOOKBACK_DAYS"]),
-              "lookahead_days": int(os.environ["LOOKAHEAD_DAYS"]),
-          }
+          max_tickers = int(os.environ["MAX_TICKERS"])
+          chunk_size = int(os.environ["CHUNK_SIZE"])
+          max_chunks = int(os.environ["MAX_CHUNKS"])
+
+          if chunk_size <= 0:
+              chunk_size = max_tickers
+
+          chunks = []
           if tickers:
-              base["tickers"] = tickers
+              selected = tickers[:max_tickers]
+              for start in range(0, len(selected), chunk_size):
+                  chunks.append({"tickers": selected[start : start + chunk_size]})
+          else:
+              for offset in range(0, max_tickers, chunk_size):
+                  chunks.append(
+                      {
+                          "ticker_offset": offset,
+                          "max_tickers": min(chunk_size, max_tickers - offset),
+                      }
+                  )
 
-          earnings = {**base, "limit": int(os.environ["EARNINGS_YFINANCE_LIMIT"])}
-          dividends = {**base, "history_limit": int(os.environ["DIVIDEND_HISTORY_LIMIT"])}
+          if max_chunks > 0:
+              chunks = chunks[:max_chunks]
 
-          with open("earnings-payload.json", "w", encoding="utf-8") as file:
-              json.dump(earnings, file)
-          with open("dividend-payload.json", "w", encoding="utf-8") as file:
-              json.dump(dividends, file)
-          print("earnings payload:", json.dumps(earnings, sort_keys=True))
-          print("dividend payload:", json.dumps(dividends, sort_keys=True))
+          for directory in ("earnings-payloads", "dividend-payloads"):
+              Path(directory).mkdir(exist_ok=True)
+
+          for index, chunk in enumerate(chunks):
+              base = {
+                  **chunk,
+                  "lookback_days": int(os.environ["LOOKBACK_DAYS"]),
+                  "lookahead_days": int(os.environ["LOOKAHEAD_DAYS"]),
+              }
+              if "tickers" in base:
+                  base["max_tickers"] = len(base["tickers"])
+              earnings = {**base, "limit": int(os.environ["EARNINGS_YFINANCE_LIMIT"])}
+              dividends = {
+                  **base,
+                  "history_limit": int(os.environ["DIVIDEND_HISTORY_LIMIT"]),
+              }
+              Path(f"earnings-payloads/payload-{index:04d}.json").write_text(
+                  json.dumps(earnings),
+                  encoding="utf-8",
+              )
+              Path(f"dividend-payloads/payload-{index:04d}.json").write_text(
+                  json.dumps(dividends),
+                  encoding="utf-8",
+              )
+              print(f"chunk {index}: {json.dumps(base, sort_keys=True)}")
+          print(f"generated_chunks={len(chunks)}")
           PY
         env:
           MAX_TICKERS: ${{ inputs.max_tickers }}
+          CHUNK_SIZE: ${{ inputs.chunk_size }}
+          MAX_CHUNKS: ${{ inputs.max_chunks }}
           TICKER_CSV: ${{ inputs.ticker_csv }}
           LOOKBACK_DAYS: ${{ inputs.lookback_days }}
           LOOKAHEAD_DAYS: ${{ inputs.lookahead_days }}
@@ -144,31 +194,41 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          aws lambda invoke \
-            --function-name "$EARNINGS_COLLECTOR_FN" \
-            --payload file://earnings-payload.json \
-            --log-type Tail \
-            --cli-read-timeout 900 \
-            --cli-binary-format raw-in-base64-out \
-            earnings-response.json > earnings-invoke.json
-          python -c "import base64, json; meta=json.load(open('earnings-invoke.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
-          python -c "import json, sys; meta=json.load(open('earnings-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
-          cat earnings-response.json
-          python -m json.tool earnings-response.json
+          for payload in earnings-payloads/*.json; do
+            suffix="$(basename "$payload" .json)"
+            echo "::group::Invoke earnings calendar collector $suffix"
+            aws lambda invoke \
+              --function-name "$EARNINGS_COLLECTOR_FN" \
+              --payload "file://$payload" \
+              --log-type Tail \
+              --cli-read-timeout 900 \
+              --cli-binary-format raw-in-base64-out \
+              "earnings-response-$suffix.json" > "earnings-invoke-$suffix.json"
+            python -c "import base64, json; meta=json.load(open('earnings-invoke-$suffix.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
+            python -c "import json, sys; meta=json.load(open('earnings-invoke-$suffix.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
+            cat "earnings-response-$suffix.json"
+            python -m json.tool "earnings-response-$suffix.json"
+            echo "::endgroup::"
+          done
 
       - name: Invoke dividend calendar collector
         if: ${{ inputs.run_dividends }}
         shell: bash
         run: |
           set -euo pipefail
-          aws lambda invoke \
-            --function-name "$DIVIDEND_COLLECTOR_FN" \
-            --payload file://dividend-payload.json \
-            --log-type Tail \
-            --cli-read-timeout 900 \
-            --cli-binary-format raw-in-base64-out \
-            dividend-response.json > dividend-invoke.json
-          python -c "import base64, json; meta=json.load(open('dividend-invoke.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
-          python -c "import json, sys; meta=json.load(open('dividend-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
-          cat dividend-response.json
-          python -m json.tool dividend-response.json
+          for payload in dividend-payloads/*.json; do
+            suffix="$(basename "$payload" .json)"
+            echo "::group::Invoke dividend calendar collector $suffix"
+            aws lambda invoke \
+              --function-name "$DIVIDEND_COLLECTOR_FN" \
+              --payload "file://$payload" \
+              --log-type Tail \
+              --cli-read-timeout 900 \
+              --cli-binary-format raw-in-base64-out \
+              "dividend-response-$suffix.json" > "dividend-invoke-$suffix.json"
+            python -c "import base64, json; meta=json.load(open('dividend-invoke-$suffix.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
+            python -c "import json, sys; meta=json.load(open('dividend-invoke-$suffix.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
+            cat "dividend-response-$suffix.json"
+            python -m json.tool "dividend-response-$suffix.json"
+            echo "::endgroup::"
+          done

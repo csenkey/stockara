@@ -355,6 +355,7 @@ class ApiStack(Stack):
                 "DIVIDEND_CALENDAR_LOOKAHEAD_DAYS": "120",
                 "DIVIDEND_CALENDAR_HISTORY_LIMIT": "80",
                 "DIVIDEND_ALPHA_VANTAGE_REQUEST_INTERVAL_SECONDS": "1.25",
+                "DIVIDEND_ALPHA_VANTAGE_MAX_CALLS_PER_INVOCATION": "20",
             },
             description="Collects dividend calendar events and historical reactions",
         )
@@ -382,7 +383,7 @@ class ApiStack(Stack):
                 "DIVIDEND_COLLECTOR_FUNCTION_NAME": self.dividend_collector_fn.function_name,
                 "COLLECTION_PRICE_TASK_CHUNK_SIZE": "10",
                 "COLLECTION_NEWS_TASK_CHUNK_SIZE": "50",
-                "COLLECTION_CALENDAR_TASK_CHUNK_SIZE": "50",
+                "COLLECTION_CALENDAR_TASK_CHUNK_SIZE": "10",
                 "COLLECTION_MAX_TASKS_PER_RUN": "4",
                 "COLLECTION_ANALYSIS_HOUR_UTC": "22",
             },

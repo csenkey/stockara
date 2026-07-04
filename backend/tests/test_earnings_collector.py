@@ -14,6 +14,7 @@ from backend.src.collectors.earnings_collector import (
     fetch_earnings_calendar_events,
     fetch_earnings_events,
     handler,
+    _select_stocks,
 )
 
 
@@ -158,6 +159,19 @@ def test_fetch_earnings_calendar_events_defaults_to_four_month_forward_window(
     params = mock_get.call_args.kwargs["params"]
     assert params["from"] == "2026-06-29"
     assert params["to"] == "2026-10-27"
+
+
+def test_select_stocks_honors_ticker_offset():
+    stocks = [
+        {"ticker": "MSFT"},
+        {"ticker": "AAPL"},
+        {"ticker": "NVDA"},
+        {"ticker": "AMZN"},
+    ]
+
+    selected = _select_stocks(stocks, {"ticker_offset": 1, "max_tickers": 2})
+
+    assert [stock["ticker"] for stock in selected] == ["AMZN", "MSFT"]
 
 
 def test_enrich_price_reaction_uses_stored_prices_around_past_event():
