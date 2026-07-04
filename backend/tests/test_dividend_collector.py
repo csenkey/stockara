@@ -188,6 +188,35 @@ def test_fetch_dividend_events_uses_finnhub_fallback_when_yfinance_empty(mock_fi
     )
 
 
+@patch("backend.src.collectors.dividend_collector.fetch_finnhub_dividend_events")
+def test_fetch_dividend_events_uses_finnhub_fallback_when_yfinance_history_raises(
+    mock_finnhub,
+):
+    class FailingTicker:
+        info = {}
+
+        @property
+        def dividends(self):
+            raise RuntimeError("429 Client Error: Too Many Requests")
+
+    mock_finnhub.return_value = [
+        {
+            "ticker": "AAPL",
+            "ex_dividend_date": date(2026, 8, 15),
+            "provider": "finnhub",
+        }
+    ]
+
+    with patch(
+        "backend.src.collectors.dividend_collector.yf.Ticker",
+        return_value=FailingTicker(),
+    ):
+        events = fetch_dividend_events("aapl", company_name="Apple")
+
+    assert events == mock_finnhub.return_value
+    mock_finnhub.assert_called_once()
+
+
 def test_enrich_price_reaction_uses_stored_prices_around_past_event():
     event = {
         "ticker": "AAPL",

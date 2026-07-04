@@ -308,7 +308,15 @@ def fetch_dividend_events(
         dividend_yield *= Decimal("100")
 
     events: list[dict[str, Any]] = []
-    dividends = getattr(yf_ticker, "dividends", None)
+    try:
+        dividends = getattr(yf_ticker, "dividends", None)
+    except Exception as exc:
+        logger.warning(
+            "yfinance_dividend_history_unavailable",
+            ticker=ticker.upper(),
+            error=str(exc),
+        )
+        dividends = None
     if dividends is not None and len(dividends) > 0:
         recent = dividends
         if start_date is not None:
