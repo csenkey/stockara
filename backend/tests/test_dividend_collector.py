@@ -107,7 +107,7 @@ def test_fetch_dividend_events_captures_raw_yfinance_provider_rows():
     assert len(provider_events) == 2
     assert provider_events[0]["provider"] == "yfinance"
     assert provider_events[0]["ticker"] == "AAPL"
-    assert provider_events[0]["ex_dividend_date"] == date(2026, 6, 15)
+    assert provider_events[0]["ex_dividend_date"] == "2026-06-15"
     assert provider_events[0]["raw_fields"]["dividend_amount"] == 0.25
     assert provider_events[1]["raw_fields"]["source"] == "ticker_info"
 
@@ -149,7 +149,7 @@ def test_fetch_finnhub_dividend_events_normalizes_rows(mock_get, monkeypatch):
     assert events[0]["ticker"] == "AAPL"
     assert events[0]["provider"] == "finnhub"
     assert events[0]["ex_dividend_date"] == date(2026, 8, 15)
-    assert events[0]["pay_date"] == date(2026, 8, 22)
+    assert events[0]["pay_date"] == "2026-08-22"
     assert events[0]["dividend_amount"] == Decimal("0.26")
     assert provider_events[0]["provider"] == "finnhub"
     assert provider_events[0]["raw_fields"]["currency"] == "USD"
@@ -223,7 +223,7 @@ def test_fetch_alpha_vantage_dividend_events_normalizes_rows(mock_get, monkeypat
     assert events[0]["ticker"] == "AAPL"
     assert events[0]["provider"] == "alpha_vantage"
     assert events[0]["ex_dividend_date"] == date(2026, 8, 15)
-    assert events[0]["pay_date"] == date(2026, 8, 22)
+    assert events[0]["pay_date"] == "2026-08-22"
     assert events[0]["dividend_amount"] == Decimal("0.26")
     assert provider_events[0]["provider"] == "alpha_vantage"
     assert provider_events[0]["raw_fields"]["record_date"] == "2026-08-16"
