@@ -354,6 +354,7 @@ class ApiStack(Stack):
                 "DIVIDEND_CALENDAR_LOOKBACK_DAYS": "1825",
                 "DIVIDEND_CALENDAR_LOOKAHEAD_DAYS": "120",
                 "DIVIDEND_CALENDAR_HISTORY_LIMIT": "80",
+                "DIVIDEND_ALPHA_VANTAGE_REQUEST_INTERVAL_SECONDS": "1.25",
             },
             description="Collects dividend calendar events and historical reactions",
         )

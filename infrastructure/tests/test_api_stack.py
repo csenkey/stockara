@@ -160,6 +160,7 @@ def test_calendar_collector_lambdas_and_schedules_are_created():
                         "ALPHA_VANTAGE_API_KEY_SECRET_NAME": (
                             "stockara/codex-test/alpha-vantage-api-key-current"
                         ),
+                        "DIVIDEND_ALPHA_VANTAGE_REQUEST_INTERVAL_SECONDS": "1.25",
                     }
                 )
             },

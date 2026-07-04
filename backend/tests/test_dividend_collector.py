@@ -16,6 +16,7 @@ from backend.src.collectors.dividend_collector import (
     fetch_dividend_events,
     fetch_finnhub_dividend_events,
     handler,
+    _pace_alpha_vantage_request,
 )
 
 
@@ -250,6 +251,27 @@ def test_fetch_alpha_vantage_dividend_events_handles_provider_note(
 
     assert fetch_alpha_vantage_dividend_events("aapl") == []
     assert mock_logger.warning.call_args.kwargs["error"] == "rate limit"
+
+
+def test_pace_alpha_vantage_request_sleeps_between_configured_calls(monkeypatch):
+    import backend.src.collectors.dividend_collector as collector
+
+    monkeypatch.setattr(
+        collector,
+        "DEFAULT_ALPHA_VANTAGE_REQUEST_INTERVAL_SECONDS",
+        1.25,
+    )
+    monkeypatch.setattr(collector, "_LAST_ALPHA_VANTAGE_REQUEST_AT", 0.0)
+    sleep = MagicMock()
+    monkeypatch.setattr(collector.time, "sleep", sleep)
+    monotonic_values = iter([100.0, 100.0, 100.5, 101.75])
+    monkeypatch.setattr(collector.time, "monotonic", lambda: next(monotonic_values))
+
+    _pace_alpha_vantage_request()
+    _pace_alpha_vantage_request()
+
+    sleep.assert_called_once_with(0.75)
+    assert collector._LAST_ALPHA_VANTAGE_REQUEST_AT == 101.75
 
 
 @patch("backend.src.collectors.dividend_collector.fetch_finnhub_dividend_events")

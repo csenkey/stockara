@@ -2,6 +2,7 @@
 
 import os
 import re
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -38,12 +39,16 @@ CLOUDWATCH_NAMESPACE = "StockMonitoring"
 DEFAULT_LOOKBACK_DAYS = int(os.environ.get("DIVIDEND_CALENDAR_LOOKBACK_DAYS", "1825"))
 DEFAULT_LOOKAHEAD_DAYS = int(os.environ.get("DIVIDEND_CALENDAR_LOOKAHEAD_DAYS", "120"))
 DEFAULT_HISTORY_LIMIT = int(os.environ.get("DIVIDEND_CALENDAR_HISTORY_LIMIT", "80"))
+DEFAULT_ALPHA_VANTAGE_REQUEST_INTERVAL_SECONDS = float(
+    os.environ.get("DIVIDEND_ALPHA_VANTAGE_REQUEST_INTERVAL_SECONDS", "0")
+)
 MAX_TICKERS_PER_RUN = 50
 ARTIFACT_BUCKET = os.environ.get("STOCKARA_ARTIFACT_BUCKET", "")
 COLLECTION_MANIFEST_BUCKET = os.environ.get(
     "COLLECTION_MANIFEST_BUCKET",
     ARTIFACT_BUCKET,
 )
+_LAST_ALPHA_VANTAGE_REQUEST_AT = 0.0
 
 
 @dataclass
@@ -504,6 +509,7 @@ def fetch_alpha_vantage_dividend_events(
     range_start = start_date or today - timedelta(days=DEFAULT_LOOKBACK_DAYS)
     range_end = end_date or today + timedelta(days=DEFAULT_LOOKAHEAD_DAYS)
     try:
+        _pace_alpha_vantage_request()
         response = requests.get(
             ALPHA_VANTAGE_URL,
             params={
@@ -696,6 +702,20 @@ def _alpha_vantage_api_key() -> str | None:
         "ALPHA_VANTAGE_API_KEY_SECRET_NAME",
         supported_json_keys=("ALPHA_VANTAGE_API_KEY", "alpha_vantage_api_key", "api_key"),
     )
+
+
+def _pace_alpha_vantage_request() -> None:
+    global _LAST_ALPHA_VANTAGE_REQUEST_AT
+    interval = max(DEFAULT_ALPHA_VANTAGE_REQUEST_INTERVAL_SECONDS, 0)
+    if interval <= 0:
+        return
+    now = time.monotonic()
+    elapsed = now - _LAST_ALPHA_VANTAGE_REQUEST_AT
+    if _LAST_ALPHA_VANTAGE_REQUEST_AT and elapsed < interval:
+        wait_seconds = interval - elapsed
+        logger.info("alpha_vantage_dividend_request_paced", wait_seconds=wait_seconds)
+        time.sleep(wait_seconds)
+    _LAST_ALPHA_VANTAGE_REQUEST_AT = time.monotonic()
 
 
 def _safe_provider_error(exc: Exception) -> str:
