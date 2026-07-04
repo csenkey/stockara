@@ -1,6 +1,7 @@
 """Dividend calendar collector for Phase 1 signals."""
 
 import os
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -409,17 +410,25 @@ def fetch_finnhub_dividend_events(
     today = date.today()
     range_start = start_date or today - timedelta(days=DEFAULT_LOOKBACK_DAYS)
     range_end = end_date or today + timedelta(days=DEFAULT_LOOKAHEAD_DAYS)
-    response = requests.get(
-        FINNHUB_DIVIDEND_URL,
-        params={
-            "symbol": ticker.upper(),
-            "from": range_start.isoformat(),
-            "to": range_end.isoformat(),
-            "token": api_key,
-        },
-        timeout=30,
-    )
-    response.raise_for_status()
+    try:
+        response = requests.get(
+            FINNHUB_DIVIDEND_URL,
+            params={
+                "symbol": ticker.upper(),
+                "from": range_start.isoformat(),
+                "to": range_end.isoformat(),
+                "token": api_key,
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        logger.warning(
+            "finnhub_dividend_events_unavailable",
+            ticker=ticker.upper(),
+            error=_safe_provider_error(exc),
+        )
+        return []
     payload = response.json()
     rows = payload if isinstance(payload, list) else payload.get("dividends", [])
 
@@ -574,6 +583,10 @@ def _finnhub_api_key() -> str | None:
         "FINNHUB_KEY_SECRET_NAME",
         supported_json_keys=("FINNHUB_KEY", "finnhub_key", "api_key"),
     )
+
+
+def _safe_provider_error(exc: Exception) -> str:
+    return re.sub(r"([?&]token=)[^&\s]+", r"\1***", str(exc))
 
 
 def _serialize_raw_value(value: Any) -> Any:

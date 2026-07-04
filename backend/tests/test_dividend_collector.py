@@ -5,6 +5,7 @@ from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
+import requests
 
 from src.collectors.collection_distributor import build_manifest
 from src.models.schemas import CollectionTaskStatus, CollectionTaskType
@@ -155,6 +156,30 @@ def test_fetch_finnhub_dividend_events_normalizes_rows(mock_get, monkeypatch):
     assert params["symbol"] == "AAPL"
     assert params["from"] == "2026-05-01"
     assert params["to"] == "2026-09-01"
+
+
+@patch("backend.src.collectors.dividend_collector.logger")
+@patch("backend.src.collectors.dividend_collector.requests.get")
+def test_fetch_finnhub_dividend_events_treats_http_error_as_unavailable(
+    mock_get,
+    mock_logger,
+    monkeypatch,
+):
+    monkeypatch.setenv("FINNHUB_KEY", "test-finnhub-key")
+    from backend.src.services.secrets import get_provider_api_key
+
+    get_provider_api_key.cache_clear()
+    response = MagicMock()
+    response.raise_for_status.side_effect = requests.HTTPError(
+        "403 Client Error: Forbidden for url: "
+        "https://finnhub.io/api/v1/stock/dividend?symbol=AAPL&token=secret-token"
+    )
+    mock_get.return_value = response
+
+    events = fetch_finnhub_dividend_events("aapl")
+
+    assert events == []
+    assert mock_logger.warning.call_args.kwargs["error"].endswith("token=***")
 
 
 @patch("backend.src.collectors.dividend_collector.fetch_finnhub_dividend_events")
