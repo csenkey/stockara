@@ -12,6 +12,7 @@ from src.models.schemas import CollectionTaskStatus, CollectionTaskType
 
 from backend.src.collectors.dividend_collector import (
     enrich_price_reaction,
+    fetch_alpha_vantage_dividend_events,
     fetch_dividend_events,
     fetch_finnhub_dividend_events,
     handler,
@@ -182,6 +183,75 @@ def test_fetch_finnhub_dividend_events_treats_http_error_as_unavailable(
     assert mock_logger.warning.call_args.kwargs["error"].endswith("token=***")
 
 
+@patch("backend.src.collectors.dividend_collector.requests.get")
+def test_fetch_alpha_vantage_dividend_events_normalizes_rows(mock_get, monkeypatch):
+    monkeypatch.setenv("ALPHA_VANTAGE_API_KEY", "test-alpha-key")
+    from backend.src.services.secrets import get_provider_api_key
+
+    get_provider_api_key.cache_clear()
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {
+        "symbol": "AAPL",
+        "data": [
+            {
+                "ex_dividend_date": "2026-08-15",
+                "declaration_date": "2026-07-30",
+                "record_date": "2026-08-16",
+                "payment_date": "2026-08-22",
+                "amount": "0.26",
+            },
+            {
+                "ex_dividend_date": "2020-01-15",
+                "payment_date": "2020-01-22",
+                "amount": "0.20",
+            },
+        ],
+    }
+    mock_get.return_value = response
+
+    provider_events: list[dict] = []
+    events = fetch_alpha_vantage_dividend_events(
+        "aapl",
+        company_name="Apple",
+        start_date=date(2026, 1, 1),
+        end_date=date(2026, 12, 31),
+        provider_events=provider_events,
+    )
+
+    assert len(events) == 1
+    assert events[0]["ticker"] == "AAPL"
+    assert events[0]["provider"] == "alpha_vantage"
+    assert events[0]["ex_dividend_date"] == date(2026, 8, 15)
+    assert events[0]["pay_date"] == date(2026, 8, 22)
+    assert events[0]["dividend_amount"] == Decimal("0.26")
+    assert provider_events[0]["provider"] == "alpha_vantage"
+    assert provider_events[0]["raw_fields"]["record_date"] == "2026-08-16"
+    params = mock_get.call_args.kwargs["params"]
+    assert params["function"] == "DIVIDENDS"
+    assert params["symbol"] == "AAPL"
+
+
+@patch("backend.src.collectors.dividend_collector.logger")
+@patch("backend.src.collectors.dividend_collector.requests.get")
+def test_fetch_alpha_vantage_dividend_events_handles_provider_note(
+    mock_get,
+    mock_logger,
+    monkeypatch,
+):
+    monkeypatch.setenv("ALPHA_VANTAGE_API_KEY", "test-alpha-key")
+    from backend.src.services.secrets import get_provider_api_key
+
+    get_provider_api_key.cache_clear()
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {"Note": "rate limit"}
+    mock_get.return_value = response
+
+    assert fetch_alpha_vantage_dividend_events("aapl") == []
+    assert mock_logger.warning.call_args.kwargs["error"] == "rate limit"
+
+
 @patch("backend.src.collectors.dividend_collector.fetch_finnhub_dividend_events")
 def test_fetch_dividend_events_uses_finnhub_fallback_when_yfinance_empty(mock_finnhub):
     ticker = MagicMock()
@@ -240,6 +310,32 @@ def test_fetch_dividend_events_uses_finnhub_fallback_when_yfinance_history_raise
 
     assert events == mock_finnhub.return_value
     mock_finnhub.assert_called_once()
+
+
+@patch("backend.src.collectors.dividend_collector.fetch_alpha_vantage_dividend_events")
+@patch("backend.src.collectors.dividend_collector.fetch_finnhub_dividend_events")
+def test_fetch_dividend_events_uses_alpha_vantage_when_finnhub_empty(
+    mock_finnhub,
+    mock_alpha_vantage,
+):
+    ticker = MagicMock()
+    ticker.dividends = pd.Series(dtype=float)
+    ticker.info = {}
+    mock_finnhub.return_value = []
+    mock_alpha_vantage.return_value = [
+        {
+            "ticker": "AAPL",
+            "ex_dividend_date": date(2026, 8, 15),
+            "provider": "alpha_vantage",
+        }
+    ]
+
+    with patch("backend.src.collectors.dividend_collector.yf.Ticker", return_value=ticker):
+        events = fetch_dividend_events("aapl", company_name="Apple")
+
+    assert events == mock_alpha_vantage.return_value
+    mock_finnhub.assert_called_once()
+    mock_alpha_vantage.assert_called_once()
 
 
 def test_enrich_price_reaction_uses_stored_prices_around_past_event():

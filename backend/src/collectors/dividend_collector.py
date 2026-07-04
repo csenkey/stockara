@@ -32,6 +32,7 @@ logger = structlog.get_logger(__name__)
 DATE_TYPE = date
 DATETIME_TYPE = datetime
 FINNHUB_DIVIDEND_URL = "https://finnhub.io/api/v1/stock/dividend"
+ALPHA_VANTAGE_URL = "https://www.alphavantage.co/query"
 
 CLOUDWATCH_NAMESPACE = "StockMonitoring"
 DEFAULT_LOOKBACK_DAYS = int(os.environ.get("DIVIDEND_CALENDAR_LOOKBACK_DAYS", "1825"))
@@ -385,7 +386,17 @@ def fetch_dividend_events(
     if events:
         return events
 
-    return fetch_finnhub_dividend_events(
+    events = fetch_finnhub_dividend_events(
+        ticker,
+        company_name=company_name,
+        start_date=start_date,
+        end_date=end_date,
+        provider_events=provider_events,
+    )
+    if events:
+        return events
+
+    return fetch_alpha_vantage_dividend_events(
         ticker,
         company_name=company_name,
         start_date=start_date,
@@ -473,6 +484,99 @@ def fetch_finnhub_dividend_events(
             )
         )
     logger.info("finnhub_dividend_events_fetched", ticker=ticker.upper(), count=len(events))
+    return events
+
+
+def fetch_alpha_vantage_dividend_events(
+    ticker: str,
+    company_name: str | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    provider_events: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch dividend events from Alpha Vantage corporate actions."""
+    api_key = _alpha_vantage_api_key()
+    if not api_key:
+        logger.warning("alpha_vantage_api_key_not_configured_for_dividend_calendar")
+        return []
+
+    today = date.today()
+    range_start = start_date or today - timedelta(days=DEFAULT_LOOKBACK_DAYS)
+    range_end = end_date or today + timedelta(days=DEFAULT_LOOKAHEAD_DAYS)
+    try:
+        response = requests.get(
+            ALPHA_VANTAGE_URL,
+            params={
+                "function": "DIVIDENDS",
+                "symbol": ticker.upper(),
+                "apikey": api_key,
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        logger.warning(
+            "alpha_vantage_dividend_events_unavailable",
+            ticker=ticker.upper(),
+            error=_safe_provider_error(exc),
+        )
+        return []
+
+    payload = response.json()
+    provider_error = _alpha_vantage_payload_error(payload)
+    if provider_error:
+        logger.warning(
+            "alpha_vantage_dividend_payload_unavailable",
+            ticker=ticker.upper(),
+            error=provider_error,
+        )
+        return []
+
+    events: list[dict[str, Any]] = []
+    seen_dates: set[date] = set()
+    for row in payload.get("data", []):
+        if not isinstance(row, dict):
+            continue
+        ex_date = _normalize_date(row.get("ex_dividend_date") or row.get("exDate"))
+        if ex_date is None or ex_date in seen_dates:
+            continue
+        if ex_date < range_start or ex_date > range_end:
+            continue
+        seen_dates.add(ex_date)
+        amount = _to_decimal(row.get("amount") or row.get("dividend_amount"))
+        pay_date = _normalize_date(row.get("payment_date") or row.get("payDate"))
+        if provider_events is not None:
+            provider_events.append(
+                _raw_provider_event(
+                    provider="alpha_vantage",
+                    ticker=ticker.upper(),
+                    company_name=company_name,
+                    ex_dividend_date=ex_date,
+                    source_url="https://www.alphavantage.co/documentation/#dividends",
+                    raw_fields={
+                        str(key): _serialize_raw_value(value)
+                        for key, value in row.items()
+                    },
+                )
+            )
+        events.append(
+            _event(
+                ticker,
+                company_name,
+                ex_date,
+                amount=amount,
+                dividend_yield=None,
+                is_upcoming=ex_date >= today,
+                pay_date=pay_date,
+                provider="alpha_vantage",
+                source_url="https://www.alphavantage.co/documentation/#dividends",
+            )
+        )
+    logger.info(
+        "alpha_vantage_dividend_events_fetched",
+        ticker=ticker.upper(),
+        count=len(events),
+    )
     return events
 
 
@@ -585,8 +689,25 @@ def _finnhub_api_key() -> str | None:
     )
 
 
+def _alpha_vantage_api_key() -> str | None:
+    return get_provider_api_key(
+        "alpha_vantage",
+        "ALPHA_VANTAGE_API_KEY",
+        "ALPHA_VANTAGE_API_KEY_SECRET_NAME",
+        supported_json_keys=("ALPHA_VANTAGE_API_KEY", "alpha_vantage_api_key", "api_key"),
+    )
+
+
 def _safe_provider_error(exc: Exception) -> str:
-    return re.sub(r"([?&]token=)[^&\s]+", r"\1***", str(exc))
+    return re.sub(r"([?&](?:token|apikey)=)[^&\s]+", r"\1***", str(exc))
+
+
+def _alpha_vantage_payload_error(payload: dict[str, Any]) -> str | None:
+    for key in ("Error Message", "Note", "Information"):
+        value = payload.get(key)
+        if value:
+            return str(value)
+    return None
 
 
 def _serialize_raw_value(value: Any) -> Any:

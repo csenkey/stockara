@@ -349,6 +349,7 @@ class ApiStack(Stack):
             environment={
                 **common_env,
                 "FINNHUB_KEY_SECRET_NAME": finnhub_key_secret_name,
+                "ALPHA_VANTAGE_API_KEY_SECRET_NAME": alpha_vantage_key_secret_name,
                 "POWERTOOLS_SERVICE_NAME": "dividend-collector",
                 "DIVIDEND_CALENDAR_LOOKBACK_DAYS": "1825",
                 "DIVIDEND_CALENDAR_LOOKAHEAD_DAYS": "120",
@@ -459,6 +460,7 @@ class ApiStack(Stack):
         finnhub_key_secret.grant_read(self.dividend_collector_fn)
         alpha_vantage_key_secret.grant_read(self.news_collector_fn)
         alpha_vantage_key_secret.grant_read(self.stock_collector_fn)
+        alpha_vantage_key_secret.grant_read(self.dividend_collector_fn)
 
         watchlist_seed_provider = cr.Provider(
             self,
