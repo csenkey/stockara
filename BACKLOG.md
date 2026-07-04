@@ -50,6 +50,18 @@ Execution tasks:
 
 Critical calendar follow-up:
 
+- [ ] Roll out dividend-calendar backfill safely after Alpha Vantage throttling.
+  - Current status: 2026-07-04 prod verification collected 119 dividend events for 10 tickers with `failed_tickers=[]`, `warnings=[]`, and `alpha_vantage_dividend_request_paced` present in logs.
+  - Run staged dividend-only probes at 25, 50, 100, and then full active-watchlist size instead of jumping straight to a full historical run.
+  - Track Alpha Vantage free-tier daily quota separately from per-request pacing; pacing prevents bursts, but does not prevent daily quota exhaustion.
+  - Add an explicit daily quota budget/circuit breaker for Alpha Vantage dividend fallback so one backfill cannot consume all quota needed for normal daily collection.
+  - Emit summary metrics for fallback-provider calls, rate-limit notes, quota-skipped tickers, and zero-event tickers.
+  - Keep Finnhub 403 as a provider-health warning until the key/plan supports dividend endpoints or the provider is disabled for dividends.
+- [ ] Improve calendar provider-health diagnostics.
+  - Expose provider health per provider, not only the winning provider summary, for earnings and dividends.
+  - Distinguish `primary_success`, `fallback_success`, `all_providers_empty`, `provider_forbidden`, `rate_limited`, `quota_exhausted`, `schema_changed`, and `unsupported_symbol`.
+  - Include provider health in the public calendar artifact and data-freshness page so "no events" is not confused with "collector did not run".
+  - Add smoke checks that fail when every configured calendar provider is forbidden, rate-limited, or empty for a representative ticker set.
 - [ ] Build an S3 calendar data lake for earnings and dividends.
   - Treat calendar events as source-of-truth market data, like ticker OHLCV price files.
   - Persist raw provider responses in S3 before normalization so provider gaps, schema changes, and bad rows can be reprocessed without refetching.
