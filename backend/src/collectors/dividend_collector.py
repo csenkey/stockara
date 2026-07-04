@@ -8,11 +8,13 @@ from typing import Any
 
 import boto3
 import pandas as pd
+import requests
 import structlog
 import yfinance as yf
 
 from src.db.connection import DatabasePool, store
 from src.models.schemas import CollectionOutputCounts, CollectionTaskType
+from src.services.secrets import get_provider_api_key
 from src.services.collection_manifest import (
     complete_task,
     find_task,
@@ -28,6 +30,7 @@ from src.services.calendar_artifacts import (
 logger = structlog.get_logger(__name__)
 DATE_TYPE = date
 DATETIME_TYPE = datetime
+FINNHUB_DIVIDEND_URL = "https://finnhub.io/api/v1/stock/dividend"
 
 CLOUDWATCH_NAMESPACE = "StockMonitoring"
 DEFAULT_LOOKBACK_DAYS = int(os.environ.get("DIVIDEND_CALENDAR_LOOKBACK_DAYS", "1825"))
@@ -296,7 +299,7 @@ def fetch_dividend_events(
     end_date: date | None = None,
     provider_events: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Fetch historical and available upcoming dividend events from yfinance."""
+    """Fetch historical and available upcoming dividend events."""
     yf_ticker = yf.Ticker(ticker)
     today = date.today()
     info = _safe_info(yf_ticker)
@@ -368,8 +371,91 @@ def fetch_dividend_events(
                         "source": "ticker_info",
                     },
                 )
-            )
+        )
         events.append(upcoming)
+    if events:
+        return events
+
+    return fetch_finnhub_dividend_events(
+        ticker,
+        company_name=company_name,
+        start_date=start_date,
+        end_date=end_date,
+        provider_events=provider_events,
+    )
+
+
+def fetch_finnhub_dividend_events(
+    ticker: str,
+    company_name: str | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    provider_events: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch dividend events from Finnhub when yfinance has no usable rows."""
+    api_key = _finnhub_api_key()
+    if not api_key:
+        logger.warning("finnhub_api_key_not_configured_for_dividend_calendar")
+        return []
+
+    today = date.today()
+    range_start = start_date or today - timedelta(days=DEFAULT_LOOKBACK_DAYS)
+    range_end = end_date or today + timedelta(days=DEFAULT_LOOKAHEAD_DAYS)
+    response = requests.get(
+        FINNHUB_DIVIDEND_URL,
+        params={
+            "symbol": ticker.upper(),
+            "from": range_start.isoformat(),
+            "to": range_end.isoformat(),
+            "token": api_key,
+        },
+        timeout=30,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    rows = payload if isinstance(payload, list) else payload.get("dividends", [])
+
+    events: list[dict[str, Any]] = []
+    seen_dates: set[date] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        ex_date = _normalize_date(row.get("exDate") or row.get("date"))
+        if ex_date is None or ex_date in seen_dates:
+            continue
+        if ex_date < range_start or ex_date > range_end:
+            continue
+        seen_dates.add(ex_date)
+        amount = _to_decimal(row.get("amount") or row.get("adjustedAmount"))
+        pay_date = _normalize_date(row.get("payDate") or row.get("paymentDate"))
+        if provider_events is not None:
+            provider_events.append(
+                _raw_provider_event(
+                    provider="finnhub",
+                    ticker=ticker.upper(),
+                    company_name=company_name,
+                    ex_dividend_date=ex_date,
+                    source_url="https://finnhub.io/docs/api/stock-dividends",
+                    raw_fields={
+                        str(key): _serialize_raw_value(value)
+                        for key, value in row.items()
+                    },
+                )
+            )
+        events.append(
+            _event(
+                ticker,
+                company_name,
+                ex_date,
+                amount=amount,
+                dividend_yield=None,
+                is_upcoming=ex_date >= today,
+                pay_date=pay_date,
+                provider="finnhub",
+                source_url="https://finnhub.io/docs/api/stock-dividends",
+            )
+        )
+    logger.info("finnhub_dividend_events_fetched", ticker=ticker.upper(), count=len(events))
     return events
 
 
@@ -408,6 +494,8 @@ def _event(
     dividend_yield: Decimal | None,
     is_upcoming: bool,
     pay_date: date | None = None,
+    provider: str = "yfinance",
+    source_url: str | None = None,
 ) -> dict[str, Any]:
     return {
         "ticker": ticker.upper(),
@@ -417,8 +505,9 @@ def _event(
         "dividend_amount": amount,
         "dividend_yield": dividend_yield,
         "is_upcoming": is_upcoming,
-        "provider": "yfinance",
-        "source_url": f"https://finance.yahoo.com/quote/{ticker.upper()}/history?filter=div",
+        "provider": provider,
+        "source_url": source_url
+        or f"https://finance.yahoo.com/quote/{ticker.upper()}/history?filter=div",
         "collected_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -452,6 +541,7 @@ def _safe_info(yf_ticker: Any) -> dict[str, Any]:
 
 def _raw_provider_event(
     *,
+    provider: str = "yfinance",
     ticker: str,
     company_name: str | None,
     ex_dividend_date: date,
@@ -459,7 +549,7 @@ def _raw_provider_event(
     raw_fields: dict[str, Any],
 ) -> dict[str, Any]:
     return {
-        "provider": "yfinance",
+        "provider": provider,
         "ticker": ticker,
         "company_name": company_name,
         "ex_dividend_date": ex_dividend_date,
@@ -467,6 +557,15 @@ def _raw_provider_event(
         "raw_fields": raw_fields,
         "collected_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def _finnhub_api_key() -> str | None:
+    return get_provider_api_key(
+        "finnhub",
+        "FINNHUB_KEY",
+        "FINNHUB_KEY_SECRET_NAME",
+        supported_json_keys=("FINNHUB_KEY", "finnhub_key", "api_key"),
+    )
 
 
 def _serialize_raw_value(value: Any) -> Any:

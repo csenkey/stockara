@@ -348,6 +348,7 @@ class ApiStack(Stack):
             role=batch_role,
             environment={
                 **common_env,
+                "FINNHUB_KEY_SECRET_NAME": finnhub_key_secret_name,
                 "POWERTOOLS_SERVICE_NAME": "dividend-collector",
                 "DIVIDEND_CALENDAR_LOOKBACK_DAYS": "1825",
                 "DIVIDEND_CALENDAR_LOOKAHEAD_DAYS": "120",
@@ -455,6 +456,7 @@ class ApiStack(Stack):
         finnhub_key_secret.grant_read(self.news_collector_fn)
         finnhub_key_secret.grant_read(self.evidence_collector_fn)
         finnhub_key_secret.grant_read(self.earnings_collector_fn)
+        finnhub_key_secret.grant_read(self.dividend_collector_fn)
         alpha_vantage_key_secret.grant_read(self.news_collector_fn)
         alpha_vantage_key_secret.grant_read(self.stock_collector_fn)
 

@@ -152,7 +152,12 @@ def test_calendar_collector_lambdas_and_schedules_are_created():
             "Handler": "src.collectors.dividend_collector.handler",
             "Environment": {
                 "Variables": assertions.Match.object_like(
-                    {"POWERTOOLS_SERVICE_NAME": "dividend-collector"}
+                    {
+                        "POWERTOOLS_SERVICE_NAME": "dividend-collector",
+                        "FINNHUB_KEY_SECRET_NAME": (
+                            "stockara/codex-test/finnhub-key-current"
+                        ),
+                    }
                 )
             },
         },

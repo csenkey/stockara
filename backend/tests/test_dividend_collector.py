@@ -12,6 +12,7 @@ from src.models.schemas import CollectionTaskStatus, CollectionTaskType
 from backend.src.collectors.dividend_collector import (
     enrich_price_reaction,
     fetch_dividend_events,
+    fetch_finnhub_dividend_events,
     handler,
 )
 
@@ -107,6 +108,84 @@ def test_fetch_dividend_events_captures_raw_yfinance_provider_rows():
     assert provider_events[0]["ex_dividend_date"] == date(2026, 6, 15)
     assert provider_events[0]["raw_fields"]["dividend_amount"] == 0.25
     assert provider_events[1]["raw_fields"]["source"] == "ticker_info"
+
+
+@patch("backend.src.collectors.dividend_collector.requests.get")
+def test_fetch_finnhub_dividend_events_normalizes_rows(mock_get, monkeypatch):
+    monkeypatch.setenv("FINNHUB_KEY", "test-finnhub-key")
+    from backend.src.services.secrets import get_provider_api_key
+
+    get_provider_api_key.cache_clear()
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = [
+        {
+            "symbol": "AAPL",
+            "exDate": "2026-08-15",
+            "payDate": "2026-08-22",
+            "amount": 0.26,
+            "currency": "USD",
+        },
+        {
+            "symbol": "AAPL",
+            "exDate": "2026-05-15",
+            "amount": 0.25,
+        },
+    ]
+    mock_get.return_value = response
+
+    provider_events: list[dict] = []
+    events = fetch_finnhub_dividend_events(
+        "aapl",
+        company_name="Apple",
+        start_date=date(2026, 5, 1),
+        end_date=date(2026, 9, 1),
+        provider_events=provider_events,
+    )
+
+    assert len(events) == 2
+    assert events[0]["ticker"] == "AAPL"
+    assert events[0]["provider"] == "finnhub"
+    assert events[0]["ex_dividend_date"] == date(2026, 8, 15)
+    assert events[0]["pay_date"] == date(2026, 8, 22)
+    assert events[0]["dividend_amount"] == Decimal("0.26")
+    assert provider_events[0]["provider"] == "finnhub"
+    assert provider_events[0]["raw_fields"]["currency"] == "USD"
+    params = mock_get.call_args.kwargs["params"]
+    assert params["symbol"] == "AAPL"
+    assert params["from"] == "2026-05-01"
+    assert params["to"] == "2026-09-01"
+
+
+@patch("backend.src.collectors.dividend_collector.fetch_finnhub_dividend_events")
+def test_fetch_dividend_events_uses_finnhub_fallback_when_yfinance_empty(mock_finnhub):
+    ticker = MagicMock()
+    ticker.dividends = pd.Series(dtype=float)
+    ticker.info = {}
+    mock_finnhub.return_value = [
+        {
+            "ticker": "AAPL",
+            "ex_dividend_date": date(2026, 8, 15),
+            "provider": "finnhub",
+        }
+    ]
+
+    with patch("backend.src.collectors.dividend_collector.yf.Ticker", return_value=ticker):
+        events = fetch_dividend_events(
+            "aapl",
+            company_name="Apple",
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 12, 31),
+        )
+
+    assert events == mock_finnhub.return_value
+    mock_finnhub.assert_called_once_with(
+        "aapl",
+        company_name="Apple",
+        start_date=date(2026, 1, 1),
+        end_date=date(2026, 12, 31),
+        provider_events=None,
+    )
 
 
 def test_enrich_price_reaction_uses_stored_prices_around_past_event():
