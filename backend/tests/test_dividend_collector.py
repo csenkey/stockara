@@ -240,6 +240,9 @@ def test_fetch_alpha_vantage_dividend_events_handles_provider_note(
     mock_logger,
     monkeypatch,
 ):
+    import backend.src.collectors.dividend_collector as collector
+
+    monkeypatch.setattr(collector, "_ALPHA_VANTAGE_DIVIDEND_QUOTA_EXHAUSTED", False)
     monkeypatch.setenv("ALPHA_VANTAGE_API_KEY", "test-alpha-key")
     from backend.src.services.secrets import get_provider_api_key
 
@@ -259,6 +262,30 @@ def test_fetch_alpha_vantage_dividend_events_handles_provider_note(
         "We have detected your API key as *** and our standard API rate "
         "limit is 25 requests per day."
     )
+    assert collector._ALPHA_VANTAGE_DIVIDEND_QUOTA_EXHAUSTED is True
+
+
+@patch("backend.src.collectors.dividend_collector.logger")
+@patch("backend.src.collectors.dividend_collector.requests.get")
+def test_fetch_alpha_vantage_dividend_events_skips_when_quota_exhausted(
+    mock_get,
+    mock_logger,
+    monkeypatch,
+):
+    import backend.src.collectors.dividend_collector as collector
+
+    monkeypatch.setattr(collector, "_ALPHA_VANTAGE_DIVIDEND_QUOTA_EXHAUSTED", True)
+    monkeypatch.setenv("ALPHA_VANTAGE_API_KEY", "test-alpha-key")
+    from backend.src.services.secrets import get_provider_api_key
+
+    get_provider_api_key.cache_clear()
+
+    assert fetch_alpha_vantage_dividend_events("aapl") == []
+    mock_get.assert_not_called()
+    assert mock_logger.warning.call_args.kwargs == {
+        "ticker": "AAPL",
+        "reason": "quota_exhausted",
+    }
 
 
 def test_pace_alpha_vantage_request_sleeps_between_configured_calls(monkeypatch):

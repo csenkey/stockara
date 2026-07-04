@@ -49,6 +49,7 @@ COLLECTION_MANIFEST_BUCKET = os.environ.get(
     ARTIFACT_BUCKET,
 )
 _LAST_ALPHA_VANTAGE_REQUEST_AT = 0.0
+_ALPHA_VANTAGE_DIVIDEND_QUOTA_EXHAUSTED = False
 
 
 @dataclass
@@ -504,6 +505,13 @@ def fetch_alpha_vantage_dividend_events(
     if not api_key:
         logger.warning("alpha_vantage_api_key_not_configured_for_dividend_calendar")
         return []
+    if _ALPHA_VANTAGE_DIVIDEND_QUOTA_EXHAUSTED:
+        logger.warning(
+            "alpha_vantage_dividend_quota_skipped",
+            ticker=ticker.upper(),
+            reason="quota_exhausted",
+        )
+        return []
 
     today = date.today()
     range_start = start_date or today - timedelta(days=DEFAULT_LOOKBACK_DAYS)
@@ -531,6 +539,8 @@ def fetch_alpha_vantage_dividend_events(
     payload = response.json()
     provider_error = _alpha_vantage_payload_error(payload)
     if provider_error:
+        if _is_alpha_vantage_quota_error(provider_error):
+            _mark_alpha_vantage_quota_exhausted()
         logger.warning(
             "alpha_vantage_dividend_payload_unavailable",
             ticker=ticker.upper(),
@@ -727,6 +737,20 @@ def _safe_provider_error(error: object) -> str:
         message,
         flags=re.IGNORECASE,
     )
+
+
+def _is_alpha_vantage_quota_error(error: object) -> bool:
+    message = str(error).lower()
+    return (
+        "rate limit" in message
+        or "standard api call frequency" in message
+        or "25 requests per day" in message
+    )
+
+
+def _mark_alpha_vantage_quota_exhausted() -> None:
+    global _ALPHA_VANTAGE_DIVIDEND_QUOTA_EXHAUSTED
+    _ALPHA_VANTAGE_DIVIDEND_QUOTA_EXHAUSTED = True
 
 
 def _alpha_vantage_payload_error(payload: dict[str, Any]) -> str | None:
