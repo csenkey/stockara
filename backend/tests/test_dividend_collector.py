@@ -246,11 +246,19 @@ def test_fetch_alpha_vantage_dividend_events_handles_provider_note(
     get_provider_api_key.cache_clear()
     response = MagicMock()
     response.raise_for_status.return_value = None
-    response.json.return_value = {"Note": "rate limit"}
+    response.json.return_value = {
+        "Note": (
+            "We have detected your API key as secret-alpha-key and our "
+            "standard API rate limit is 25 requests per day."
+        )
+    }
     mock_get.return_value = response
 
     assert fetch_alpha_vantage_dividend_events("aapl") == []
-    assert mock_logger.warning.call_args.kwargs["error"] == "rate limit"
+    assert mock_logger.warning.call_args.kwargs["error"] == (
+        "We have detected your API key as *** and our standard API rate "
+        "limit is 25 requests per day."
+    )
 
 
 def test_pace_alpha_vantage_request_sleeps_between_configured_calls(monkeypatch):

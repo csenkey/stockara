@@ -534,7 +534,7 @@ def fetch_alpha_vantage_dividend_events(
         logger.warning(
             "alpha_vantage_dividend_payload_unavailable",
             ticker=ticker.upper(),
-            error=provider_error,
+            error=_safe_provider_error(provider_error),
         )
         return []
 
@@ -718,8 +718,15 @@ def _pace_alpha_vantage_request() -> None:
     _LAST_ALPHA_VANTAGE_REQUEST_AT = time.monotonic()
 
 
-def _safe_provider_error(exc: Exception) -> str:
-    return re.sub(r"([?&](?:token|apikey)=)[^&\s]+", r"\1***", str(exc))
+def _safe_provider_error(error: object) -> str:
+    message = str(error)
+    message = re.sub(r"([?&](?:token|apikey)=)[^&\s]+", r"\1***", message)
+    return re.sub(
+        r"((?:api\s+)?key\s+(?:as|is)\s+)[A-Za-z0-9_-]+",
+        r"\1***",
+        message,
+        flags=re.IGNORECASE,
+    )
 
 
 def _alpha_vantage_payload_error(payload: dict[str, Any]) -> str | None:
