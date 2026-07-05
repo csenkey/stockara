@@ -10,7 +10,7 @@ The items below are must-have gaps to close before treating Phase 1 recommendati
 
 ### 1. Reliable Seed Stock Metadata
 
-**Status:** Open. Verified 2026-07-05: `data/watchlist_seed.csv` still has 100 rows with required metadata gaps. The seed handler now rejects missing required static metadata on first seed, existing metadata can be synced without clobbering live collection fields, the enrichment tool supports gap-only runs that preserve already complete rows, and Phase 1 excludes unresolved metadata rows from decision-grade scoring. A 2026-07-05 Nasdaq gap-only enrichment did not reduce the 100 gaps; the metadata audit classifies 3 gap rows as `provider_partial_profile` and 97 as `missing_provider_coverage`. Those rows need alternate-provider research, canonical ticker correction, inactive/delisted review, or removal from the active decision-grade universe.
+**Status:** Done. Verified 2026-07-05: `data/watchlist_seed.csv` has 906 active-scope rows and no required metadata gaps. The seed handler rejects missing required static metadata on first seed, existing metadata can be synced without clobbering live collection fields, the enrichment tool supports gap-only runs that preserve already complete rows, and Phase 1 excludes unresolved metadata rows from decision-grade scoring. The 97 unresolved stale, inactive, renamed, acquired, ETF, or otherwise out-of-scope gap rows were removed from the active seed universe. The 3 currently listed gap rows (`BRK.B`, `BF.B`, and `GEF`) now have source-backed company identity plus explicit sector, industry, metadata source, source URL, and verification date.
 
 **Gap:** The seed watchlist does not include sector metadata. `seed_watchlist_handler.py` uses a small `SECTOR_MAP` and defaults all unknown tickers to `Technology`.
 
@@ -26,12 +26,12 @@ The items below are must-have gaps to close before treating Phase 1 recommendati
 
 **Current verification:**
 
-- `data/watchlist_seed.csv` has 1003 rows.
-- 100 rows are missing at least one required metadata field from `docs/WATCHLIST_STATIC_METADATA_CONTRACT.md`.
+- `data/watchlist_seed.csv` has 906 active-scope rows.
+- 0 rows are missing required metadata fields from `docs/WATCHLIST_STATIC_METADATA_CONTRACT.md`.
 - No duplicate tickers were found.
 - No invalid `company_size` values were found.
 - The current gap list is tracked in `docs/WATCHLIST_METADATA_GAPS.md`.
-- The current provider-coverage classification is tracked in `docs/WATCHLIST_METADATA_AUDIT.md` and `docs/WATCHLIST_METADATA_AUDIT.csv`.
+- The current provider-coverage audit is tracked in `docs/WATCHLIST_METADATA_AUDIT.md` and `docs/WATCHLIST_METADATA_AUDIT.csv`; it has 0 unresolved decision-grade metadata rows.
 
 **References:**
 
