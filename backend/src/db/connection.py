@@ -771,6 +771,12 @@ class DynamoStore:
     def last_news_collection_summary(self) -> dict[str, Any] | None:
         return self._get_system_status_summary("NEWS_COLLECTION")
 
+    def last_earnings_collection(self) -> str | None:
+        return self._get_system_status_timestamp("EARNINGS_COLLECTION")
+
+    def last_dividend_collection(self) -> str | None:
+        return self._get_system_status_timestamp("DIVIDEND_COLLECTION")
+
     def put_config_list(self, name: str, values: list[str]) -> None:
         self.table.put_item(
             Item={
