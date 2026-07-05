@@ -1892,37 +1892,79 @@ def _sector_relative_signals(stock: dict[str, Any], run_date: date) -> list[dict
     sector_etf = SECTOR_ETFS.get(stock["sector"])
     if not sector_etf:
         return []
-    stock_rows = store.get_stock_data(ticker, run_date - timedelta(days=7), run_date)
-    if len(stock_rows) < 2:
+    stock_rows = store.get_stock_data(ticker, run_date - timedelta(days=45), run_date)
+    if len(stock_rows) < 21:
         return []
     try:
-        etf = yf.download(sector_etf, period="5d", progress=False, timeout=10)
+        etf = yf.download(sector_etf, period="1mo", progress=False, timeout=10)
         if etf is None or etf.empty:
             return []
-        stock_move = _pct_move(
-            _analysis_close_price(stock_rows[-2]),
-            _analysis_close_price(stock_rows[-1]),
-        )
-        etf_close = etf["Close"]
-        etf_move = _pct_move(etf_close.iloc[-2], etf_close.iloc[-1])
-        relative = stock_move - etf_move
-        if abs(relative) < 2:
+        stock_closes = [_analysis_close_price(row) for row in _ordered_stock_rows(stock_rows)]
+        etf_closes = _close_values_from_download(etf)
+        if len(etf_closes) < 21:
             return []
+
+        stock_return_5d = _window_return_percent(stock_closes, 5)
+        stock_return_20d = _window_return_percent(stock_closes, 20)
+        etf_return_5d = _window_return_percent(etf_closes, 5)
+        etf_return_20d = _window_return_percent(etf_closes, 20)
+        relative_5d = stock_return_5d - etf_return_5d
+        relative_20d = stock_return_20d - etf_return_20d
+        weighted_relative = relative_20d * 0.7 + relative_5d * 0.3
+        if abs(weighted_relative) < 3:
+            return []
+        score = int(max(-45, min(45, weighted_relative * 3)))
         return [
             _signal(
                 ticker,
                 "sector_relative",
-                "positive" if relative > 0 else "negative",
-                int(max(-30, min(30, relative * 5))),
-                "Sector-relative movement",
-                f"{ticker} moved {relative:.2f}% relative to {sector_etf}.",
+                "positive" if weighted_relative > 0 else "negative",
+                score,
+                "Sector-relative strength",
+                (
+                    f"{ticker} has {relative_5d:.2f}% 5-session and "
+                    f"{relative_20d:.2f}% 20-session relative return versus {sector_etf}."
+                ),
                 "yfinance",
-                {"sector_etf": sector_etf},
+                {
+                    "sector_etf": sector_etf,
+                    "stock_return_5d_percent": round(stock_return_5d, 2),
+                    "stock_return_20d_percent": round(stock_return_20d, 2),
+                    "sector_return_5d_percent": round(etf_return_5d, 2),
+                    "sector_return_20d_percent": round(etf_return_20d, 2),
+                    "relative_5d_percent": round(relative_5d, 2),
+                    "relative_20d_percent": round(relative_20d, 2),
+                    "weighted_relative_percent": round(weighted_relative, 2),
+                    "stock_history_row_count": len(stock_closes),
+                    "sector_history_row_count": len(etf_closes),
+                },
             )
         ]
     except Exception as exc:
         logger.info("sector_signal_provider_unavailable", ticker=ticker, error=str(exc))
         return []
+
+
+def _close_values_from_download(downloaded: Any) -> list[Decimal]:
+    close_values = downloaded["Close"]
+    if hasattr(close_values, "squeeze"):
+        close_values = close_values.squeeze()
+    if hasattr(close_values, "dropna"):
+        close_values = close_values.dropna()
+    if hasattr(close_values, "tolist"):
+        values = close_values.tolist()
+    else:
+        values = list(close_values)
+
+    closes: list[Decimal] = []
+    for value in values:
+        if hasattr(value, "item"):
+            value = value.item()
+        try:
+            closes.append(Decimal(str(value)))
+        except Exception:
+            continue
+    return closes
 
 
 def _signal(

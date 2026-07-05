@@ -5,6 +5,8 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pandas as pd
+
 from src.analysis import phase1_pipeline
 from src.analysis.phase1_pipeline import (
     FALLBACK_CONFIDENCE_CAP,
@@ -15,6 +17,7 @@ from src.analysis.phase1_pipeline import (
     _event_signals,
     _news_signals,
     _price_volume_signals,
+    _sector_relative_signals,
     analyze_shortlist,
     build_publication_payload,
     evaluate_data_freshness,
@@ -730,6 +733,79 @@ def test_price_volume_signals_do_not_call_one_day_jump_a_trend():
 
     assert any(signal["signal_type"] == "price_move" for signal in signals)
     assert not any(signal["signal_type"] == "technical_trend" for signal in signals)
+
+
+def test_sector_relative_signals_score_multi_window_outperformance():
+    run_date = date(2026, 6, 17)
+    stock = {"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology"}
+    stock_rows = _market_context_rows(
+        "NVDA",
+        run_date - timedelta(days=24),
+        closes=[100 + offset for offset in range(25)],
+        volumes=[1000] * 25,
+    )
+    sector_frame = pd.DataFrame({"Close": [100 + offset * 0.25 for offset in range(25)]})
+
+    with (
+        patch("src.analysis.phase1_pipeline.store.get_stock_data", return_value=stock_rows),
+        patch("src.analysis.phase1_pipeline.yf.download", return_value=sector_frame),
+    ):
+        signals = _sector_relative_signals(stock, run_date)
+
+    assert len(signals) == 1
+    signal = signals[0]
+    assert signal["signal_type"] == "sector_relative"
+    assert signal["direction"] == "positive"
+    assert signal["score"] > 0
+    assert signal["source"]["raw"]["sector_etf"] == "XLK"
+    assert signal["source"]["raw"]["relative_20d_percent"] > 3
+
+
+def test_sector_relative_signals_score_multi_window_underperformance():
+    run_date = date(2026, 6, 17)
+    stock = {"ticker": "AAPL", "company_name": "Apple", "sector": "Technology"}
+    stock_rows = _market_context_rows(
+        "AAPL",
+        run_date - timedelta(days=24),
+        closes=[124 - offset for offset in range(25)],
+        volumes=[1000] * 25,
+    )
+    sector_frame = pd.DataFrame({"Close": [100 + offset * 0.25 for offset in range(25)]})
+
+    with (
+        patch("src.analysis.phase1_pipeline.store.get_stock_data", return_value=stock_rows),
+        patch("src.analysis.phase1_pipeline.yf.download", return_value=sector_frame),
+    ):
+        signals = _sector_relative_signals(stock, run_date)
+
+    assert len(signals) == 1
+    assert signals[0]["direction"] == "negative"
+    assert signals[0]["score"] < 0
+    assert signals[0]["source"]["raw"]["relative_20d_percent"] < -3
+
+
+def test_sector_relative_signals_ignore_noise_and_insufficient_history():
+    run_date = date(2026, 6, 17)
+    stock = {"ticker": "MSFT", "company_name": "Microsoft", "sector": "Technology"}
+    stock_rows = _market_context_rows(
+        "MSFT",
+        run_date - timedelta(days=24),
+        closes=[100 + offset * 0.2 for offset in range(25)],
+        volumes=[1000] * 25,
+    )
+    sector_frame = pd.DataFrame({"Close": [100 + offset * 0.19 for offset in range(25)]})
+
+    with (
+        patch("src.analysis.phase1_pipeline.store.get_stock_data", return_value=stock_rows),
+        patch("src.analysis.phase1_pipeline.yf.download", return_value=sector_frame),
+    ):
+        assert _sector_relative_signals(stock, run_date) == []
+
+    with patch(
+        "src.analysis.phase1_pipeline.store.get_stock_data",
+        return_value=stock_rows[:10],
+    ):
+        assert _sector_relative_signals(stock, run_date) == []
 
 
 def test_build_publication_payload_includes_upcoming_earnings():

@@ -1,4 +1,134 @@
-# Next Session Handoff: Stockara Data Bootstrap and Collection
+# Next Session Handoff: Phase 1 Signal Quality and News Classification
+
+Date: 2026-07-05
+
+## Current State
+
+- Branch: `main`
+- Work policy in current phase: commit directly to `main`; pushes deploy prod through GitHub Actions.
+- P0 is done. `docs/PHASE1_MUST_HAVE_BACKLOG.md` shows all P0 blockers completed.
+- Active workstream: P1/7 Signal Quality Upgrade, then P1/8 News Timeliness and Ticker Classification.
+- P1/8 timeliness is partially done: direct news EventBridge collection now runs every 15 minutes.
+- P1/8 ticker classification is intentionally after P1/7, per user request.
+
+## Completed Today
+
+Committed and deployed:
+
+- `13ec782 Update GitHub Actions runtimes`
+  - Updated GitHub Actions and CI Node runtime to current majors/Node 26.
+- `920dfc9 Increase news collection frequency`
+  - Changed direct news collection schedule from daily to every 15 minutes.
+- `fee8e81 Separate context signals from scoring`
+  - Neutral/context-only signals remain available as context but no longer inflate opportunity/risk scores.
+- `dabc892 Require confirmation for one-day market moves`
+  - One-day price/volume moves require same-direction confirmation before they affect ranking.
+
+Current uncommitted work in progress:
+
+- P1/7 sector-relative signal quality.
+- Files modified:
+  - `backend/src/analysis/phase1_pipeline.py`
+  - `backend/tests/test_phase1_pipeline.py`
+  - `docs/PHASE1_MUST_HAVE_BACKLOG.md`
+- Behavior implemented locally:
+  - `_sector_relative_signals` now uses 5-session and 20-session relative returns versus the mapped sector ETF.
+  - It requires at least 21 rows of stock and ETF close history.
+  - It ignores small/noisy weighted relative moves under 3%.
+  - It publishes raw metrics: stock/sector 5d and 20d returns, relative spreads, weighted spread, row counts, and sector ETF.
+  - It scores positive/negative relative strength with clamp to +/-45.
+  - Added tests for outperformance, underperformance, noise suppression, and insufficient history.
+
+## Verification Already Run For Current Uncommitted Work
+
+```bash
+/private/tmp/stockara-debug-venv/bin/python -m pytest backend/tests/test_phase1_pipeline.py -q
+```
+
+Result:
+
+```text
+49 passed
+```
+
+```bash
+/private/tmp/stockara-debug-venv/bin/python -m ruff check backend infrastructure scripts
+```
+
+Result:
+
+```text
+All checks passed!
+```
+
+```bash
+/private/tmp/stockara-debug-venv/bin/python -m pytest backend/tests -q
+```
+
+Result:
+
+```text
+309 passed
+```
+
+## Immediate Next Steps
+
+1. Review the current diff:
+
+   ```bash
+   git diff --stat
+   git diff -- backend/src/analysis/phase1_pipeline.py backend/tests/test_phase1_pipeline.py docs/PHASE1_MUST_HAVE_BACKLOG.md
+   ```
+
+2. If satisfied, commit:
+
+   ```bash
+   git add backend/src/analysis/phase1_pipeline.py backend/tests/test_phase1_pipeline.py docs/PHASE1_MUST_HAVE_BACKLOG.md docs/NEXT_SESSION_HANDOFF.md
+   git commit -m "Improve sector-relative signal scoring"
+   git push
+   gh run list --branch main --limit 5
+   gh run watch <run-id> --exit-status
+   ```
+
+3. After deploy is green, continue P1/7 in this preferred order:
+
+   - Event signal quality: earnings/dividend scoring should distinguish expected impact, historical reaction, estimate/surprise context, and uncertainty.
+   - Analyst/options/insider/institutional signal quality: avoid scoring mere data availability; score only directionally meaningful provider-backed activity.
+   - Valuation/fundamental context where provider data exists.
+   - Invalidation criteria enrichment in prompts/reviewer artifacts.
+
+4. Then return to P1/8 ticker classification:
+
+   - Word-boundary ticker extraction.
+   - Active-watchlist ticker universe.
+   - Suppress common-word short tickers unless provider-tagged or strongly disambiguated.
+   - Add classification confidence/provenance fields to stored news summaries.
+
+## Useful Commands
+
+Backend checks:
+
+```bash
+/private/tmp/stockara-debug-venv/bin/python -m ruff check backend infrastructure scripts
+/private/tmp/stockara-debug-venv/bin/python -m pytest backend/tests -q
+```
+
+Focused Phase 1 tests:
+
+```bash
+/private/tmp/stockara-debug-venv/bin/python -m pytest backend/tests/test_phase1_pipeline.py -q
+```
+
+Deploy watch:
+
+```bash
+gh run list --branch main --limit 5
+gh run watch <run-id> --exit-status
+```
+
+---
+
+# Historical Handoff: Stockara Data Bootstrap and Collection
 
 Date: 2026-06-16
 
