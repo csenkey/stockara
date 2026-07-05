@@ -10,7 +10,7 @@ The items below are must-have gaps to close before treating Phase 1 recommendati
 
 ### 1. Reliable Seed Stock Metadata
 
-**Status:** Open. Verified 2026-07-05: `data/watchlist_seed.csv` still has 100 rows with required metadata gaps. The seed handler now rejects missing required static metadata on first seed, existing metadata can be synced without clobbering live collection fields, and the enrichment tool supports gap-only runs that preserve already complete rows. A 2026-07-05 Nasdaq gap-only enrichment did not reduce the 100 gaps; 97 gap tickers were absent from cached Nasdaq screener/profile data and need alternate-provider research, canonical ticker correction, inactive/delisted review, or removal from the active decision-grade universe.
+**Status:** Open. Verified 2026-07-05: `data/watchlist_seed.csv` still has 100 rows with required metadata gaps. The seed handler now rejects missing required static metadata on first seed, existing metadata can be synced without clobbering live collection fields, the enrichment tool supports gap-only runs that preserve already complete rows, and Phase 1 excludes unresolved metadata rows from decision-grade scoring. A 2026-07-05 Nasdaq gap-only enrichment did not reduce the 100 gaps; the metadata audit classifies 3 gap rows as `provider_partial_profile` and 97 as `missing_provider_coverage`. Those rows need alternate-provider research, canonical ticker correction, inactive/delisted review, or removal from the active decision-grade universe.
 
 **Gap:** The seed watchlist does not include sector metadata. `seed_watchlist_handler.py` uses a small `SECTOR_MAP` and defaults all unknown tickers to `Technology`.
 
@@ -31,12 +31,15 @@ The items below are must-have gaps to close before treating Phase 1 recommendati
 - No duplicate tickers were found.
 - No invalid `company_size` values were found.
 - The current gap list is tracked in `docs/WATCHLIST_METADATA_GAPS.md`.
+- The current provider-coverage classification is tracked in `docs/WATCHLIST_METADATA_AUDIT.md` and `docs/WATCHLIST_METADATA_AUDIT.csv`.
 
 **References:**
 
 - `data/watchlist_seed.csv`
 - `docs/WATCHLIST_STATIC_METADATA_CONTRACT.md`
+- `docs/WATCHLIST_METADATA_AUDIT.md`
 - `backend/src/scripts/seed_watchlist_handler.py`
+- `backend/src/scripts/audit_watchlist_metadata.py`
 - `.kiro/specs/stock-monitoring-system/requirements.md` Requirement 3.8
 
 ### 2. Recommendation Freshness Gates

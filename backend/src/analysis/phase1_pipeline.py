@@ -49,6 +49,17 @@ ENABLE_LIVE_SCORING_PROVIDER_SIGNALS = (
     os.environ.get("PHASE1_ENABLE_LIVE_SCORING_PROVIDER_SIGNALS", "false").lower()
     == "true"
 )
+DECISION_GRADE_REQUIRED_METADATA_FIELDS = (
+    "ticker",
+    "company_name",
+    "sector",
+    "industry",
+    "company_size",
+    "source",
+    "metadata_source",
+    "metadata_source_url",
+    "metadata_as_of",
+)
 
 SECTOR_ETFS = {
     "Technology": "XLK",
@@ -603,8 +614,24 @@ def evaluate_data_freshness(
         ticker = stock["ticker"]
         reasons: list[str] = []
         rows: list[dict[str, Any]] = []
+        missing_metadata_fields = _decision_grade_metadata_gaps(stock)
         latest_data_date = _parse_date(stock.get("latest_stock_data_date"))
         history_start_date: date | None = None
+
+        if missing_metadata_fields:
+            excluded_tickers.append(
+                {
+                    "ticker": ticker,
+                    "reasons": ["unresolved_watchlist_metadata"],
+                    "missing_metadata_fields": missing_metadata_fields,
+                    "latest_stock_data_date": latest_data_date.isoformat()
+                    if latest_data_date
+                    else None,
+                    "history_start_date": None,
+                    "history_row_count": 0,
+                }
+            )
+            continue
 
         try:
             rows = store.get_stock_data(
@@ -691,7 +718,7 @@ def evaluate_data_freshness(
 
     if excluded_tickers:
         warnings.append(
-            f"{len(excluded_tickers)} active ticker(s) were excluded by data freshness gates."
+            f"{len(excluded_tickers)} active ticker(s) were excluded by decision-grade eligibility gates."
         )
 
     return {
@@ -2117,6 +2144,14 @@ def _metadata_text(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _decision_grade_metadata_gaps(stock: dict[str, Any]) -> list[str]:
+    return [
+        field
+        for field in DECISION_GRADE_REQUIRED_METADATA_FIELDS
+        if not _metadata_text(stock.get(field))
+    ]
 
 
 def _metadata_list(value: Any) -> list[str]:

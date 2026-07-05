@@ -26,6 +26,22 @@ from src.analysis.phase1_pipeline import (
 )
 
 
+def _decision_grade_stock(ticker: str, **overrides):
+    stock = {
+        "ticker": ticker,
+        "company_name": f"{ticker} Corp",
+        "sector": "Technology",
+        "industry": "Software",
+        "company_size": "blue_chip",
+        "source": "seed",
+        "metadata_source": "nasdaq_company_profile",
+        "metadata_source_url": f"https://www.nasdaq.com/market-activity/stocks/{ticker.lower()}",
+        "metadata_as_of": "2026-06-17",
+    }
+    stock.update(overrides)
+    return stock
+
+
 def test_select_shortlist_prioritizes_high_opportunity_and_sell_watch():
     scores = [
         {"ticker": "AAPL", "opportunity_score": 30, "negative_score": 10, "signals": []},
@@ -1137,8 +1153,8 @@ def test_publish_payload_fails_when_artifact_bucket_is_not_configured():
 def test_evaluate_data_freshness_excludes_stale_ticker_but_allows_partial_coverage():
     run_date = date(2026, 6, 17)
     stocks = [
-        {"ticker": "NVDA", "latest_stock_data_date": "2026-06-17"},
-        {"ticker": "STALE", "latest_stock_data_date": "2026-06-10"},
+        _decision_grade_stock("NVDA", latest_stock_data_date="2026-06-17"),
+        _decision_grade_stock("STALE", latest_stock_data_date="2026-06-10"),
     ]
 
     def stock_rows(ticker, _start, _end):
@@ -1163,9 +1179,40 @@ def test_evaluate_data_freshness_excludes_stale_ticker_but_allows_partial_covera
     assert quality["exclusion_reason_counts"]["stale_stock_data"] == 1
 
 
+def test_evaluate_data_freshness_excludes_unresolved_watchlist_metadata():
+    run_date = date(2026, 6, 17)
+    stocks = [
+        _decision_grade_stock(
+            "NVDA",
+            industry="",
+            metadata_source="",
+            latest_stock_data_date="2026-06-17",
+        )
+    ]
+
+    with (
+        patch("src.analysis.phase1_pipeline.store.get_stock_data") as get_stock_data,
+        patch(
+            "src.analysis.phase1_pipeline.store.last_news_collection",
+            return_value="2026-06-16T20:30:00+00:00",
+        ),
+    ):
+        freshness = evaluate_data_freshness(stocks, run_date)
+
+    assert freshness["coverage_status"] == "none"
+    assert freshness["eligible_stocks"] == []
+    excluded = freshness["excluded_tickers"][0]
+    assert excluded["ticker"] == "NVDA"
+    assert excluded["reasons"] == ["unresolved_watchlist_metadata"]
+    assert excluded["missing_metadata_fields"] == ["industry", "metadata_source"]
+    get_stock_data.assert_not_called()
+    quality = phase1_pipeline.publication_data_quality(freshness)
+    assert quality["exclusion_reason_counts"]["unresolved_watchlist_metadata"] == 1
+
+
 def test_evaluate_data_freshness_excludes_latest_row_without_provenance():
     run_date = date(2026, 6, 17)
-    stocks = [{"ticker": "NVDA", "latest_stock_data_date": "2026-06-17"}]
+    stocks = [_decision_grade_stock("NVDA", latest_stock_data_date="2026-06-17")]
 
     with (
         patch(
@@ -1206,7 +1253,9 @@ def test_run_phase1_pipeline_suppresses_publication_when_no_ticker_is_eligible()
         patch("src.analysis.phase1_pipeline._collection_gate_response", return_value=None),
         patch(
             "src.analysis.phase1_pipeline.store.active_stock_metadata",
-            return_value=[{"ticker": "NVDA", "latest_stock_data_date": "2026-06-01"}],
+            return_value=[
+                _decision_grade_stock("NVDA", latest_stock_data_date="2026-06-01")
+            ],
         ),
         patch("src.analysis.phase1_pipeline.store.get_stock_data", return_value=[]),
         patch("src.analysis.phase1_pipeline.store.last_news_collection", return_value=None),
@@ -1322,8 +1371,12 @@ def test_collection_manifest_quality_metadata_is_added_when_available():
 def test_run_phase1_pipeline_scores_only_eligible_tickers_when_coverage_is_partial():
     run_date = date(2026, 6, 17)
     stocks = [
-        {"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology", "latest_stock_data_date": "2026-06-17"},
-        {"ticker": "STALE", "company_name": "Stale Co", "sector": "Technology", "latest_stock_data_date": "2026-06-01"},
+        _decision_grade_stock(
+            "NVDA", company_name="NVIDIA", latest_stock_data_date="2026-06-17"
+        ),
+        _decision_grade_stock(
+            "STALE", company_name="Stale Co", latest_stock_data_date="2026-06-01"
+        ),
     ]
 
     def stock_rows(ticker, _start, _end):
