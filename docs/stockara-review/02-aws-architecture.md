@@ -85,7 +85,7 @@ Current schedules from CDK:
 | Every 15 minutes | Stock collector with `max_tickers: 10` | Bounded incremental OHLCV collection |
 | 20:00 UTC daily | Earnings collector | Earnings calendar collection before publication |
 | 20:15 UTC daily | Dividend collector | Dividend collection before publication |
-| 20:30 UTC daily | News collector | News collection before analysis |
+| Every 15 minutes | News collector | Frequent catalyst news collection |
 | 20:45 UTC daily | Evidence collector with `max_tickers: 100` | SEC and analyst evidence collection |
 | 22:00 UTC daily | Phase 1 analyzer/publisher | Daily top-pick and sell-alert publication |
 | 23:15 UTC daily | Stock gap scanner | Price gap detection and backfill task creation |
@@ -253,4 +253,3 @@ Risks and review topics:
 - Single-table access patterns should be reviewed before adding authenticated portfolio/demo features.
 - API Gateway currently covers health only; future authenticated APIs need separate auth/IAM review.
 - The stronger review model suppresses weak recommendations, but model availability is still a publication dependency for actionable AI output.
-

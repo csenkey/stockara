@@ -120,6 +120,13 @@ def test_calendar_collector_lambdas_and_schedules_are_created():
         },
     )
     template.has_resource_properties(
+        "AWS::Events::Rule",
+        {
+            "Name": "stockara-codex-test-news-collection",
+            "ScheduleExpression": "rate(15 minutes)",
+        },
+    )
+    template.has_resource_properties(
         "AWS::CloudFormation::CustomResource",
         {
             "SellAlertTickers": "AAPL,MSFT,NVDA",

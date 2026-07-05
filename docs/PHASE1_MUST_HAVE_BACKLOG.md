@@ -181,7 +181,7 @@ The items below are must-have gaps to close before treating Phase 1 recommendati
 
 ### 8. News Timeliness and Ticker Classification
 
-**Status:** Open.
+**Status:** Partially done. The direct EventBridge news collection schedule now runs every 15 minutes to match the collector contract and Phase 1 freshness expectation. Safer short-ticker classification and source-level confidence remain open.
 
 **Gap:** The news collector is coded/documented for 15-minute polling, but CDK schedules it daily. Fallback ticker matching can produce false positives for short ticker symbols.
 

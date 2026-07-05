@@ -556,10 +556,8 @@ class ApiStack(Stack):
                 "stockara-news-collection",
                 "news-collection",
             ),
-            description="Triggers news collection daily before analysis",
-            schedule=events.Schedule.cron(
-                minute="30", hour="20", day="*", month="*", year="*"
-            ),
+            description="Triggers frequent news collection for catalyst freshness",
+            schedule=events.Schedule.rate(Duration.minutes(15)),
             targets=[targets.LambdaFunction(self.news_collector_fn)],
         )
 
