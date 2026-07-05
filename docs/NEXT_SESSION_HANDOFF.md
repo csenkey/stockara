@@ -34,23 +34,16 @@ Committed and deployed:
 - `b1a89b4 Add directional fundamental signal enrichment`
   - Fundamental/valuation live provider enrichment scores only coherent provider-backed quality, weakness, or valuation extremes.
   - Deploy run `28752247513` finished green with API and static smoke tests.
+- `ac74296 Add signal-derived invalidation checks`
+  - Analysis rows now carry signal-derived invalidation checks, and analysis/review prompts require concrete signal, price, event, or time-boxed invalidation conditions for actionable recommendations.
+  - Deploy run `28753106170` finished green with API and static smoke tests.
 
-Current uncommitted work in progress:
+Current local state:
 
-- P1/7 invalidation criteria enrichment.
-- Files modified:
-  - `backend/src/analysis/phase1_pipeline.py`
-  - `backend/tests/test_phase1_pipeline.py`
-  - `docs/PHASE1_MUST_HAVE_BACKLOG.md`
-  - `docs/NEXT_SESSION_HANDOFF.md`
-- Behavior implemented locally:
-  - Analysis now computes `invalidation_checks` from scored evidence for BUY/SELL/HOLD analysis rows.
-  - Missing AI invalidation criteria are filled from signal-derived checks instead of a generic fallback.
-  - The analysis prompt includes BUY and SELL invalidation checks and requires concrete signal/price/event/time conditions for actionable calls.
-  - The review prompt includes those checks and tells the reviewer to reject vague or evidence-detached invalidation criteria.
+- No implementation changes are intentionally left uncommitted after the handoff-doc refresh.
 - The recurring non-blocking CI annotation remains: `latest news collection did not reach all configured sources`.
 
-## Verification Run For Current Uncommitted Work
+## Verification Run For Latest Implementation Commit
 
 ```bash
 /private/tmp/stockara-debug-venv/bin/python -m pytest backend/tests/test_phase1_pipeline.py -q
@@ -84,9 +77,7 @@ Result:
 
 ## Immediate Next Steps
 
-1. Commit and deploy current P1/7 invalidation enrichment.
-
-2. Then return to P1/8 ticker classification:
+1. Return to P1/8 ticker classification:
 
    - Word-boundary ticker extraction.
    - Active-watchlist ticker universe.
