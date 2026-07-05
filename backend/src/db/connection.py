@@ -735,6 +735,10 @@ class DynamoStore:
             "tickers": summary_data.get("tickers", []),
             "summary": summary_data["summary"][:500],
             "sentiment": summary_data.get("sentiment", "neutral"),
+            "ticker_classifications": summary_data.get("ticker_classifications", []),
+            "classification_confidence": _decimal(
+                summary_data.get("classification_confidence", 0)
+            ),
             "is_classified": bool(summary_data.get("tickers")),
             "collected_at": _now(),
             "title_source_hash": title_source_hash,

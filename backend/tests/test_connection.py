@@ -411,12 +411,24 @@ def test_put_news_summary_writes_ticker_fanout_and_status():
             "source": "Reuters",
             "published_at": "2026-06-17T10:00:00Z",
         },
-        {"summary": "Apple beat estimates.", "tickers": ["AAPL", "MSFT"]},
+        {
+            "summary": "Apple beat estimates.",
+            "tickers": ["AAPL", "MSFT"],
+            "ticker_classifications": [
+                {"ticker": "AAPL", "confidence": 0.75, "sources": ["ai"]}
+            ],
+            "classification_confidence": 0.75,
+        },
         "hash123",
     )
 
     assert stored is True
     table.put_item.assert_called_once()
+    item = table.put_item.call_args.kwargs["Item"]
+    assert item["ticker_classifications"] == [
+        {"ticker": "AAPL", "confidence": 0.75, "sources": ["ai"]}
+    ]
+    assert item["classification_confidence"] == Decimal("0.75")
     assert batch.put_item.call_count == 2
     store._put_system_status.assert_called_once()
 

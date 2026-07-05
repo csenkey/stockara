@@ -8,6 +8,7 @@ Triggered by EventBridge every 15 minutes (configurable).
 
 import hashlib
 import os
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
@@ -52,6 +53,37 @@ NEWS_ARTIFACT_MAX_TICKERS = int(os.environ.get("NEWS_ARTIFACT_MAX_TICKERS", "250
 NEWS_ARTIFACT_MAX_ARTICLES_PER_TICKER = int(
     os.environ.get("NEWS_ARTIFACT_MAX_ARTICLES_PER_TICKER", "10")
 )
+COMMON_WORD_SHORT_TICKERS = {
+    "A",
+    "AI",
+    "ALL",
+    "ARE",
+    "AS",
+    "AT",
+    "BE",
+    "BY",
+    "CAN",
+    "FOR",
+    "GO",
+    "HAS",
+    "HE",
+    "I",
+    "IN",
+    "IT",
+    "NEW",
+    "NO",
+    "NOW",
+    "ON",
+    "OR",
+    "OUT",
+    "SEE",
+    "SO",
+    "TO",
+    "TV",
+    "US",
+    "USA",
+    "WE",
+}
 
 # CloudWatch metrics client
 cloudwatch = boto3.client("cloudwatch")
@@ -381,7 +413,12 @@ def get_existing_hashes(conn, hashes: list[str]) -> set[str]:
     return store.existing_news_hashes(hashes)
 
 
-def generate_summary(client: OpenAI | None, title: str, content: str) -> dict[str, Any]:
+def generate_summary(
+    client: OpenAI | None,
+    title: str,
+    content: str,
+    active_tickers: set[str] | None = None,
+) -> dict[str, Any]:
     """Generate a structured summary using OpenAI.
 
     Args:
@@ -424,46 +461,62 @@ def generate_summary(client: OpenAI | None, title: str, content: str) -> dict[st
         result = json.loads(response.choices[0].message.content)
 
         summary = result.get("summary", "")[:500]
-        tickers = result.get("tickers", [])
-
-        # Validate tickers: uppercase, alphanumeric, max 10 chars
-        valid_tickers = [
-            t.upper().strip()
-            for t in tickers
-            if isinstance(t, str) and t.strip() and len(t.strip()) <= 10
-        ]
+        classification = _classify_tickers(
+            result.get("tickers", []),
+            title,
+            content,
+            active_tickers=active_tickers,
+            provider_tickers=[],
+        )
 
         sentiment = str(result.get("sentiment", "neutral")).lower()
         if sentiment not in {"positive", "negative", "neutral"}:
             sentiment = "neutral"
 
-        return {"summary": summary, "tickers": valid_tickers, "sentiment": sentiment}
+        return {
+            "summary": summary,
+            "tickers": classification["tickers"],
+            "sentiment": sentiment,
+            "ticker_classifications": classification["ticker_classifications"],
+            "classification_confidence": classification["classification_confidence"],
+        }
 
     except Exception as e:
         logger.error("OpenAI summary generation failed", error=str(e), title=title)
-        try:
-            active_tickers = set(store.active_tickers())
-        except Exception:
-            active_tickers = set()
-        text = f"{title} {content}".upper()
-        tickers = [ticker for ticker in active_tickers if ticker in text]
-        return {"summary": title[:500], "tickers": tickers, "sentiment": "neutral"}
+        active_tickers = active_tickers if active_tickers is not None else _active_ticker_universe()
+        classification = _classify_tickers(
+            _fallback_tickers_from_text(title, content, active_tickers),
+            title,
+            content,
+            active_tickers=active_tickers,
+            provider_tickers=[],
+        )
+        return {
+            "summary": title[:500],
+            "tickers": classification["tickers"],
+            "sentiment": "neutral",
+            "ticker_classifications": classification["ticker_classifications"],
+            "classification_confidence": classification["classification_confidence"],
+        }
 
 
 def merge_provider_classification(
     article: dict[str, Any],
     summary_data: dict[str, Any],
+    active_tickers: set[str] | None = None,
 ) -> dict[str, Any]:
     """Preserve provider-supplied ticker/sentiment attribution."""
-    tickers = {
-        str(ticker).strip().upper()
-        for ticker in summary_data.get("tickers", [])
-        if str(ticker).strip()
-    }
-    tickers.update(
+    provider_tickers = {
         str(ticker).strip().upper()
         for ticker in article.get("provider_tickers", [])
         if str(ticker).strip()
+    }
+    classification = _classify_tickers(
+        summary_data.get("tickers", []),
+        str(article.get("title", "")),
+        str(article.get("content", "")),
+        active_tickers=active_tickers,
+        provider_tickers=provider_tickers,
     )
     sentiment = str(summary_data.get("sentiment") or "neutral").lower()
     provider_sentiment = str(article.get("provider_sentiment") or "").lower()
@@ -473,9 +526,128 @@ def merge_provider_classification(
         sentiment = "neutral"
     return {
         **summary_data,
-        "tickers": sorted(tickers),
+        "tickers": classification["tickers"],
         "sentiment": sentiment,
+        "ticker_classifications": classification["ticker_classifications"],
+        "classification_confidence": classification["classification_confidence"],
     }
+
+
+def _active_ticker_universe() -> set[str]:
+    try:
+        return {str(ticker).strip().upper() for ticker in store.active_tickers()}
+    except Exception as exc:
+        logger.warning("news_active_ticker_universe_failed", error=str(exc))
+        return set()
+
+
+def _classify_tickers(
+    ai_tickers: list[Any],
+    title: str,
+    content: str,
+    active_tickers: set[str] | None,
+    provider_tickers: set[str],
+) -> dict[str, Any]:
+    filter_to_active_universe = active_tickers is not None
+    active_tickers = active_tickers or set()
+    text = f"{title} {content}"
+    rows: dict[str, dict[str, Any]] = {}
+    for ticker in provider_tickers:
+        normalized = _normalize_ticker(ticker)
+        if not normalized:
+            continue
+        if filter_to_active_universe and normalized not in active_tickers:
+            continue
+        rows[normalized] = {
+            "ticker": normalized,
+            "confidence": 1.0,
+            "sources": ["provider"],
+            "matched_by": "provider_ticker",
+        }
+
+    for ticker in ai_tickers:
+        normalized = _normalize_ticker(ticker)
+        if not normalized:
+            continue
+        if filter_to_active_universe and normalized not in active_tickers:
+            continue
+        if _is_ambiguous_short_ticker(normalized) and normalized not in provider_tickers:
+            if not _has_strong_short_ticker_context(text, normalized):
+                continue
+            confidence = 0.45
+        else:
+            confidence = 0.75 if _has_word_boundary_ticker(text, normalized) else 0.6
+        existing = rows.get(normalized)
+        if existing:
+            existing["confidence"] = max(existing["confidence"], confidence)
+            if "ai" not in existing["sources"]:
+                existing["sources"].append("ai")
+        else:
+            rows[normalized] = {
+                "ticker": normalized,
+                "confidence": confidence,
+                "sources": ["ai"],
+                "matched_by": (
+                    "ai_and_text_boundary"
+                    if _has_word_boundary_ticker(text, normalized)
+                    else "ai_model"
+                ),
+            }
+
+    classifications = [rows[ticker] for ticker in sorted(rows)]
+    confidence = (
+        round(sum(row["confidence"] for row in classifications) / len(classifications), 2)
+        if classifications
+        else 0.0
+    )
+    return {
+        "tickers": [row["ticker"] for row in classifications],
+        "ticker_classifications": classifications,
+        "classification_confidence": confidence,
+    }
+
+
+def _normalize_ticker(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    ticker = value.strip().upper()
+    if not ticker or len(ticker) > 10:
+        return None
+    if not re.fullmatch(r"[A-Z][A-Z0-9.:-]{0,9}", ticker):
+        return None
+    return ticker
+
+
+def _is_ambiguous_short_ticker(ticker: str) -> bool:
+    return ticker in COMMON_WORD_SHORT_TICKERS or (len(ticker) <= 2 and ticker.isalpha())
+
+
+def _has_word_boundary_ticker(text: str, ticker: str) -> bool:
+    return bool(re.search(rf"(?<![A-Z0-9]){re.escape(ticker)}(?![A-Z0-9])", text.upper()))
+
+
+def _has_strong_short_ticker_context(text: str, ticker: str) -> bool:
+    upper = text.upper()
+    patterns = [
+        rf"\${re.escape(ticker)}(?![A-Z0-9])",
+        rf"\b(?:NYSE|NASDAQ|AMEX):\s*{re.escape(ticker)}\b",
+    ]
+    if any(re.search(pattern, upper) for pattern in patterns):
+        return True
+    if ticker == "ON":
+        return bool(re.search(r"\bON\s+Semiconductor\b", text))
+    return False
+
+
+def _fallback_tickers_from_text(
+    title: str, content: str, active_tickers: set[str]
+) -> list[str]:
+    text = f"{title} {content}"
+    return [
+        ticker
+        for ticker in sorted(active_tickers)
+        if not _is_ambiguous_short_ticker(ticker) and _has_word_boundary_ticker(text, ticker)
+    ]
 
 
 def _chat_completion_options(
@@ -700,6 +872,7 @@ def collect_news(tickers: list[str] | None = None) -> dict[str, Any]:
         # summary function falls back to title-based summaries and ticker matching.
         openai_api_key = get_openai_api_key()
         openai_client = OpenAI(api_key=openai_api_key) if openai_api_key else None
+        active_tickers = _active_ticker_universe()
         articles_stored = 0
         article_failures = 0
 
@@ -709,8 +882,13 @@ def collect_news(tickers: list[str] | None = None) -> dict[str, Any]:
                     openai_client,
                     article["title"],
                     article.get("content", ""),
+                    active_tickers=active_tickers,
                 )
-                summary_data = merge_provider_classification(article, summary_data)
+                summary_data = merge_provider_classification(
+                    article,
+                    summary_data,
+                    active_tickers=active_tickers,
+                )
                 store_article(conn, article, summary_data, article["_hash"])
                 articles_stored += 1
             except Exception as e:

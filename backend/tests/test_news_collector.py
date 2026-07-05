@@ -497,6 +497,60 @@ class TestGenerateSummary:
         result = generate_summary(mock_client, "Market Overview", "General content.")
         assert result["tickers"] == []
 
+    def test_ai_tickers_are_filtered_to_active_universe(self):
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = json.dumps({
+            "summary": "Apple and a stale ticker were mentioned.",
+            "tickers": ["AAPL", "DELISTED"],
+        })
+        mock_client.chat.completions.create.return_value = mock_response
+
+        result = generate_summary(
+            mock_client,
+            "Apple earnings",
+            "Apple reported results.",
+            active_tickers={"AAPL"},
+        )
+
+        assert result["tickers"] == ["AAPL"]
+        assert result["classification_confidence"] > 0
+        assert result["ticker_classifications"][0]["sources"] == ["ai"]
+
+    def test_fallback_ticker_matching_uses_word_boundaries(self):
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = Exception("API error")
+
+        result = generate_summary(
+            mock_client,
+            "Snapdragon demand lifts handset suppliers",
+            "AAPL supplier commentary was positive.",
+            active_tickers={"AAPL", "SNAP"},
+        )
+
+        assert result["tickers"] == ["AAPL"]
+        assert result["ticker_classifications"][0]["matched_by"] == "ai_and_text_boundary"
+
+    def test_common_word_short_ticker_requires_provider_tag(self):
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = json.dumps({
+            "summary": "The word on appears in normal prose.",
+            "tickers": ["ON"],
+        })
+        mock_client.chat.completions.create.return_value = mock_response
+
+        result = generate_summary(
+            mock_client,
+            "Market update on chips",
+            "Analysts commented on semiconductor demand.",
+            active_tickers={"ON"},
+        )
+
+        assert result["tickers"] == []
+
 
 # --- Tests for store_article (Requirement 2.7) ---
 
@@ -583,6 +637,21 @@ class TestProviderClassification:
 
         assert merged["tickers"] == ["AAPL"]
         assert merged["sentiment"] == "positive"
+
+    def test_provider_ticker_preserves_common_word_symbol_when_active(self):
+        article = {
+            "provider_tickers": ["ON"],
+            "provider_sentiment": "positive",
+            "title": "ON Semiconductor reports earnings",
+            "content": "Provider explicitly tagged the ticker.",
+        }
+        summary_data = {"summary": "Summary", "tickers": [], "sentiment": "neutral"}
+
+        merged = merge_provider_classification(article, summary_data, active_tickers={"ON"})
+
+        assert merged["tickers"] == ["ON"]
+        assert merged["classification_confidence"] == 1.0
+        assert merged["ticker_classifications"][0]["sources"] == ["provider"]
 
 
 class TestNewsCollectionSummary:
