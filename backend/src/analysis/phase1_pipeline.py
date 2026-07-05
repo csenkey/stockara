@@ -581,7 +581,7 @@ def score_candidates(stocks: list[dict[str, Any]], run_date: date) -> list[dict[
             signals.extend(_institutional_signals(ticker))
             signals.extend(_sector_relative_signals(stock, run_date))
 
-        scored_signals = [signal for signal in signals if _is_scored_evidence_signal(signal)]
+        scored_signals = _scored_evidence_signals(signals)
         opportunity_score = sum(max(0, signal["score"]) for signal in scored_signals)
         negative_score = abs(sum(min(0, signal["score"]) for signal in scored_signals))
         score = {
@@ -1329,6 +1329,10 @@ def _price_volume_signals(ticker: str, run_date: date) -> list[dict[str, Any]]:
                 "Large daily price move",
                 f"{ticker} moved {price_change:.2f}% versus the prior close.",
                 "yfinance",
+                {
+                    "price_change_percent": round(price_change, 2),
+                    "requires_confirmation": True,
+                },
             )
         )
     if volume_ratio >= 1.8:
@@ -1341,6 +1345,11 @@ def _price_volume_signals(ticker: str, run_date: date) -> list[dict[str, Any]]:
                 "Unusual volume",
                 f"{ticker} traded at {volume_ratio:.1f}x its recent average volume.",
                 "yfinance",
+                {
+                    "volume_ratio": round(volume_ratio, 2),
+                    "price_change_percent": round(price_change, 2),
+                    "requires_confirmation": True,
+                },
             )
         )
     return signals
@@ -1993,7 +2002,7 @@ def _has_market_data_provenance(row: dict[str, Any]) -> bool:
 
 
 def _primary_signal(signals: list[dict[str, Any]]) -> dict[str, Any] | None:
-    scored_signals = [signal for signal in signals if _is_scored_evidence_signal(signal)]
+    scored_signals = _scored_evidence_signals(signals)
     if scored_signals:
         return max(scored_signals, key=lambda signal: abs(signal["score"]))
     if not signals:
@@ -2004,7 +2013,7 @@ def _primary_signal(signals: list[dict[str, Any]]) -> dict[str, Any] | None:
 def _evidence(signals: list[dict[str, Any]]) -> list[str]:
     evidence: list[str] = []
     seen: set[str] = set()
-    scored_signals = [signal for signal in signals if _is_scored_evidence_signal(signal)]
+    scored_signals = _scored_evidence_signals(signals)
     evidence_signals = scored_signals or signals
     for signal in sorted(evidence_signals, key=lambda s: abs(s["score"]), reverse=True):
         summary = str(signal.get("summary", "")).strip()
@@ -2031,6 +2040,27 @@ def _is_scored_evidence_signal(signal: dict[str, Any]) -> bool:
     if isinstance(raw, dict) and raw.get("context_only"):
         return False
     return int(signal.get("score") or 0) != 0
+
+
+def _scored_evidence_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    base_scored = [signal for signal in signals if _is_scored_evidence_signal(signal)]
+    confirmed_directions = {
+        str(signal.get("direction", "")).lower()
+        for signal in base_scored
+        if not _requires_confirmation(signal)
+    }
+    return [
+        signal
+        for signal in base_scored
+        if not _requires_confirmation(signal)
+        or str(signal.get("direction", "")).lower() in confirmed_directions
+    ]
+
+
+def _requires_confirmation(signal: dict[str, Any]) -> bool:
+    source = signal.get("source")
+    raw = source.get("raw") if isinstance(source, dict) else {}
+    return isinstance(raw, dict) and bool(raw.get("requires_confirmation"))
 
 
 def _risk_weight(risk_level: str) -> int:

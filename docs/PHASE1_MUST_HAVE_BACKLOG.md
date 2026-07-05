@@ -159,7 +159,7 @@ The items below are must-have gaps to close before treating Phase 1 recommendati
 
 ### 7. Signal Quality Upgrade
 
-**Status:** Partially done. Candidate scoring now separates scored evidence from neutral/context-only signals: neutral news momentum remains available as prompt/reviewer context but no longer inflates opportunity scores, and context-only rows are excluded from opportunity/risk totals. Remaining work includes richer directionally meaningful calculations for analyst, options, insider, institutional, earnings, dividend, sector-relative, valuation/fundamental, and invalidation evidence.
+**Status:** Partially done. Candidate scoring now separates scored evidence from neutral/context-only signals: neutral news momentum remains available as prompt/reviewer context but no longer inflates opportunity scores, context-only rows are excluded from opportunity/risk totals, and one-day price/volume moves require same-direction multi-day or source-backed confirmation before they affect ranking. Remaining work includes richer directionally meaningful calculations for analyst, options, insider, institutional, earnings, dividend, sector-relative, valuation/fundamental, and invalidation evidence.
 
 **Gap:** Several signals score because data exists, not because the underlying data is directionally meaningful. The 2026-06-18 sharded AI run confirmed that many shortlisted candidates were based mostly on single-day price moves or volume spikes; the review model correctly withheld those actionable BUY/SELL calls because the evidence did not establish catalyst durability, trend context, valuation/fundamental support, sector context, or risk/reward.
 

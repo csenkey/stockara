@@ -597,6 +597,83 @@ def test_score_candidates_excludes_neutral_and_context_only_signals_from_totals(
     put_score.assert_called_once()
 
 
+def test_score_candidates_excludes_unconfirmed_one_day_market_moves():
+    stock = {"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology"}
+    signals = [
+        phase1_pipeline._signal(
+            "NVDA",
+            "price_move",
+            "positive",
+            42,
+            "Large daily price move",
+            "NVDA moved sharply in one session.",
+            "yfinance",
+            {"requires_confirmation": True},
+        ),
+        phase1_pipeline._signal(
+            "NVDA",
+            "volume_move",
+            "positive",
+            25,
+            "Unusual volume",
+            "NVDA traded at unusual one-session volume.",
+            "yfinance",
+            {"requires_confirmation": True},
+        ),
+    ]
+
+    with (
+        patch("src.analysis.phase1_pipeline._price_volume_signals", return_value=signals),
+        patch("src.analysis.phase1_pipeline._news_signals", return_value=[]),
+        patch("src.analysis.phase1_pipeline._event_signals", return_value=[]),
+        patch("src.analysis.phase1_pipeline.store.put_candidate_score"),
+    ):
+        scores = score_candidates([stock], date(2026, 6, 17))
+
+    assert scores[0]["opportunity_score"] == 0
+    assert scores[0]["negative_score"] == 0
+    assert scores[0]["scored_signal_count"] == 0
+    assert scores[0]["context_signal_count"] == 2
+
+
+def test_score_candidates_counts_one_day_market_moves_when_confirmed():
+    stock = {"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology"}
+    signals = [
+        phase1_pipeline._signal(
+            "NVDA",
+            "price_move",
+            "positive",
+            30,
+            "Large daily price move",
+            "NVDA moved sharply in one session.",
+            "yfinance",
+            {"requires_confirmation": True},
+        ),
+        phase1_pipeline._signal(
+            "NVDA",
+            "technical_trend",
+            "positive",
+            24,
+            "Multi-day technical trend",
+            "Multi-day price action confirms the move.",
+            "derived_ohlcv",
+        ),
+    ]
+
+    with (
+        patch("src.analysis.phase1_pipeline._price_volume_signals", return_value=signals),
+        patch("src.analysis.phase1_pipeline._news_signals", return_value=[]),
+        patch("src.analysis.phase1_pipeline._event_signals", return_value=[]),
+        patch("src.analysis.phase1_pipeline.store.put_candidate_score"),
+    ):
+        scores = score_candidates([stock], date(2026, 6, 17))
+
+    assert scores[0]["opportunity_score"] == 54
+    assert scores[0]["negative_score"] == 0
+    assert scores[0]["scored_signal_count"] == 2
+    assert scores[0]["context_signal_count"] == 0
+
+
 def test_neutral_news_momentum_is_context_not_scored_evidence():
     with patch("src.analysis.phase1_pipeline.store.news_for_ticker") as news_for_ticker:
         news_for_ticker.return_value = [
