@@ -12,7 +12,7 @@ concurrency:
 
 env:
   PYTHON_VERSION: "3.12"
-  NODE_VERSION: "22"
+  NODE_VERSION: "26"
   AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
 
 jobs:
@@ -26,7 +26,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Resolve deployment stage
         shell: bash
@@ -45,7 +45,7 @@ jobs:
           echo "Resolved deployment stage: $stage"
 
       - name: Set up Python ${{ env.PYTHON_VERSION }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -55,7 +55,7 @@ jobs:
             infrastructure/requirements.txt
 
       - name: Set up Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -113,7 +113,7 @@ jobs:
           fi
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           role-session-name: stockara-github-actions-${{ github.run_id }}
