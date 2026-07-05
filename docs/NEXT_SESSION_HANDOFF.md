@@ -37,25 +37,16 @@ Committed and deployed:
 - `ac74296 Add signal-derived invalidation checks`
   - Analysis rows now carry signal-derived invalidation checks, and analysis/review prompts require concrete signal, price, event, or time-boxed invalidation conditions for actionable recommendations.
   - Deploy run `28753106170` finished green with API and static smoke tests.
+- `6af14f7 Improve news ticker classification`
+  - News ticker classification now filters to the active watchlist universe when supplied, uses word-boundary fallback matching, suppresses ambiguous common-word short tickers unless provider-tagged or strongly disambiguated, and persists classification confidence/provenance.
+  - Deploy run `28753527158` finished green with API and static smoke tests.
 
 Current local state:
 
-- P1/8 ticker classification improvement is implemented locally.
-- Files modified:
-  - `backend/src/collectors/news_collector.py`
-  - `backend/src/db/connection.py`
-  - `backend/tests/test_news_collector.py`
-  - `backend/tests/test_connection.py`
-  - `docs/PHASE1_MUST_HAVE_BACKLOG.md`
-  - `docs/NEXT_SESSION_HANDOFF.md`
-- Behavior implemented locally:
-  - AI-classified news tickers are filtered to the active watchlist universe when supplied.
-  - Fallback title/content ticker extraction uses word boundaries instead of substring matching.
-  - Ambiguous short/common-word tickers are suppressed unless provider-tagged or strongly disambiguated.
-  - News summaries now persist `ticker_classifications` and `classification_confidence` for provenance.
+- No implementation changes are intentionally left uncommitted after the handoff-doc refresh.
 - The recurring non-blocking CI annotation remains: `latest news collection did not reach all configured sources`.
 
-## Verification Run For Current Uncommitted Work
+## Verification Run For Latest Implementation Commit
 
 ```bash
 /private/tmp/stockara-debug-venv/bin/python -m pytest backend/tests/test_phase1_pipeline.py -q
@@ -99,9 +90,7 @@ Result:
 
 ## Immediate Next Steps
 
-1. Commit and deploy current P1/8 ticker classification work.
-
-2. Continue P1/8 source availability reporting for the recurring partial-source CI annotation.
+1. Continue P1/8 source availability reporting for the recurring partial-source CI annotation.
 
 ## Useful Commands
 
