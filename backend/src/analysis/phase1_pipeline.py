@@ -581,14 +581,17 @@ def score_candidates(stocks: list[dict[str, Any]], run_date: date) -> list[dict[
             signals.extend(_institutional_signals(ticker))
             signals.extend(_sector_relative_signals(stock, run_date))
 
-        opportunity_score = sum(max(0, signal["score"]) for signal in signals)
-        negative_score = abs(sum(min(0, signal["score"]) for signal in signals))
+        scored_signals = [signal for signal in signals if _is_scored_evidence_signal(signal)]
+        opportunity_score = sum(max(0, signal["score"]) for signal in scored_signals)
+        negative_score = abs(sum(min(0, signal["score"]) for signal in scored_signals))
         score = {
             "ticker": ticker,
             "score_date": run_date.isoformat(),
             "opportunity_score": opportunity_score,
             "negative_score": negative_score,
             "signals": signals,
+            "scored_signal_count": len(scored_signals),
+            "context_signal_count": len(signals) - len(scored_signals),
             "created_at": datetime.utcnow().isoformat(),
         }
         store.put_candidate_score(score)
@@ -1519,7 +1522,11 @@ def _news_signals(ticker: str, run_date: date) -> list[dict[str, Any]]:
         title = "Positive news catalyst"
     else:
         direction = "neutral"
+        score = 0
         title = "Elevated news momentum"
+    raw = {"article_count": len(articles)}
+    if direction == "neutral":
+        raw["context_only"] = True
     return [
         _signal(
             ticker,
@@ -1529,7 +1536,7 @@ def _news_signals(ticker: str, run_date: date) -> list[dict[str, Any]]:
             title,
             f"{len(articles)} recent ticker-related article(s); latest: {articles[0]['title']}",
             "news",
-            {"article_count": len(articles)},
+            raw,
         )
     ]
 
@@ -1986,6 +1993,9 @@ def _has_market_data_provenance(row: dict[str, Any]) -> bool:
 
 
 def _primary_signal(signals: list[dict[str, Any]]) -> dict[str, Any] | None:
+    scored_signals = [signal for signal in signals if _is_scored_evidence_signal(signal)]
+    if scored_signals:
+        return max(scored_signals, key=lambda signal: abs(signal["score"]))
     if not signals:
         return None
     return max(signals, key=lambda signal: abs(signal["score"]))
@@ -1994,7 +2004,9 @@ def _primary_signal(signals: list[dict[str, Any]]) -> dict[str, Any] | None:
 def _evidence(signals: list[dict[str, Any]]) -> list[str]:
     evidence: list[str] = []
     seen: set[str] = set()
-    for signal in sorted(signals, key=lambda s: abs(s["score"]), reverse=True):
+    scored_signals = [signal for signal in signals if _is_scored_evidence_signal(signal)]
+    evidence_signals = scored_signals or signals
+    for signal in sorted(evidence_signals, key=lambda s: abs(s["score"]), reverse=True):
         summary = str(signal.get("summary", "")).strip()
         key = " ".join(summary.lower().split())
         if not summary or key in seen:
@@ -2004,6 +2016,21 @@ def _evidence(signals: list[dict[str, Any]]) -> list[str]:
         if len(evidence) >= 5:
             break
     return evidence
+
+
+def _is_scored_evidence_signal(signal: dict[str, Any]) -> bool:
+    """Return true when a signal should affect candidate ranking.
+
+    Neutral/context-only rows are still useful prompt context, but they should
+    not inflate opportunity or risk totals simply because data was present.
+    """
+    if str(signal.get("direction", "")).lower() == "neutral":
+        return False
+    source = signal.get("source")
+    raw = source.get("raw") if isinstance(source, dict) else {}
+    if isinstance(raw, dict) and raw.get("context_only"):
+        return False
+    return int(signal.get("score") or 0) != 0
 
 
 def _risk_weight(risk_level: str) -> int:

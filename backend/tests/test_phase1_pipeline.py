@@ -13,6 +13,7 @@ from src.analysis.phase1_pipeline import (
     _chat_completion_options,
     _dividend_signals,
     _event_signals,
+    _news_signals,
     _price_volume_signals,
     analyze_shortlist,
     build_publication_payload,
@@ -545,6 +546,69 @@ def test_score_candidates_skips_live_provider_enrichment_by_default():
     institutional.assert_not_called()
     sector.assert_not_called()
     put_score.assert_called_once()
+
+
+def test_score_candidates_excludes_neutral_and_context_only_signals_from_totals():
+    stock = {"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology"}
+    signals = [
+        phase1_pipeline._signal(
+            "NVDA",
+            "news",
+            "neutral",
+            40,
+            "Elevated news momentum",
+            "Ticker appeared in several neutral articles.",
+            "news",
+            {"article_count": 8},
+        ),
+        phase1_pipeline._signal(
+            "NVDA",
+            "sector_context",
+            "positive",
+            30,
+            "Sector context",
+            "Sector ETF was supportive background context.",
+            "yfinance",
+            {"context_only": True},
+        ),
+        phase1_pipeline._signal(
+            "NVDA",
+            "technical_trend",
+            "positive",
+            22,
+            "Multi-day technical trend",
+            "Multi-day evidence is constructive.",
+            "derived_ohlcv",
+        ),
+    ]
+
+    with (
+        patch("src.analysis.phase1_pipeline._price_volume_signals", return_value=signals),
+        patch("src.analysis.phase1_pipeline._news_signals", return_value=[]),
+        patch("src.analysis.phase1_pipeline._event_signals", return_value=[]),
+        patch("src.analysis.phase1_pipeline.store.put_candidate_score") as put_score,
+    ):
+        scores = score_candidates([stock], date(2026, 6, 17))
+
+    assert scores[0]["opportunity_score"] == 22
+    assert scores[0]["negative_score"] == 0
+    assert scores[0]["scored_signal_count"] == 1
+    assert scores[0]["context_signal_count"] == 2
+    put_score.assert_called_once()
+
+
+def test_neutral_news_momentum_is_context_not_scored_evidence():
+    with patch("src.analysis.phase1_pipeline.store.news_for_ticker") as news_for_ticker:
+        news_for_ticker.return_value = [
+            {"title": "Company hosts investor day", "summary": "Executives present strategy."},
+            {"title": "Company opens a new office", "summary": "Local expansion continues."},
+        ]
+
+        signals = _news_signals("NVDA", date(2026, 6, 17))
+
+    assert signals[0]["direction"] == "neutral"
+    assert signals[0]["score"] == 0
+    assert signals[0]["source"]["raw"]["context_only"] is True
 
 
 def test_price_volume_signals_add_multi_day_market_context():
