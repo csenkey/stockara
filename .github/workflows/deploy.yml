@@ -154,7 +154,13 @@ jobs:
               if status in {"failed", "error"}:
                   warnings.append(f"latest news collection status is {status}")
               if float(news.get("completeness_ratio", 0) or 0) < 1.0:
-                  warnings.append("latest news collection did not reach all configured sources")
+                  failed_sources = ", ".join(news.get("failed_sources") or [])
+                  if failed_sources:
+                      warnings.append(
+                          f"latest news collection failed configured sources: {failed_sources}"
+                      )
+                  else:
+                      warnings.append("latest news collection did not reach all configured sources")
               if int(news.get("articles_fetched", 0) or 0) == 0:
                   warnings.append("latest news collection fetched zero articles")
 

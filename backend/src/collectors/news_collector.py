@@ -96,6 +96,18 @@ class ManifestTaskRun:
     task_id: str
 
 
+@dataclass
+class NewsSourceResult:
+    source: str
+    articles: list[dict[str, Any]]
+    status: str = "success"
+    reason: str | None = None
+
+    @property
+    def is_available(self) -> bool:
+        return self.status in {"success", "partial"}
+
+
 def compute_title_source_hash(title: str, source: str) -> str:
     """Compute SHA-256 hash of title + source for deduplication.
 
@@ -137,19 +149,18 @@ def _alpha_vantage_key() -> str | None:
     )
 
 
-def fetch_newsapi_articles(tickers: list[str] | None = None) -> list[dict[str, Any]]:
+def fetch_newsapi_source(tickers: list[str] | None = None) -> NewsSourceResult:
     """Fetch recent stock-related articles from NewsAPI.
 
     Returns:
-        List of article dicts with keys: title, source, published_at, url.
-        Returns empty list if the source is unavailable.
+        Source status and article dicts with keys: title, source, published_at, url.
     """
     import requests
 
     api_key = _newsapi_key()
     if not api_key:
         logger.error("NewsAPI fetch skipped", error="NEWSAPI key is not configured")
-        return []
+        return NewsSourceResult("newsapi", [], "skipped", "api_key_not_configured")
 
     url = "https://newsapi.org/v2/everything"
     params = {
@@ -183,29 +194,32 @@ def fetch_newsapi_articles(tickers: list[str] | None = None) -> list[dict[str, A
             })
 
         logger.info("NewsAPI articles fetched", count=len(articles), tickers=tickers or [])
-        return articles
+        return NewsSourceResult("newsapi", articles)
 
     except Exception as e:
         logger.error("NewsAPI fetch failed", error=str(e))
-        return []
+        return NewsSourceResult("newsapi", [], "failed", str(e))
 
 
-def fetch_finnhub_articles(tickers: list[str] | None = None) -> list[dict[str, Any]]:
+def fetch_newsapi_articles(tickers: list[str] | None = None) -> list[dict[str, Any]]:
+    return fetch_newsapi_source(tickers=tickers).articles
+
+
+def fetch_finnhub_source(tickers: list[str] | None = None) -> NewsSourceResult:
     """Fetch recent market news from Finnhub.
 
     Returns:
-        List of article dicts with keys: title, source, published_at, content.
-        Returns empty list if the source is unavailable.
+        Source status and article dicts with keys: title, source, published_at, content.
     """
     import requests
 
     api_key = _finnhub_key()
     if not api_key:
         logger.error("Finnhub fetch skipped", error="Finnhub key is not configured")
-        return []
+        return NewsSourceResult("finnhub", [], "skipped", "api_key_not_configured")
 
     if tickers:
-        return _fetch_finnhub_company_news(tickers, api_key)
+        return _fetch_finnhub_company_news_source(tickers, api_key)
 
     url = "https://finnhub.io/api/v1/news"
     params = {"category": "general", "token": api_key}
@@ -238,11 +252,15 @@ def fetch_finnhub_articles(tickers: list[str] | None = None) -> list[dict[str, A
             })
 
         logger.info("Finnhub articles fetched", count=len(articles))
-        return articles
+        return NewsSourceResult("finnhub", articles)
 
     except Exception as e:
         logger.error("Finnhub fetch failed", error=str(e))
-        return []
+        return NewsSourceResult("finnhub", [], "failed", str(e))
+
+
+def fetch_finnhub_articles(tickers: list[str] | None = None) -> list[dict[str, Any]]:
+    return fetch_finnhub_source(tickers=tickers).articles
 
 
 def _newsapi_query(tickers: list[str] | None = None) -> str:
@@ -257,12 +275,22 @@ def _fetch_finnhub_company_news(
     tickers: list[str],
     api_key: str,
 ) -> list[dict[str, Any]]:
+    return _fetch_finnhub_company_news_source(tickers, api_key).articles
+
+
+def _fetch_finnhub_company_news_source(
+    tickers: list[str],
+    api_key: str,
+) -> NewsSourceResult:
     import requests
 
     articles: list[dict[str, Any]] = []
+    attempted = 0
+    failures = 0
     to_date = date.today()
     from_date = to_date - timedelta(days=7)
     for ticker in tickers[:FINNHUB_TICKER_NEWS_MAX_TICKERS]:
+        attempted += 1
         url = "https://finnhub.io/api/v1/company-news"
         params = {
             "symbol": ticker,
@@ -293,6 +321,7 @@ def _fetch_finnhub_company_news(
                     }
                 )
         except Exception as e:
+            failures += 1
             logger.error(
                 "Finnhub company news fetch failed",
                 ticker=ticker,
@@ -300,10 +329,14 @@ def _fetch_finnhub_company_news(
             )
             continue
     logger.info("Finnhub company news fetched", count=len(articles), tickers=tickers)
-    return articles
+    if attempted and failures == attempted:
+        return NewsSourceResult("finnhub", articles, "failed", "all_ticker_requests_failed")
+    if failures:
+        return NewsSourceResult("finnhub", articles, "partial", f"{failures}_ticker_requests_failed")
+    return NewsSourceResult("finnhub", articles)
 
 
-def fetch_alpha_vantage_articles(tickers: list[str] | None = None) -> list[dict[str, Any]]:
+def fetch_alpha_vantage_source(tickers: list[str] | None = None) -> NewsSourceResult:
     """Fetch ticker-aware news from Alpha Vantage NEWS_SENTIMENT."""
     import requests
 
@@ -313,7 +346,7 @@ def fetch_alpha_vantage_articles(tickers: list[str] | None = None) -> list[dict[
             "Alpha Vantage news fetch skipped",
             error="Alpha Vantage key is not configured",
         )
-        return []
+        return NewsSourceResult("alpha_vantage", [], "skipped", "api_key_not_configured")
 
     params = {
         "function": "NEWS_SENTIMENT",
@@ -335,7 +368,12 @@ def fetch_alpha_vantage_articles(tickers: list[str] | None = None) -> list[dict[
         payload = response.json()
     except Exception as exc:
         logger.error("Alpha Vantage news fetch failed", error=str(exc))
-        return []
+        return NewsSourceResult("alpha_vantage", [], "failed", str(exc))
+
+    provider_note = payload.get("Note") or payload.get("Information") or payload.get("Error Message")
+    if provider_note:
+        logger.error("Alpha Vantage news fetch failed", error=str(provider_note))
+        return NewsSourceResult("alpha_vantage", [], "failed", str(provider_note))
 
     articles = []
     for article in payload.get("feed", []):
@@ -358,7 +396,11 @@ def fetch_alpha_vantage_articles(tickers: list[str] | None = None) -> list[dict[
         )
 
     logger.info("Alpha Vantage news fetched", count=len(articles), tickers=tickers or [])
-    return articles
+    return NewsSourceResult("alpha_vantage", articles)
+
+
+def fetch_alpha_vantage_articles(tickers: list[str] | None = None) -> list[dict[str, Any]]:
+    return fetch_alpha_vantage_source(tickers=tickers).articles
 
 
 def _alpha_vantage_time_published(value: Any) -> str | None:
@@ -723,20 +765,33 @@ def build_news_collection_summary(
     total_fetched: int,
     duplicates_skipped: int = 0,
     failed_sources: list[str] | None = None,
+    skipped_sources: list[str] | None = None,
+    zero_article_sources: list[str] | None = None,
+    source_statuses: list[dict[str, Any]] | None = None,
     article_failures: int = 0,
 ) -> dict[str, Any]:
     sources_total = 3
+    skipped_sources = skipped_sources or []
+    configured_total = sources_total - len(skipped_sources)
+    failed_sources = failed_sources or []
     return {
         "status": status,
         "sources_total": sources_total,
+        "sources_configured": configured_total,
         "sources_available": sources_available,
-        "sources_failed": sources_total - sources_available,
-        "failed_sources": failed_sources or [],
+        "sources_failed": len(failed_sources),
+        "sources_skipped": len(skipped_sources),
+        "failed_sources": failed_sources,
+        "skipped_sources": skipped_sources,
+        "zero_article_sources": zero_article_sources or [],
+        "source_statuses": source_statuses or [],
         "articles_fetched": total_fetched,
         "articles_processed": articles_processed,
         "duplicates_skipped": duplicates_skipped,
         "article_failures": article_failures,
-        "completeness_ratio": round(sources_available / sources_total, 4),
+        "completeness_ratio": (
+            round(sources_available / configured_total, 4) if configured_total else 1.0
+        ),
     }
 
 
@@ -798,45 +853,63 @@ def collect_news(tickers: list[str] | None = None) -> dict[str, Any]:
         tickers=tickers or [],
     )
 
-    # Fetch from all sources
-    newsapi_articles = fetch_newsapi_articles(tickers=tickers)
-    finnhub_articles = fetch_finnhub_articles(tickers=tickers)
-    alpha_vantage_articles = fetch_alpha_vantage_articles(tickers=tickers)
-
-    # Track source availability
-    sources_available = 0
-    if newsapi_articles:
-        sources_available += 1
-    if finnhub_articles:
-        sources_available += 1
-    if alpha_vantage_articles:
-        sources_available += 1
-    failed_sources = []
-    if not newsapi_articles:
-        failed_sources.append("newsapi")
-    if not finnhub_articles:
-        failed_sources.append("finnhub")
-    if not alpha_vantage_articles:
-        failed_sources.append("alpha_vantage")
+    # Fetch from all sources and track source health separately from article count.
+    source_results = [
+        fetch_newsapi_source(tickers=tickers),
+        fetch_finnhub_source(tickers=tickers),
+        fetch_alpha_vantage_source(tickers=tickers),
+    ]
+    sources_available = sum(1 for result in source_results if result.is_available)
+    failed_sources = [
+        result.source for result in source_results if result.status == "failed"
+    ]
+    skipped_sources = [
+        result.source for result in source_results if result.status == "skipped"
+    ]
+    zero_article_sources = [
+        result.source
+        for result in source_results
+        if result.is_available and not result.articles
+    ]
+    source_statuses = [
+        {
+            "source": result.source,
+            "status": result.status,
+            "articles_fetched": len(result.articles),
+            **({"reason": result.reason} if result.reason else {}),
+        }
+        for result in source_results
+    ]
+    configured_sources = len(source_results) - len(skipped_sources)
 
     # Check if all sources failed
     if sources_available == 0:
-        raise_all_sources_failed_alert()
+        if configured_sources:
+            raise_all_sources_failed_alert()
         emit_metrics(articles_processed=0, sources_available=0, sources_total=3)
         summary = build_news_collection_summary(
-            status="failed",
+            status="failed" if configured_sources else "skipped",
             articles_processed=0,
             sources_available=0,
             total_fetched=0,
             failed_sources=failed_sources,
+            skipped_sources=skipped_sources,
+            zero_article_sources=zero_article_sources,
+            source_statuses=source_statuses,
         )
         record_news_collection_summary(summary)
         emit_news_collection_summary_metrics(summary)
         result = {
-            "status": "error",
-            "message": "All news sources unavailable",
+            "status": "error" if configured_sources else "skipped",
+            "message": (
+                "All configured news sources unavailable"
+                if configured_sources
+                else "No news sources are configured"
+            ),
             "articles_processed": 0,
             "sources_available": 0,
+            "failed_sources": failed_sources,
+            "skipped_sources": skipped_sources,
             "tickers": tickers or [],
             "collection_summary": summary,
         }
@@ -844,7 +917,9 @@ def collect_news(tickers: list[str] | None = None) -> dict[str, Any]:
         return result
 
     # Combine all articles
-    all_articles = newsapi_articles + finnhub_articles + alpha_vantage_articles
+    all_articles = [
+        article for result in source_results for article in result.articles
+    ]
 
     # Compute hashes for deduplication
     article_hashes = []
@@ -922,6 +997,9 @@ def collect_news(tickers: list[str] | None = None) -> dict[str, Any]:
         total_fetched=len(all_articles),
         duplicates_skipped=len(all_articles) - len(new_articles),
         failed_sources=failed_sources,
+        skipped_sources=skipped_sources,
+        zero_article_sources=zero_article_sources,
+        source_statuses=source_statuses,
         article_failures=article_failures,
     )
     record_news_collection_summary(summary)
@@ -931,6 +1009,9 @@ def collect_news(tickers: list[str] | None = None) -> dict[str, Any]:
         "status": status,
         "articles_processed": articles_stored,
         "sources_available": sources_available,
+        "failed_sources": failed_sources,
+        "skipped_sources": skipped_sources,
+        "zero_article_sources": zero_article_sources,
         "total_fetched": len(all_articles),
         "duplicates_skipped": len(all_articles) - len(new_articles),
         "tickers": tickers or [],
@@ -972,7 +1053,12 @@ def _publish_news_dashboard_artifact(
                 "sources_available", summary.get("sources_available", 0)
             ),
             "sources_total": summary.get("sources_total", 2),
+            "sources_configured": summary.get("sources_configured", 0),
+            "sources_skipped": summary.get("sources_skipped", 0),
             "failed_sources": summary.get("failed_sources", []),
+            "skipped_sources": summary.get("skipped_sources", []),
+            "zero_article_sources": summary.get("zero_article_sources", []),
+            "source_statuses": summary.get("source_statuses", []),
             "tickers": result.get("tickers", []),
         },
         "recent_article_count": total_recent_articles,

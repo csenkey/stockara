@@ -7,9 +7,9 @@ Date: 2026-07-05
 - Branch: `main`
 - Work policy in current phase: commit directly to `main`; pushes deploy prod through GitHub Actions.
 - P0 is done. `docs/PHASE1_MUST_HAVE_BACKLOG.md` shows all P0 blockers completed.
-- Active workstream: P1/7 Signal Quality Upgrade, then P1/8 News Timeliness and Ticker Classification.
-- P1/8 timeliness is partially done: direct news EventBridge collection now runs every 15 minutes.
-- P1/8 ticker classification is intentionally after P1/7, per user request.
+- Active workstream: P1 signal quality and news quality hardening.
+- P1/7 Signal Quality Upgrade is complete for the current P1 scope.
+- P1/8 News Timeliness and Ticker Classification is complete for the current P1 scope.
 
 ## Completed Today
 
@@ -40,26 +40,30 @@ Committed and deployed:
 - `6af14f7 Improve news ticker classification`
   - News ticker classification now filters to the active watchlist universe when supplied, uses word-boundary fallback matching, suppresses ambiguous common-word short tickers unless provider-tagged or strongly disambiguated, and persists classification confidence/provenance.
   - Deploy run `28753527158` finished green with API and static smoke tests.
+- Pending commit in this session: improve news source availability reporting.
+  - News provider status now distinguishes request health from article count.
+  - Summaries record failed, skipped, and zero-article sources plus per-source status rows.
+  - Deploy smoke warnings name failed configured sources instead of only reporting generic partial completeness.
 
 Current local state:
 
-- No implementation changes are intentionally left uncommitted after the handoff-doc refresh.
-- The recurring non-blocking CI annotation remains: `latest news collection did not reach all configured sources`.
+- Local implementation changes are expected until the current source-availability reporting commit is made.
+- After deploy, check whether the recurring non-blocking CI annotation disappears. If a warning remains, it should identify concrete failed configured source names.
 
 ## Verification Run For Latest Implementation Commit
 
 ```bash
-/private/tmp/stockara-debug-venv/bin/python -m pytest backend/tests/test_phase1_pipeline.py -q
+/private/tmp/stockara-debug-venv/bin/pytest backend/tests/test_news_collector.py -q
 ```
 
 Result:
 
 ```text
-63 passed
+51 passed
 ```
 
 ```bash
-/private/tmp/stockara-debug-venv/bin/python -m ruff check backend infrastructure scripts
+/private/tmp/stockara-debug-venv/bin/ruff check backend infrastructure scripts
 ```
 
 Result:
@@ -69,28 +73,20 @@ All checks passed!
 ```
 
 ```bash
-/private/tmp/stockara-debug-venv/bin/python -m pytest backend/tests -q
+/private/tmp/stockara-debug-venv/bin/pytest backend/tests -q
 ```
 
 Result:
 
 ```text
-327 passed
-```
-
-```bash
-/private/tmp/stockara-debug-venv/bin/python -m pytest backend/tests/test_news_collector.py backend/tests/test_connection.py -q
-```
-
-Result:
-
-```text
-68 passed
+330 passed
 ```
 
 ## Immediate Next Steps
 
-1. Continue P1/8 source availability reporting for the recurring partial-source CI annotation.
+1. Commit, push, and watch the source-availability reporting deployment.
+2. Confirm whether the deploy smoke warning is gone or now names concrete failed configured sources.
+3. Continue with the next highest-value P1 backlog item after the deploy is green.
 
 ## Useful Commands
 

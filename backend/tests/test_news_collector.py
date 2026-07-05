@@ -23,6 +23,7 @@ from backend.src.collectors.news_collector import (
     get_existing_hashes,
     generate_summary,
     merge_provider_classification,
+    NewsSourceResult,
     store_article,
     collect_news,
     handler,
@@ -682,10 +683,35 @@ class TestNewsCollectionSummary:
         )
 
         assert summary["status"] == "partial"
-        assert summary["sources_failed"] == 2
+        assert summary["sources_failed"] == 1
         assert summary["failed_sources"] == ["finnhub"]
         assert summary["article_failures"] == 1
         assert summary["completeness_ratio"] == 0.3333
+
+    def test_summary_tracks_skipped_and_zero_article_sources(self):
+        summary = build_news_collection_summary(
+            status="success",
+            articles_processed=0,
+            sources_available=2,
+            total_fetched=0,
+            skipped_sources=["alpha_vantage"],
+            zero_article_sources=["newsapi", "finnhub"],
+            source_statuses=[
+                {"source": "newsapi", "status": "success", "articles_fetched": 0},
+                {"source": "finnhub", "status": "success", "articles_fetched": 0},
+                {
+                    "source": "alpha_vantage",
+                    "status": "skipped",
+                    "articles_fetched": 0,
+                    "reason": "api_key_not_configured",
+                },
+            ],
+        )
+
+        assert summary["sources_configured"] == 2
+        assert summary["sources_skipped"] == 1
+        assert summary["zero_article_sources"] == ["newsapi", "finnhub"]
+        assert summary["completeness_ratio"] == 1.0
 
     @patch("backend.src.collectors.news_collector.cloudwatch")
     def test_summary_metrics_are_emitted(self, mock_cloudwatch):
@@ -720,16 +746,16 @@ class TestCollectNews:
 
     @patch("backend.src.collectors.news_collector.emit_metrics")
     @patch("backend.src.collectors.news_collector.raise_all_sources_failed_alert")
-    @patch("backend.src.collectors.news_collector.fetch_alpha_vantage_articles")
-    @patch("backend.src.collectors.news_collector.fetch_finnhub_articles")
-    @patch("backend.src.collectors.news_collector.fetch_newsapi_articles")
+    @patch("backend.src.collectors.news_collector.fetch_alpha_vantage_source")
+    @patch("backend.src.collectors.news_collector.fetch_finnhub_source")
+    @patch("backend.src.collectors.news_collector.fetch_newsapi_source")
     def test_all_sources_failed_raises_alert(
         self, mock_newsapi, mock_finnhub, mock_alpha, mock_alert, mock_metrics
     ):
         """Requirement 2.6: Alert raised when all sources fail."""
-        mock_newsapi.return_value = []
-        mock_finnhub.return_value = []
-        mock_alpha.return_value = []
+        mock_newsapi.return_value = NewsSourceResult("newsapi", [], "failed")
+        mock_finnhub.return_value = NewsSourceResult("finnhub", [], "failed")
+        mock_alpha.return_value = NewsSourceResult("alpha_vantage", [], "failed")
 
         result = collect_news()
 
@@ -741,19 +767,20 @@ class TestCollectNews:
     @patch("backend.src.collectors.news_collector.OpenAI")
     @patch("backend.src.collectors.news_collector.DatabasePool")
     @patch("backend.src.collectors.news_collector.get_existing_hashes")
-    @patch("backend.src.collectors.news_collector.fetch_alpha_vantage_articles")
-    @patch("backend.src.collectors.news_collector.fetch_finnhub_articles")
-    @patch("backend.src.collectors.news_collector.fetch_newsapi_articles")
+    @patch("backend.src.collectors.news_collector.fetch_alpha_vantage_source")
+    @patch("backend.src.collectors.news_collector.fetch_finnhub_source")
+    @patch("backend.src.collectors.news_collector.fetch_newsapi_source")
     def test_deduplication_skips_existing_articles(
         self, mock_newsapi, mock_finnhub, mock_alpha, mock_get_hashes,
         mock_db_pool, mock_openai, mock_metrics
     ):
         """Requirement 2.5: Duplicate articles are discarded."""
-        mock_newsapi.return_value = [
-            {"title": "Existing Article", "source": "Reuters", "published_at": "2025-01-15T10:00:00Z", "content": "Content"},
-        ]
-        mock_finnhub.return_value = []
-        mock_alpha.return_value = []
+        mock_newsapi.return_value = NewsSourceResult(
+            "newsapi",
+            [{"title": "Existing Article", "source": "Reuters", "published_at": "2025-01-15T10:00:00Z", "content": "Content"}],
+        )
+        mock_finnhub.return_value = NewsSourceResult("finnhub", [])
+        mock_alpha.return_value = NewsSourceResult("alpha_vantage", [])
 
         # Compute the hash that would be generated
         existing_hash = compute_title_source_hash("Existing Article", "Reuters")
@@ -770,7 +797,7 @@ class TestCollectNews:
 
         result = collect_news()
 
-        assert result["status"] == "partial"
+        assert result["status"] == "success"
         assert result["articles_processed"] == 0
         assert result["duplicates_skipped"] == 1
 
@@ -780,19 +807,20 @@ class TestCollectNews:
     @patch("backend.src.collectors.news_collector.OpenAI")
     @patch("backend.src.collectors.news_collector.DatabasePool")
     @patch("backend.src.collectors.news_collector.get_existing_hashes")
-    @patch("backend.src.collectors.news_collector.fetch_alpha_vantage_articles")
-    @patch("backend.src.collectors.news_collector.fetch_finnhub_articles")
-    @patch("backend.src.collectors.news_collector.fetch_newsapi_articles")
+    @patch("backend.src.collectors.news_collector.fetch_alpha_vantage_source")
+    @patch("backend.src.collectors.news_collector.fetch_finnhub_source")
+    @patch("backend.src.collectors.news_collector.fetch_newsapi_source")
     def test_new_articles_are_summarized_and_stored(
         self, mock_newsapi, mock_finnhub, mock_alpha, mock_get_hashes, mock_db_pool,
         mock_openai, mock_generate, mock_store, mock_metrics
     ):
         """Test that new articles go through summary + store pipeline."""
-        mock_newsapi.return_value = [
-            {"title": "New Article", "source": "CNBC", "published_at": "2025-01-15T10:00:00Z", "content": "Breaking news."},
-        ]
-        mock_finnhub.return_value = []
-        mock_alpha.return_value = []
+        mock_newsapi.return_value = NewsSourceResult(
+            "newsapi",
+            [{"title": "New Article", "source": "CNBC", "published_at": "2025-01-15T10:00:00Z", "content": "Breaking news."}],
+        )
+        mock_finnhub.return_value = NewsSourceResult("finnhub", [])
+        mock_alpha.return_value = NewsSourceResult("alpha_vantage", [])
         mock_get_hashes.return_value = set()
 
         mock_conn = MagicMock()
@@ -806,24 +834,25 @@ class TestCollectNews:
 
         result = collect_news()
 
-        assert result["status"] == "partial"
+        assert result["status"] == "success"
         assert result["articles_processed"] == 1
         mock_generate.assert_called_once()
         mock_store.assert_called_once()
 
     @patch("backend.src.collectors.news_collector.emit_metrics")
-    @patch("backend.src.collectors.news_collector.fetch_alpha_vantage_articles")
-    @patch("backend.src.collectors.news_collector.fetch_finnhub_articles")
-    @patch("backend.src.collectors.news_collector.fetch_newsapi_articles")
+    @patch("backend.src.collectors.news_collector.fetch_alpha_vantage_source")
+    @patch("backend.src.collectors.news_collector.fetch_finnhub_source")
+    @patch("backend.src.collectors.news_collector.fetch_newsapi_source")
     def test_partial_source_failure_continues(
         self, mock_newsapi, mock_finnhub, mock_alpha, mock_metrics
     ):
         """Requirement 2.4: Continues collecting from remaining sources when one fails."""
-        mock_newsapi.return_value = [
-            {"title": "Article", "source": "CNBC", "published_at": "2025-01-15T10:00:00Z", "content": "Content"},
-        ]
-        mock_finnhub.return_value = []  # Finnhub failed
-        mock_alpha.return_value = []
+        mock_newsapi.return_value = NewsSourceResult(
+            "newsapi",
+            [{"title": "Article", "source": "CNBC", "published_at": "2025-01-15T10:00:00Z", "content": "Content"}],
+        )
+        mock_finnhub.return_value = NewsSourceResult("finnhub", [], "failed")
+        mock_alpha.return_value = NewsSourceResult("alpha_vantage", [])
 
         with patch("backend.src.collectors.news_collector.DatabasePool") as mock_db_pool, \
              patch("backend.src.collectors.news_collector.get_existing_hashes") as mock_get_hashes, \
@@ -841,7 +870,58 @@ class TestCollectNews:
             result = collect_news()
 
             assert result["status"] == "partial"
-            assert result["sources_available"] == 1
+            assert result["sources_available"] == 2
+            assert result["failed_sources"] == ["finnhub"]
+
+    @patch("backend.src.collectors.news_collector.emit_metrics")
+    @patch("backend.src.collectors.news_collector.OpenAI")
+    @patch("backend.src.collectors.news_collector.DatabasePool")
+    @patch("backend.src.collectors.news_collector.get_existing_hashes")
+    @patch("backend.src.collectors.news_collector.fetch_alpha_vantage_source")
+    @patch("backend.src.collectors.news_collector.fetch_finnhub_source")
+    @patch("backend.src.collectors.news_collector.fetch_newsapi_source")
+    def test_zero_articles_from_available_sources_is_not_partial(
+        self, mock_newsapi, mock_finnhub, mock_alpha, mock_get_hashes,
+        mock_db_pool, mock_openai, mock_metrics
+    ):
+        mock_newsapi.return_value = NewsSourceResult("newsapi", [])
+        mock_finnhub.return_value = NewsSourceResult("finnhub", [])
+        mock_alpha.return_value = NewsSourceResult("alpha_vantage", [], "skipped")
+        mock_get_hashes.return_value = set()
+
+        mock_conn = MagicMock()
+        mock_db_pool.initialize.return_value = None
+        mock_db_pool._pool.getconn.return_value = mock_conn
+        mock_openai.return_value = MagicMock()
+
+        result = collect_news()
+
+        assert result["status"] == "success"
+        assert result["collection_summary"]["completeness_ratio"] == 1.0
+        assert result["collection_summary"]["zero_article_sources"] == [
+            "newsapi",
+            "finnhub",
+        ]
+        assert result["collection_summary"]["skipped_sources"] == ["alpha_vantage"]
+
+    @patch("backend.src.collectors.news_collector.emit_metrics")
+    @patch("backend.src.collectors.news_collector.raise_all_sources_failed_alert")
+    @patch("backend.src.collectors.news_collector.fetch_alpha_vantage_source")
+    @patch("backend.src.collectors.news_collector.fetch_finnhub_source")
+    @patch("backend.src.collectors.news_collector.fetch_newsapi_source")
+    def test_all_sources_skipped_does_not_raise_failure_alert(
+        self, mock_newsapi, mock_finnhub, mock_alpha, mock_alert, mock_metrics
+    ):
+        mock_newsapi.return_value = NewsSourceResult("newsapi", [], "skipped")
+        mock_finnhub.return_value = NewsSourceResult("finnhub", [], "skipped")
+        mock_alpha.return_value = NewsSourceResult("alpha_vantage", [], "skipped")
+
+        result = collect_news()
+
+        mock_alert.assert_not_called()
+        assert result["status"] == "skipped"
+        assert result["collection_summary"]["status"] == "skipped"
+        assert result["collection_summary"]["completeness_ratio"] == 1.0
 
 
 # --- Tests for handler ---
