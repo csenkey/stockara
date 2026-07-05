@@ -735,7 +735,9 @@ class DynamoStore:
             "tickers": summary_data.get("tickers", []),
             "summary": summary_data["summary"][:500],
             "sentiment": summary_data.get("sentiment", "neutral"),
-            "ticker_classifications": summary_data.get("ticker_classifications", []),
+            "ticker_classifications": _to_dynamodb_value(
+                summary_data.get("ticker_classifications", [])
+            ),
             "classification_confidence": _decimal(
                 summary_data.get("classification_confidence", 0)
             ),

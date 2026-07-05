@@ -24,6 +24,7 @@ from backend.src.collectors.news_collector import (
     generate_summary,
     merge_provider_classification,
     NewsSourceResult,
+    _safe_provider_error,
     store_article,
     collect_news,
     handler,
@@ -39,6 +40,17 @@ def setup_function():
 
 def teardown_function():
     get_provider_api_key.cache_clear()
+
+
+def test_safe_provider_error_redacts_query_secrets():
+    error = _safe_provider_error(
+        "429 Client Error for url: https://example.com/path?q=news&apiKey=secret123&token=abc"
+    )
+
+    assert "secret123" not in error
+    assert "token=abc" not in error
+    assert "apiKey=<redacted>" in error
+    assert "token=<redacted>" in error
 
 
 # --- Tests for compute_title_source_hash (Requirement 2.5) ---

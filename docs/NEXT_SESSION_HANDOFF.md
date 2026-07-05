@@ -44,22 +44,26 @@ Committed and deployed:
   - News provider status now distinguishes request health from article count.
   - Summaries record failed, skipped, and zero-article sources plus per-source status rows.
   - Deploy smoke warnings name failed configured sources instead of only reporting generic partial completeness.
+- Pending follow-up commit in this session: harden news source failure details.
+  - Provider error reasons are redacted before logging/storing, so query-string API keys do not leak in source-status output.
+  - Nested ticker-classification confidence values are converted to DynamoDB Decimal values before persistence.
+  - Manual run `28754126378` showed the new summary shape working: Finnhub and Alpha Vantage succeeded, NewsAPI returned HTTP 429, and two article writes failed before the Decimal fix.
 
 Current local state:
 
-- Local implementation changes are expected until the current source-availability reporting commit is made.
-- After deploy, check whether the recurring non-blocking CI annotation disappears. If a warning remains, it should identify concrete failed configured source names.
+- Local implementation changes are expected until the current source failure hardening commit is made.
+- After deploy, trigger `run-news-collection-now.yml` once more. The expected remaining non-blocking issue is NewsAPI rate limiting; stored/logged reasons should no longer expose provider keys, and new articles with ticker classification confidence should store successfully.
 
 ## Verification Run For Latest Implementation Commit
 
 ```bash
-/private/tmp/stockara-debug-venv/bin/pytest backend/tests/test_news_collector.py -q
+/private/tmp/stockara-debug-venv/bin/pytest backend/tests/test_news_collector.py backend/tests/test_connection.py -q
 ```
 
 Result:
 
 ```text
-51 passed
+72 passed
 ```
 
 ```bash
@@ -79,13 +83,13 @@ All checks passed!
 Result:
 
 ```text
-330 passed
+331 passed
 ```
 
 ## Immediate Next Steps
 
-1. Commit, push, and watch the source-availability reporting deployment.
-2. Confirm whether the deploy smoke warning is gone or now names concrete failed configured sources.
+1. Commit, push, and watch the source failure hardening deployment.
+2. Trigger `gh workflow run run-news-collection-now.yml` and inspect the run. It should only fail if the workflow still treats partial source coverage as fatal; the collector response should have redacted reasons and no DynamoDB float write failures.
 3. Continue with the next highest-value P1 backlog item after the deploy is green.
 
 ## Useful Commands

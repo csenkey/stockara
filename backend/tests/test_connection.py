@@ -426,7 +426,7 @@ def test_put_news_summary_writes_ticker_fanout_and_status():
     table.put_item.assert_called_once()
     item = table.put_item.call_args.kwargs["Item"]
     assert item["ticker_classifications"] == [
-        {"ticker": "AAPL", "confidence": 0.75, "sources": ["ai"]}
+        {"ticker": "AAPL", "confidence": Decimal("0.75"), "sources": ["ai"]}
     ]
     assert item["classification_confidence"] == Decimal("0.75")
     assert batch.put_item.call_count == 2

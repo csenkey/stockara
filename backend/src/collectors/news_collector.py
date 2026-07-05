@@ -149,6 +149,16 @@ def _alpha_vantage_key() -> str | None:
     )
 
 
+def _safe_provider_error(exc: Exception | str) -> str:
+    text = str(exc)
+    return re.sub(
+        r"([?&](?:apiKey|apikey|api_key|token)=)[^&\s]+",
+        r"\1<redacted>",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+
 def fetch_newsapi_source(tickers: list[str] | None = None) -> NewsSourceResult:
     """Fetch recent stock-related articles from NewsAPI.
 
@@ -197,8 +207,9 @@ def fetch_newsapi_source(tickers: list[str] | None = None) -> NewsSourceResult:
         return NewsSourceResult("newsapi", articles)
 
     except Exception as e:
-        logger.error("NewsAPI fetch failed", error=str(e))
-        return NewsSourceResult("newsapi", [], "failed", str(e))
+        error = _safe_provider_error(e)
+        logger.error("NewsAPI fetch failed", error=error)
+        return NewsSourceResult("newsapi", [], "failed", error)
 
 
 def fetch_newsapi_articles(tickers: list[str] | None = None) -> list[dict[str, Any]]:
@@ -255,8 +266,9 @@ def fetch_finnhub_source(tickers: list[str] | None = None) -> NewsSourceResult:
         return NewsSourceResult("finnhub", articles)
 
     except Exception as e:
-        logger.error("Finnhub fetch failed", error=str(e))
-        return NewsSourceResult("finnhub", [], "failed", str(e))
+        error = _safe_provider_error(e)
+        logger.error("Finnhub fetch failed", error=error)
+        return NewsSourceResult("finnhub", [], "failed", error)
 
 
 def fetch_finnhub_articles(tickers: list[str] | None = None) -> list[dict[str, Any]]:
@@ -322,10 +334,11 @@ def _fetch_finnhub_company_news_source(
                 )
         except Exception as e:
             failures += 1
+            error = _safe_provider_error(e)
             logger.error(
                 "Finnhub company news fetch failed",
                 ticker=ticker,
-                error=str(e),
+                error=error,
             )
             continue
     logger.info("Finnhub company news fetched", count=len(articles), tickers=tickers)
@@ -367,13 +380,15 @@ def fetch_alpha_vantage_source(tickers: list[str] | None = None) -> NewsSourceRe
         response.raise_for_status()
         payload = response.json()
     except Exception as exc:
-        logger.error("Alpha Vantage news fetch failed", error=str(exc))
-        return NewsSourceResult("alpha_vantage", [], "failed", str(exc))
+        error = _safe_provider_error(exc)
+        logger.error("Alpha Vantage news fetch failed", error=error)
+        return NewsSourceResult("alpha_vantage", [], "failed", error)
 
     provider_note = payload.get("Note") or payload.get("Information") or payload.get("Error Message")
     if provider_note:
-        logger.error("Alpha Vantage news fetch failed", error=str(provider_note))
-        return NewsSourceResult("alpha_vantage", [], "failed", str(provider_note))
+        error = _safe_provider_error(provider_note)
+        logger.error("Alpha Vantage news fetch failed", error=error)
+        return NewsSourceResult("alpha_vantage", [], "failed", error)
 
     articles = []
     for article in payload.get("feed", []):
