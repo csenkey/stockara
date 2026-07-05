@@ -284,3 +284,39 @@ The items below are must-have gaps to close before treating Phase 1 recommendati
 
 - `backend/tests/`
 - `infrastructure/tests/`
+
+## P3 - Low-Priority Phase 1 Enhancements
+
+### 13. Company Logo Enrichment and Caching
+
+**Status:** Open.
+
+**Gap:** Ticker panels and company context views do not have source-backed company logos or icons. This is helpful for visual scanning and polish, but it is not required for decision-grade recommendation quality.
+
+**Why it matters:** Logos make top picks, sell alerts, withheld candidates, and company-info panels easier to scan. They should be treated as presentation metadata, not as analysis evidence.
+
+**Required outcome:**
+
+- Add optional logo metadata fields to the static metadata contract and stock metadata sync path: `logo_url`, `logo_icon_url`, `logo_source`, `logo_source_url`, and `logo_checked_at`.
+- Prefer a ticker-aware financial data provider first. Massive/Polygon ticker details expose `branding.logo_url` and `branding.icon_url`, and also expose active/delisted status that can help P0 universe hygiene.
+- Use Logo.dev as a fallback when a reliable company domain is available from `website` or provider metadata. Logo.dev supports logo lookup by domain, stock ticker, ISIN, or crypto symbol.
+- Avoid Clearbit Logo API because it is discontinued/unavailable for new users. Avoid random favicon scraping as the primary solution because quality and rights are inconsistent.
+- Download and cache logo files into the Stockara artifact bucket instead of hotlinking provider URLs. Suggested paths: `logos/{ticker}/logo.svg`, `logos/{ticker}/icon.png`, and `logos/{ticker}/metadata.json`.
+- Publish cached logo URLs through CloudFront and use those URLs in the frontend. Fall back to ticker initials when no source-backed logo is available.
+- Keep logo enrichment separate from scoring. Missing logos must never suppress analysis, publication, or watchlist eligibility.
+
+**Suggested implementation plan:**
+
+- Extend `docs/WATCHLIST_STATIC_METADATA_CONTRACT.md` with optional logo fields.
+- Extend `backend/src/scripts/enrich_watchlist_metadata.py` or add a sibling `enrich_watchlist_logos.py` that can run in `--only-gaps` / `--only-missing-logos` mode.
+- Add provider helpers in priority order: Massive/Polygon ticker details, then Logo.dev domain/ticker fallback.
+- Add S3 artifact publishing for downloaded logo bytes plus normalized logo metadata.
+- Add frontend rendering support for cached `logo_icon_url` on compact ticker panels and `logo_url` in expanded company-info panels.
+- Add tests covering provider normalization, cache key generation, missing-logo fallback, and no scoring impact.
+
+**References:**
+
+- `docs/WATCHLIST_STATIC_METADATA_CONTRACT.md`
+- `backend/src/scripts/enrich_watchlist_metadata.py`
+- `backend/src/scripts/seed_watchlist_handler.py`
+- `frontend/src/pages/TopPicks.tsx`
