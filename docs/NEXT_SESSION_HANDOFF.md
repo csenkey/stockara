@@ -23,21 +23,26 @@ Committed and deployed:
   - Neutral/context-only signals remain available as context but no longer inflate opportunity/risk scores.
 - `dabc892 Require confirmation for one-day market moves`
   - One-day price/volume moves require same-direction confirmation before they affect ranking.
+- `4fb8310 Improve sector-relative signal scoring`
+  - Sector-relative scoring now uses 5-session and 20-session relative returns versus sector ETFs with history/noise gates.
+- `dafd899 Require event evidence before event scoring`
+  - Earnings/dividend event scoring now requires sufficient historical reaction evidence or explicit catalyst news before affecting ranking.
+  - Deploy run `28751856811` finished green with API and static smoke tests.
 
 Current uncommitted work in progress:
 
-- P1/7 event-signal quality after sector-relative scoring was committed.
+- P1/7 live provider signal quality for options, analyst, insider, and institutional signals.
 - Files modified:
   - `backend/src/analysis/phase1_pipeline.py`
   - `backend/tests/test_phase1_pipeline.py`
   - `docs/PHASE1_MUST_HAVE_BACKLOG.md`
+  - `docs/NEXT_SESSION_HANDOFF.md`
 - Behavior implemented locally:
-  - Earnings predictions now score historical reaction/surprise only when at least 3 prior reaction/surprise rows exist.
-  - Earnings can still score from explicit positive/negative recent news catalyst keywords.
-  - Earnings with thin history and no catalyst news becomes neutral context with `context_only=true` inside prediction metadata.
-  - Dividend predictions now require at least 3 historical ex-dividend reaction rows before dividend yield/history affects ranking.
-  - Dividends with thin reaction history become neutral context with `context_only=true`.
-  - Added focused tests for thin earnings history, thin dividend history, and sufficient dividend reaction history.
+  - Options enrichment reads nearest-expiration open interest and scores only liquid, clearly call-heavy or put-heavy skew; thin/unclear options data is neutral context.
+  - Analyst enrichment scores only meaningful recommendation consensus with at least 5 analysts; thin or mixed coverage is neutral context.
+  - Insider enrichment aggregates recent buy/sell transaction shares and scores only clear net buying/selling; unclear rows are neutral context.
+  - Institutional holder data is retained as neutral context unless future ownership-change evidence is available.
+  - Added focused tests for the new provider-signal boundaries.
 
 ## Verification Already Run For Current Uncommitted Work
 
@@ -48,7 +53,7 @@ Current uncommitted work in progress:
 Result:
 
 ```text
-51 passed
+57 passed
 ```
 
 ```bash
@@ -68,7 +73,7 @@ All checks passed!
 Result:
 
 ```text
-311 passed
+317 passed
 ```
 
 ## Immediate Next Steps
@@ -84,7 +89,7 @@ Result:
 
    ```bash
    git add backend/src/analysis/phase1_pipeline.py backend/tests/test_phase1_pipeline.py docs/PHASE1_MUST_HAVE_BACKLOG.md docs/NEXT_SESSION_HANDOFF.md
-   git commit -m "Require event evidence before event scoring"
+   git commit -m "Require directional provider evidence before scoring"
    git push
    gh run list --branch main --limit 5
    gh run watch <run-id> --exit-status
@@ -92,7 +97,6 @@ Result:
 
 3. After deploy is green, continue P1/7 in this preferred order:
 
-   - Analyst/options/insider/institutional signal quality: avoid scoring mere data availability; score only directionally meaningful provider-backed activity.
    - Valuation/fundamental context where provider data exists.
    - Invalidation criteria enrichment in prompts/reviewer artifacts.
 

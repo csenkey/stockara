@@ -691,6 +691,112 @@ def test_neutral_news_momentum_is_context_not_scored_evidence():
     assert signals[0]["source"]["raw"]["context_only"] is True
 
 
+def test_options_signal_scores_directional_open_interest_skew_only_when_liquid():
+    ticker = SimpleNamespace(
+        options=["2026-07-17"],
+        option_chain=lambda _expiration: SimpleNamespace(
+            calls=pd.DataFrame([{"openInterest": 1000}, {"openInterest": 500}]),
+            puts=pd.DataFrame([{"openInterest": 400}]),
+        ),
+    )
+
+    with patch("src.analysis.phase1_pipeline.yf.Ticker", return_value=ticker):
+        signals = phase1_pipeline._options_signals("NVDA")
+
+    assert signals[0]["direction"] == "positive"
+    assert signals[0]["score"] > 0
+    assert signals[0]["source"]["raw"]["put_call_open_interest_ratio"] < 0.7
+    assert "context_only" not in signals[0]["source"]["raw"]
+
+
+def test_options_signal_keeps_thin_options_data_as_context():
+    ticker = SimpleNamespace(
+        options=["2026-07-17"],
+        option_chain=lambda _expiration: SimpleNamespace(
+            calls=pd.DataFrame([{"openInterest": 50}]),
+            puts=pd.DataFrame([{"openInterest": 25}]),
+        ),
+    )
+
+    with patch("src.analysis.phase1_pipeline.yf.Ticker", return_value=ticker):
+        signals = phase1_pipeline._options_signals("THIN")
+
+    assert signals[0]["direction"] == "neutral"
+    assert signals[0]["score"] == 0
+    assert signals[0]["source"]["raw"]["context_only"] is True
+
+
+def test_analyst_signal_scores_clear_consensus_with_coverage():
+    ticker = SimpleNamespace(
+        recommendations=pd.DataFrame(
+            [
+                {
+                    "period": "0m",
+                    "strongBuy": 4,
+                    "buy": 8,
+                    "hold": 2,
+                    "sell": 0,
+                    "strongSell": 0,
+                }
+            ]
+        )
+    )
+
+    with patch("src.analysis.phase1_pipeline.yf.Ticker", return_value=ticker):
+        signals = phase1_pipeline._analyst_signals("NVDA")
+
+    assert signals[0]["direction"] == "positive"
+    assert signals[0]["score"] > 0
+    assert signals[0]["source"]["raw"]["coverage"] == 14
+    assert "context_only" not in signals[0]["source"]["raw"]
+
+
+def test_analyst_signal_keeps_low_coverage_as_context():
+    ticker = SimpleNamespace(
+        recommendations=pd.DataFrame(
+            [{"period": "0m", "strongBuy": 1, "buy": 1, "hold": 0, "sell": 0, "strongSell": 0}]
+        )
+    )
+
+    with patch("src.analysis.phase1_pipeline.yf.Ticker", return_value=ticker):
+        signals = phase1_pipeline._analyst_signals("SMOL")
+
+    assert signals[0]["direction"] == "neutral"
+    assert signals[0]["score"] == 0
+    assert signals[0]["source"]["raw"]["context_only"] is True
+
+
+def test_insider_signal_scores_net_selling_from_directional_transactions():
+    ticker = SimpleNamespace(
+        insider_transactions=pd.DataFrame(
+            [
+                {"Transaction": "Sale", "Shares": 700},
+                {"Transaction": "Sale", "Shares": 300},
+                {"Transaction": "Purchase", "Shares": 100},
+            ]
+        )
+    )
+
+    with patch("src.analysis.phase1_pipeline.yf.Ticker", return_value=ticker):
+        signals = phase1_pipeline._insider_signals("ACME")
+
+    assert signals[0]["direction"] == "negative"
+    assert signals[0]["score"] < 0
+    assert signals[0]["source"]["raw"]["net_purchase_shares"] == -900
+    assert "context_only" not in signals[0]["source"]["raw"]
+
+
+def test_institutional_signal_is_context_without_change_evidence():
+    ticker = SimpleNamespace(institutional_holders=pd.DataFrame([{"Holder": "Fund", "Shares": 1000}]))
+
+    with patch("src.analysis.phase1_pipeline.yf.Ticker", return_value=ticker):
+        signals = phase1_pipeline._institutional_signals("NVDA")
+
+    assert signals[0]["direction"] == "neutral"
+    assert signals[0]["score"] == 0
+    assert signals[0]["source"]["raw"]["context_only"] is True
+
+
 def test_price_volume_signals_add_multi_day_market_context():
     run_date = date(2026, 6, 17)
     rows = _market_context_rows(

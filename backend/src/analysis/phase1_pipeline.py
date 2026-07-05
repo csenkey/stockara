@@ -1834,19 +1834,59 @@ def _options_signals(ticker: str) -> list[dict[str, Any]]:
     try:
         yf_ticker = yf.Ticker(ticker)
         expirations = list(getattr(yf_ticker, "options", []) or [])
-        if expirations:
-            return [
-                _signal(
-                    ticker,
-                    "options",
-                    "neutral",
-                    10,
-                    "Options activity available",
-                    f"{ticker} has listed options expirations; use as a volatility follow-up signal.",
-                    "yfinance",
-                    {"expiration_count": len(expirations)},
-                )
-            ]
+        if not expirations:
+            return []
+
+        raw: dict[str, Any] = {"expiration_count": len(expirations)}
+        direction = "neutral"
+        score = 0
+        summary = f"{ticker} has listed options expirations; use as volatility context."
+        try:
+            chain = yf_ticker.option_chain(expirations[0])
+            call_open_interest = _option_table_open_interest(getattr(chain, "calls", None))
+            put_open_interest = _option_table_open_interest(getattr(chain, "puts", None))
+            total_open_interest = call_open_interest + put_open_interest
+            raw.update(
+                {
+                    "nearest_expiration": expirations[0],
+                    "call_open_interest": call_open_interest,
+                    "put_open_interest": put_open_interest,
+                    "total_open_interest": total_open_interest,
+                }
+            )
+            if total_open_interest >= 500:
+                put_call_ratio = put_open_interest / max(call_open_interest, 1)
+                raw["put_call_open_interest_ratio"] = round(put_call_ratio, 2)
+                if put_call_ratio <= 0.7:
+                    direction = "positive"
+                    score = min(18, 8 + int((0.7 - put_call_ratio) * 20))
+                    summary = (
+                        f"{ticker} nearest-expiration options skew is call-heavy "
+                        f"with a {put_call_ratio:.2f} put/call open-interest ratio."
+                    )
+                elif put_call_ratio >= 1.4:
+                    direction = "negative"
+                    score = -min(18, 8 + int((put_call_ratio - 1.4) * 8))
+                    summary = (
+                        f"{ticker} nearest-expiration options skew is put-heavy "
+                        f"with a {put_call_ratio:.2f} put/call open-interest ratio."
+                    )
+        except Exception as exc:
+            raw["chain_error"] = str(exc)
+        if direction == "neutral":
+            raw["context_only"] = True
+        return [
+            _signal(
+                ticker,
+                "options",
+                direction,
+                score,
+                "Options open-interest context",
+                summary,
+                "yfinance",
+                raw,
+            )
+        ]
     except Exception as exc:
         logger.info("options_signal_provider_unavailable", ticker=ticker, error=str(exc))
     return []
@@ -1855,18 +1895,84 @@ def _options_signals(ticker: str) -> list[dict[str, Any]]:
 def _analyst_signals(ticker: str) -> list[dict[str, Any]]:
     try:
         recs = yf.Ticker(ticker).recommendations
-        if recs is not None and len(recs) > 0:
+        rows = _table_records(recs)
+        if not rows:
+            return []
+        latest = rows[-1]
+        strong_buy = _numeric(latest.get("strongBuy") or latest.get("strong_buy"))
+        buy = _numeric(latest.get("buy"))
+        hold = _numeric(latest.get("hold"))
+        sell = _numeric(latest.get("sell"))
+        strong_sell = _numeric(latest.get("strongSell") or latest.get("strong_sell"))
+        coverage = strong_buy + buy + hold + sell + strong_sell
+        bullish = strong_buy + buy
+        bearish = sell + strong_sell
+        raw = {
+            "coverage": coverage,
+            "strong_buy": strong_buy,
+            "buy": buy,
+            "hold": hold,
+            "sell": sell,
+            "strong_sell": strong_sell,
+        }
+        if coverage < 5:
+            raw["context_only"] = True
             return [
                 _signal(
                     ticker,
                     "analyst",
                     "neutral",
-                    12,
-                    "Analyst rating activity",
-                    f"{ticker} has recent analyst recommendation data available.",
+                    0,
+                    "Analyst rating context",
+                    f"{ticker} has limited analyst recommendation coverage.",
                     "yfinance",
+                    raw,
                 )
             ]
+
+        net_ratio = (bullish - bearish) / coverage
+        raw["bullish_share"] = round(bullish / coverage, 2)
+        raw["bearish_share"] = round(bearish / coverage, 2)
+        raw["net_bullish_ratio"] = round(net_ratio, 2)
+        if net_ratio >= 0.5:
+            return [
+                _signal(
+                    ticker,
+                    "analyst",
+                    "positive",
+                    min(24, 10 + int(net_ratio * 18)),
+                    "Bullish analyst recommendation mix",
+                    f"{ticker} analyst recommendations are meaningfully bullish.",
+                    "yfinance",
+                    raw,
+                )
+            ]
+        if net_ratio <= -0.25:
+            return [
+                _signal(
+                    ticker,
+                    "analyst",
+                    "negative",
+                    -min(24, 10 + int(abs(net_ratio) * 18)),
+                    "Bearish analyst recommendation mix",
+                    f"{ticker} analyst recommendations are meaningfully bearish.",
+                    "yfinance",
+                    raw,
+                )
+            ]
+        raw["context_only"] = True
+        return [
+            _signal(
+                ticker,
+                "analyst",
+                "neutral",
+                0,
+                "Mixed analyst recommendation context",
+                f"{ticker} analyst recommendations are mixed.",
+                "yfinance",
+                raw,
+            )
+        ]
     except Exception as exc:
         logger.info("analyst_signal_provider_unavailable", ticker=ticker, error=str(exc))
     return []
@@ -1875,18 +1981,91 @@ def _analyst_signals(ticker: str) -> list[dict[str, Any]]:
 def _insider_signals(ticker: str) -> list[dict[str, Any]]:
     try:
         txns = yf.Ticker(ticker).insider_transactions
-        if txns is not None and len(txns) > 0:
+        rows = _table_records(txns)
+        if not rows:
+            return []
+        purchase_shares = 0.0
+        sale_shares = 0.0
+        considered_rows = 0
+        for row in rows[:20]:
+            shares = abs(_numeric(row.get("Shares") or row.get("shares")))
+            if shares <= 0:
+                continue
+            label = str(
+                row.get("Transaction")
+                or row.get("transaction")
+                or row.get("Text")
+                or row.get("text")
+                or ""
+            ).lower()
+            considered_rows += 1
+            if any(term in label for term in ["sale", "sell", "disposed"]):
+                sale_shares += shares
+            elif any(term in label for term in ["purchase", "buy", "acquired"]):
+                purchase_shares += shares
+        total_shares = purchase_shares + sale_shares
+        raw = {
+            "transaction_rows": len(rows),
+            "considered_rows": considered_rows,
+            "purchase_shares": round(purchase_shares, 2),
+            "sale_shares": round(sale_shares, 2),
+            "net_purchase_shares": round(purchase_shares - sale_shares, 2),
+        }
+        if total_shares <= 0 or considered_rows < 2:
+            raw["context_only"] = True
             return [
                 _signal(
                     ticker,
                     "insider",
                     "neutral",
-                    10,
-                    "Insider transaction activity",
-                    f"{ticker} has insider transaction data available.",
+                    0,
+                    "Insider transaction context",
+                    f"{ticker} has insider transaction rows but no clear directional aggregate.",
                     "yfinance",
+                    raw,
                 )
             ]
+        net_ratio = (purchase_shares - sale_shares) / total_shares
+        raw["net_purchase_ratio"] = round(net_ratio, 2)
+        if net_ratio >= 0.5:
+            return [
+                _signal(
+                    ticker,
+                    "insider",
+                    "positive",
+                    min(18, 8 + int(net_ratio * 12)),
+                    "Net insider buying",
+                    f"{ticker} recent insider transactions show net buying.",
+                    "yfinance",
+                    raw,
+                )
+            ]
+        if net_ratio <= -0.5:
+            return [
+                _signal(
+                    ticker,
+                    "insider",
+                    "negative",
+                    -min(18, 8 + int(abs(net_ratio) * 12)),
+                    "Net insider selling",
+                    f"{ticker} recent insider transactions show net selling.",
+                    "yfinance",
+                    raw,
+                )
+            ]
+        raw["context_only"] = True
+        return [
+            _signal(
+                ticker,
+                "insider",
+                "neutral",
+                0,
+                "Mixed insider transaction context",
+                f"{ticker} recent insider transactions are mixed.",
+                "yfinance",
+                raw,
+            )
+        ]
     except Exception as exc:
         logger.info("insider_signal_provider_unavailable", ticker=ticker, error=str(exc))
     return []
@@ -1901,15 +2080,46 @@ def _institutional_signals(ticker: str) -> list[dict[str, Any]]:
                     ticker,
                     "institutional",
                     "neutral",
-                    8,
-                    "Institutional holder data",
-                    f"{ticker} has institutional holder data available.",
+                    0,
+                    "Institutional holder context",
+                    f"{ticker} has institutional holder data available, but no ownership-change evidence.",
                     "yfinance",
+                    {"holder_count": len(holders), "context_only": True},
                 )
             ]
     except Exception as exc:
         logger.info("institutional_signal_provider_unavailable", ticker=ticker, error=str(exc))
     return []
+
+
+def _table_records(table: Any) -> list[dict[str, Any]]:
+    if table is None:
+        return []
+    if hasattr(table, "to_dict"):
+        try:
+            return [
+                {str(key): _jsonable_value(value) for key, value in row.items()}
+                for row in table.to_dict("records")
+            ]
+        except Exception:
+            return []
+    if isinstance(table, list):
+        return [row for row in table if isinstance(row, dict)]
+    return []
+
+
+def _numeric(value: Any, default: float = 0.0) -> float:
+    if value in (None, ""):
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _option_table_open_interest(table: Any) -> float:
+    rows = _table_records(table)
+    return sum(_numeric(row.get("openInterest") or row.get("open_interest")) for row in rows)
 
 
 def _sector_relative_signals(stock: dict[str, Any], run_date: date) -> list[dict[str, Any]]:
