@@ -35,12 +35,22 @@ Committed and deployed:
   - Fundamental/valuation live provider enrichment scores only coherent provider-backed quality, weakness, or valuation extremes.
   - Deploy run `28752247513` finished green with API and static smoke tests.
 
-Current local state:
+Current uncommitted work in progress:
 
-- No implementation changes are intentionally left uncommitted after the handoff-doc refresh.
+- P1/7 invalidation criteria enrichment.
+- Files modified:
+  - `backend/src/analysis/phase1_pipeline.py`
+  - `backend/tests/test_phase1_pipeline.py`
+  - `docs/PHASE1_MUST_HAVE_BACKLOG.md`
+  - `docs/NEXT_SESSION_HANDOFF.md`
+- Behavior implemented locally:
+  - Analysis now computes `invalidation_checks` from scored evidence for BUY/SELL/HOLD analysis rows.
+  - Missing AI invalidation criteria are filled from signal-derived checks instead of a generic fallback.
+  - The analysis prompt includes BUY and SELL invalidation checks and requires concrete signal/price/event/time conditions for actionable calls.
+  - The review prompt includes those checks and tells the reviewer to reject vague or evidence-detached invalidation criteria.
 - The recurring non-blocking CI annotation remains: `latest news collection did not reach all configured sources`.
 
-## Verification Run For Latest Implementation Commit
+## Verification Run For Current Uncommitted Work
 
 ```bash
 /private/tmp/stockara-debug-venv/bin/python -m pytest backend/tests/test_phase1_pipeline.py -q
@@ -49,7 +59,7 @@ Current local state:
 Result:
 
 ```text
-60 passed
+63 passed
 ```
 
 ```bash
@@ -69,14 +79,12 @@ All checks passed!
 Result:
 
 ```text
-320 passed
+323 passed
 ```
 
 ## Immediate Next Steps
 
-1. Continue P1/7 in this preferred order:
-
-   - Invalidation criteria enrichment in prompts/reviewer artifacts.
+1. Commit and deploy current P1/7 invalidation enrichment.
 
 2. Then return to P1/8 ticker classification:
 

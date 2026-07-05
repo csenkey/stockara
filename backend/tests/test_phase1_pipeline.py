@@ -1263,6 +1263,96 @@ def test_fallback_analysis_labels_openai_errors_and_caps_confidence():
     assert analysis["publication_allowed"] is False
 
 
+def test_ai_analysis_adds_signal_derived_invalidation_when_model_omits_it():
+    stock = {"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology"}
+    signal = phase1_pipeline._signal(
+        "NVDA",
+        "technical_trend",
+        "positive",
+        35,
+        "Multi-day technical trend",
+        "NVDA has a confirmed multi-day trend.",
+        "derived_ohlcv",
+        {
+            "return_5d_percent": 6.2,
+            "close_vs_sma_20_percent": 4.1,
+            "recent_3_session_volume_ratio": 1.8,
+        },
+    )
+    score = {
+        "ticker": "NVDA",
+        "opportunity_score": 70,
+        "negative_score": 5,
+        "signals": [signal],
+    }
+
+    analysis = phase1_pipeline._normalize_ai_analysis(
+        stock,
+        score,
+        {
+            "recommendation": "BUY",
+            "risk_level": "MEDIUM",
+            "confidence_score": 77,
+            "catalyst": "Trend follow-through",
+            "expected_timeframe": "1-30 days",
+            "reasoning": "Trend evidence is constructive.",
+        },
+        date(2026, 6, 17),
+    )
+
+    assert analysis["invalidation_checks"]
+    assert "5-session return" in analysis["invalidation_checks"][0]
+    assert "20-session moving-average confirmation" in analysis["invalidation_criteria"]
+
+
+def test_analysis_prompt_includes_candidate_specific_invalidation_checks():
+    score = _candidate_score("NVDA", opportunity_score=90, negative_score=5)
+    score["signals"] = [
+        phase1_pipeline._signal(
+            "NVDA",
+            "options",
+            "positive",
+            15,
+            "Options open-interest context",
+            "NVDA nearest-expiration options skew is call-heavy.",
+            "yfinance",
+            {"put_call_open_interest_ratio": 0.4},
+        )
+    ]
+    stock = {"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology"}
+
+    prompt = phase1_pipeline._build_prompt(stock, score)
+
+    assert "BUY invalidation checks:" in prompt
+    assert "Options open-interest skew normalizes" in prompt
+    assert "generic wording" in prompt
+
+
+def test_review_prompt_requires_specific_invalidation_for_actionable_calls():
+    analysis = {
+        "recommendation": "BUY",
+        "risk_level": "MEDIUM",
+        "confidence_score": 82,
+        "opportunity_score": 90,
+        "negative_score": 5,
+        "catalyst": "Volume breakout",
+        "reasoning": "Evidence supports a near-term catalyst.",
+        "invalidation_criteria": "Breakout fails.",
+        "invalidation_checks": [
+            "volume confirmation fades toward normal levels",
+            "Reassess after the stated timeframe.",
+        ],
+        "signals": [],
+    }
+    stock = {"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology"}
+
+    prompt = phase1_pipeline._build_review_prompt(stock, analysis)
+
+    assert "Candidate-specific invalidation checks:" in prompt
+    assert "volume confirmation fades" in prompt
+    assert "reject if invalidation criteria are generic" in prompt
+
+
 def test_analyze_shortlist_falls_back_when_openai_client_init_fails():
     stock = {"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology"}
     score = _candidate_score("NVDA", opportunity_score=200, negative_score=0)

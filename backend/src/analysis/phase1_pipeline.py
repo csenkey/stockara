@@ -1060,6 +1060,7 @@ def _fallback_analysis(
         risk_level = "LOW"
 
     catalyst = _primary_signal(score["signals"])
+    invalidation_checks = _invalidation_checks(score["signals"], recommendation)
     confidence = min(
         FALLBACK_CONFIDENCE_CAP,
         max(25, 40 + max(score["opportunity_score"], score["negative_score"]) // 4),
@@ -1079,7 +1080,8 @@ def _fallback_analysis(
         "catalyst": catalyst["title"] if catalyst else "No dominant catalyst",
         "expected_timeframe": "1-30 days",
         "reasoning": catalyst["summary"] if catalyst else "Candidate scored from available Phase 1 signals.",
-        "invalidation_criteria": "Signal strength fades, news reverses, or price/volume confirmation fails.",
+        "invalidation_criteria": _default_invalidation_criteria(invalidation_checks),
+        "invalidation_checks": invalidation_checks,
         "opportunity_score": int(score["opportunity_score"]),
         "negative_score": int(score["negative_score"]),
         "signals": score["signals"],
@@ -1098,6 +1100,10 @@ def _normalize_ai_analysis(
         risk_level = "MEDIUM"
     confidence = int(parsed.get("confidence_score", 50))
     primary_signal = _primary_signal(score["signals"])
+    invalidation_checks = _invalidation_checks(score["signals"], recommendation)
+    invalidation_criteria = str(parsed.get("invalidation_criteria", "")).strip()[:500]
+    if not invalidation_criteria:
+        invalidation_criteria = _default_invalidation_criteria(invalidation_checks)
     return {
         "ticker": stock["ticker"],
         "analysis_date": run_date.isoformat(),
@@ -1115,7 +1121,8 @@ def _normalize_ai_analysis(
         ),
         "expected_timeframe": str(parsed.get("expected_timeframe", "1-30 days")),
         "reasoning": str(parsed.get("reasoning", ""))[:1000],
-        "invalidation_criteria": str(parsed.get("invalidation_criteria", ""))[:500],
+        "invalidation_criteria": invalidation_criteria,
+        "invalidation_checks": invalidation_checks,
         "opportunity_score": int(score["opportunity_score"]),
         "negative_score": int(score["negative_score"]),
         "signals": score["signals"],
@@ -1127,6 +1134,12 @@ def _build_prompt(stock: dict[str, Any], score: dict[str, Any]) -> str:
     signals = "\n".join(
         f"- {s['signal_type']} {s['direction']} score={s['score']}: {s['summary']}"
         for s in score["signals"][:12]
+    )
+    buy_checks = "\n".join(
+        f"- {check}" for check in _invalidation_checks(score["signals"], "BUY")
+    )
+    sell_checks = "\n".join(
+        f"- {check}" for check in _invalidation_checks(score["signals"], "SELL")
     )
     return f"""Analyze {stock['ticker']} ({stock['company_name']}, {stock['sector']}).
 
@@ -1140,6 +1153,17 @@ Use multi-day derived OHLCV context, sector/news/event evidence, and source
 details to decide whether the setup is durable. Treat isolated one-session
 price or volume moves as insufficient for BUY or SELL unless other evidence
 confirms direction and risk/reward.
+
+Use these candidate-specific invalidation checks when deciding whether a BUY or
+SELL thesis is publication-grade. If the recommendation is actionable, the
+invalidation_criteria must include at least one concrete signal failure, price
+level, event outcome, or time-boxed condition instead of generic wording.
+
+BUY invalidation checks:
+{buy_checks}
+
+SELL invalidation checks:
+{sell_checks}
 
 Return JSON with keys:
 recommendation: BUY, HOLD, or SELL
@@ -1256,6 +1280,9 @@ def _review_candidate_analysis(
 
 def _build_review_prompt(stock: dict[str, Any], analysis: dict[str, Any]) -> str:
     evidence = "\n".join(_evidence(analysis.get("signals", []))[:8])
+    invalidation_checks = "\n".join(
+        f"- {check}" for check in analysis.get("invalidation_checks", [])[:6]
+    )
     return f"""Review this Stockara recommendation for publication.
 
 Ticker: {stock['ticker']}
@@ -1273,10 +1300,14 @@ Invalidation criteria: {analysis['invalidation_criteria']}
 Evidence:
 {evidence}
 
+Candidate-specific invalidation checks:
+{invalidation_checks}
+
 Approve only if the recommendation is well-supported by the evidence, the risk
-is clearly stated, and the thesis is specific enough to be useful. Reject if the
-recommendation is too speculative, stale, contradicted, or insufficiently
-supported.
+is clearly stated, and the thesis is specific enough to be useful. For BUY or
+SELL recommendations, reject if invalidation criteria are generic, not tied to
+the evidence, missing a signal failure/price/event/time condition, too
+speculative, stale, contradicted, or insufficiently supported.
 
 Return JSON with keys:
 approved: boolean
@@ -2443,6 +2474,100 @@ def _evidence(signals: list[dict[str, Any]]) -> list[str]:
         if len(evidence) >= 5:
             break
     return evidence
+
+
+def _invalidation_checks(
+    signals: list[dict[str, Any]], recommendation: str
+) -> list[str]:
+    recommendation = recommendation.upper()
+    target_direction = "positive" if recommendation == "BUY" else "negative"
+    if recommendation not in {"BUY", "SELL"}:
+        target_direction = ""
+
+    checks: list[str] = []
+    evidence_signals = _scored_evidence_signals(signals) or signals
+    for signal in sorted(evidence_signals, key=lambda s: abs(s.get("score", 0)), reverse=True):
+        if target_direction and str(signal.get("direction", "")).lower() != target_direction:
+            continue
+        check = _signal_invalidation_check(signal, recommendation)
+        if check and check not in checks:
+            checks.append(check)
+        if len(checks) >= 5:
+            break
+
+    if not checks:
+        checks.append(
+            "Do not publish as actionable unless source-backed evidence identifies a concrete failure condition and review horizon."
+        )
+    checks.append(
+        "Reassess after the stated timeframe; stale evidence without follow-through invalidates the setup."
+    )
+    return checks[:6]
+
+
+def _signal_invalidation_check(signal: dict[str, Any], recommendation: str) -> str:
+    signal_type = str(signal.get("signal_type", "signal"))
+    direction = str(signal.get("direction", "neutral")).lower()
+    source = signal.get("source")
+    raw = source.get("raw") if isinstance(source, dict) else {}
+    raw = raw if isinstance(raw, dict) else {}
+    ticker = str(signal.get("ticker", "ticker"))
+    opposite_direction = "negative" if direction == "positive" else "positive"
+
+    if signal_type in {"technical_trend", "price_move", "volume_move", "volume_persistence"}:
+        pieces = []
+        if raw.get("return_5d_percent") is not None:
+            pieces.append(f"5-session return no longer supports a {direction} thesis")
+        if raw.get("close_vs_sma_20_percent") is not None:
+            pieces.append("close loses its 20-session moving-average confirmation")
+        if raw.get("volume_ratio") is not None or raw.get("recent_3_session_volume_ratio") is not None:
+            pieces.append("volume confirmation fades toward normal levels")
+        if raw.get("price_change_percent") is not None:
+            pieces.append("the one-session move reverses without multi-day follow-through")
+        return "; ".join(pieces) or (
+            f"{ticker} market action flips {opposite_direction} or loses multi-session confirmation."
+        )
+
+    if signal_type in {"sector_relative", "sector_context"}:
+        sector_etf = raw.get("sector_etf")
+        sector_note = f" versus {sector_etf}" if sector_etf else ""
+        return f"{ticker} relative performance{sector_note} stops confirming the {direction} setup."
+
+    if signal_type in {"news", "sec_filing", "earnings_release", "earnings_transcript"}:
+        return (
+            "Company-specific news or filing evidence is corrected, contradicted, "
+            "or fails to translate into measurable business/price follow-through."
+        )
+
+    if signal_type == "earnings":
+        event_date = raw.get("event_date")
+        event_note = f" around {event_date}" if event_date else ""
+        return f"Earnings expectations or post-event reaction{event_note} fail to confirm the thesis."
+
+    if signal_type == "dividend":
+        event_date = raw.get("ex_dividend_date")
+        event_note = f" around {event_date}" if event_date else ""
+        return f"Dividend timing/yield or historical ex-dividend reaction{event_note} no longer supports the setup."
+
+    if signal_type == "analyst":
+        return "Analyst recommendation mix deteriorates or loses meaningful coverage support."
+
+    if signal_type == "options":
+        return "Options open-interest skew normalizes or flips against the thesis."
+
+    if signal_type == "insider":
+        return "Insider transaction aggregate no longer shows clear net buying/selling in the thesis direction."
+
+    if signal_type == "fundamental_context":
+        return "Growth, margin, leverage, cash-flow, or valuation fields no longer support the directional thesis."
+
+    return f"{ticker} {signal_type.replace('_', ' ')} evidence no longer supports a {recommendation} thesis."
+
+
+def _default_invalidation_criteria(checks: list[str]) -> str:
+    first = checks[0] if checks else "Source-backed evidence stops supporting the thesis."
+    second = checks[1] if len(checks) > 1 else "Reassess after the stated timeframe."
+    return f"{first} {second}"[:500]
 
 
 def _is_scored_evidence_signal(signal: dict[str, Any]) -> bool:
