@@ -28,21 +28,24 @@ Committed and deployed:
 - `dafd899 Require event evidence before event scoring`
   - Earnings/dividend event scoring now requires sufficient historical reaction evidence or explicit catalyst news before affecting ranking.
   - Deploy run `28751856811` finished green with API and static smoke tests.
+- `270f64d Require directional provider evidence before scoring`
+  - Options, analyst, insider, and institutional live provider enrichment no longer scores mere data availability.
+  - Deploy run `28752068928` finished green with API and static smoke tests.
 
 Current uncommitted work in progress:
 
-- P1/7 live provider signal quality for options, analyst, insider, and institutional signals.
+- P1/7 fundamental/valuation signal quality.
 - Files modified:
   - `backend/src/analysis/phase1_pipeline.py`
   - `backend/tests/test_phase1_pipeline.py`
   - `docs/PHASE1_MUST_HAVE_BACKLOG.md`
   - `docs/NEXT_SESSION_HANDOFF.md`
 - Behavior implemented locally:
-  - Options enrichment reads nearest-expiration open interest and scores only liquid, clearly call-heavy or put-heavy skew; thin/unclear options data is neutral context.
-  - Analyst enrichment scores only meaningful recommendation consensus with at least 5 analysts; thin or mixed coverage is neutral context.
-  - Insider enrichment aggregates recent buy/sell transaction shares and scores only clear net buying/selling; unclear rows are neutral context.
-  - Institutional holder data is retained as neutral context unless future ownership-change evidence is available.
-  - Added focused tests for the new provider-signal boundaries.
+  - Fundamental enrichment reads yfinance info under the live-provider enrichment gate.
+  - It scores positive only for coherent growth, profitability, manageable leverage, and optionally moderate forward PE.
+  - It scores negative only for stretched valuation without growth/margin support, or weak profitability/growth/stressed leverage.
+  - Limited or ambiguous fundamentals become neutral context with `context_only=true`.
+  - Added focused tests for quality-at-moderate-valuation, stretched valuation, and ambiguous context-only cases.
 
 ## Verification Already Run For Current Uncommitted Work
 
@@ -53,7 +56,7 @@ Current uncommitted work in progress:
 Result:
 
 ```text
-57 passed
+60 passed
 ```
 
 ```bash
@@ -73,7 +76,7 @@ All checks passed!
 Result:
 
 ```text
-317 passed
+320 passed
 ```
 
 ## Immediate Next Steps
@@ -89,7 +92,7 @@ Result:
 
    ```bash
    git add backend/src/analysis/phase1_pipeline.py backend/tests/test_phase1_pipeline.py docs/PHASE1_MUST_HAVE_BACKLOG.md docs/NEXT_SESSION_HANDOFF.md
-   git commit -m "Require directional provider evidence before scoring"
+   git commit -m "Add directional fundamental signal enrichment"
    git push
    gh run list --branch main --limit 5
    gh run watch <run-id> --exit-status
@@ -97,7 +100,6 @@ Result:
 
 3. After deploy is green, continue P1/7 in this preferred order:
 
-   - Valuation/fundamental context where provider data exists.
    - Invalidation criteria enrichment in prompts/reviewer artifacts.
 
 4. Then return to P1/8 ticker classification:

@@ -797,6 +797,65 @@ def test_institutional_signal_is_context_without_change_evidence():
     assert signals[0]["source"]["raw"]["context_only"] is True
 
 
+def test_fundamental_signal_scores_quality_at_moderate_valuation():
+    ticker = SimpleNamespace(
+        get_info=lambda: {
+            "revenueGrowth": 0.14,
+            "profitMargins": 0.18,
+            "debtToEquity": 45,
+            "freeCashflow": 2_000_000_000,
+            "forwardPE": 16,
+            "marketCap": 100_000_000_000,
+        }
+    )
+
+    with patch("src.analysis.phase1_pipeline.yf.Ticker", return_value=ticker):
+        signals = phase1_pipeline._fundamental_signals("ACME")
+
+    assert signals[0]["direction"] == "positive"
+    assert signals[0]["score"] == 22
+    assert "context_only" not in signals[0]["source"]["raw"]
+
+
+def test_fundamental_signal_flags_stretched_valuation_without_support():
+    ticker = SimpleNamespace(
+        get_info=lambda: {
+            "revenueGrowth": 0.02,
+            "profitMargins": 0.03,
+            "debtToEquity": 80,
+            "freeCashflow": 100_000,
+            "forwardPE": 95,
+            "marketCap": 2_000_000_000,
+        }
+    )
+
+    with patch("src.analysis.phase1_pipeline.yf.Ticker", return_value=ticker):
+        signals = phase1_pipeline._fundamental_signals("RICH")
+
+    assert signals[0]["direction"] == "negative"
+    assert signals[0]["score"] == -18
+    assert "context_only" not in signals[0]["source"]["raw"]
+
+
+def test_fundamental_signal_keeps_ambiguous_fields_as_context():
+    ticker = SimpleNamespace(
+        get_info=lambda: {
+            "revenueGrowth": 0.03,
+            "profitMargins": 0.07,
+            "debtToEquity": 90,
+            "forwardPE": 28,
+            "marketCap": 4_000_000_000,
+        }
+    )
+
+    with patch("src.analysis.phase1_pipeline.yf.Ticker", return_value=ticker):
+        signals = phase1_pipeline._fundamental_signals("MIXD")
+
+    assert signals[0]["direction"] == "neutral"
+    assert signals[0]["score"] == 0
+    assert signals[0]["source"]["raw"]["context_only"] is True
+
+
 def test_price_volume_signals_add_multi_day_market_context():
     run_date = date(2026, 6, 17)
     rows = _market_context_rows(

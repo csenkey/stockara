@@ -579,6 +579,7 @@ def score_candidates(stocks: list[dict[str, Any]], run_date: date) -> list[dict[
             signals.extend(_analyst_signals(ticker))
             signals.extend(_insider_signals(ticker))
             signals.extend(_institutional_signals(ticker))
+            signals.extend(_fundamental_signals(ticker))
             signals.extend(_sector_relative_signals(stock, run_date))
 
         scored_signals = _scored_evidence_signals(signals)
@@ -2092,6 +2093,146 @@ def _institutional_signals(ticker: str) -> list[dict[str, Any]]:
     return []
 
 
+def _fundamental_signals(ticker: str) -> list[dict[str, Any]]:
+    try:
+        yf_ticker = yf.Ticker(ticker)
+        info_getter = getattr(yf_ticker, "get_info", None)
+        info = info_getter() if callable(info_getter) else getattr(yf_ticker, "info", {})
+        if not isinstance(info, dict) or not info:
+            return []
+
+        revenue_growth = _numeric(info.get("revenueGrowth"), default=None)
+        profit_margin = _numeric(info.get("profitMargins"), default=None)
+        debt_to_equity = _numeric(info.get("debtToEquity"), default=None)
+        free_cashflow = _numeric(info.get("freeCashflow"), default=None)
+        forward_pe = _numeric(info.get("forwardPE"), default=None)
+        trailing_pe = _numeric(info.get("trailingPE"), default=None)
+        raw = {
+            "revenue_growth": revenue_growth,
+            "profit_margin": profit_margin,
+            "debt_to_equity": debt_to_equity,
+            "free_cashflow": free_cashflow,
+            "forward_pe": forward_pe,
+            "trailing_pe": trailing_pe,
+            "market_cap": _numeric(info.get("marketCap"), default=None),
+        }
+        known_values = [value for value in raw.values() if value is not None]
+        if len(known_values) < 3:
+            raw["context_only"] = True
+            return [
+                _signal(
+                    ticker,
+                    "fundamental_context",
+                    "neutral",
+                    0,
+                    "Limited fundamental context",
+                    f"{ticker} has limited fundamental fields available from yfinance.",
+                    "yfinance",
+                    raw,
+                )
+            ]
+
+        positive_quality = (
+            revenue_growth is not None
+            and revenue_growth >= 0.08
+            and profit_margin is not None
+            and profit_margin >= 0.08
+            and (debt_to_equity is None or debt_to_equity <= 150)
+            and (free_cashflow is None or free_cashflow > 0)
+        )
+        negative_quality = (
+            profit_margin is not None
+            and profit_margin < 0
+            and revenue_growth is not None
+            and revenue_growth <= -0.05
+        ) or (
+            debt_to_equity is not None
+            and debt_to_equity >= 300
+            and (free_cashflow is None or free_cashflow < 0)
+        )
+        inexpensive_quality = (
+            positive_quality
+            and forward_pe is not None
+            and 0 < forward_pe <= 18
+        )
+        expensive_weakness = (
+            forward_pe is not None
+            and forward_pe >= 80
+            and (revenue_growth is None or revenue_growth < 0.08)
+            and (profit_margin is None or profit_margin < 0.08)
+        )
+
+        if inexpensive_quality:
+            return [
+                _signal(
+                    ticker,
+                    "fundamental_context",
+                    "positive",
+                    22,
+                    "Quality fundamentals at moderate valuation",
+                    f"{ticker} combines growth, profitability, manageable leverage, and a moderate forward multiple.",
+                    "yfinance",
+                    raw,
+                )
+            ]
+        if positive_quality:
+            return [
+                _signal(
+                    ticker,
+                    "fundamental_context",
+                    "positive",
+                    16,
+                    "Quality fundamental profile",
+                    f"{ticker} shows positive growth, profitability, and manageable leverage.",
+                    "yfinance",
+                    raw,
+                )
+            ]
+        if expensive_weakness:
+            return [
+                _signal(
+                    ticker,
+                    "fundamental_context",
+                    "negative",
+                    -18,
+                    "Stretched valuation without fundamental support",
+                    f"{ticker} has a high forward multiple without matching growth or margin support.",
+                    "yfinance",
+                    raw,
+                )
+            ]
+        if negative_quality:
+            return [
+                _signal(
+                    ticker,
+                    "fundamental_context",
+                    "negative",
+                    -16,
+                    "Weak fundamental profile",
+                    f"{ticker} shows weak profitability/growth or stressed leverage.",
+                    "yfinance",
+                    raw,
+                )
+            ]
+
+        raw["context_only"] = True
+        return [
+            _signal(
+                ticker,
+                "fundamental_context",
+                "neutral",
+                0,
+                "Fundamental context",
+                f"{ticker} fundamental fields are available but do not form a clear directional signal.",
+                "yfinance",
+                raw,
+            )
+        ]
+    except Exception as exc:
+        logger.info("fundamental_signal_provider_unavailable", ticker=ticker, error=str(exc))
+    return []
+
+
 def _table_records(table: Any) -> list[dict[str, Any]]:
     if table is None:
         return []
@@ -2108,7 +2249,7 @@ def _table_records(table: Any) -> list[dict[str, Any]]:
     return []
 
 
-def _numeric(value: Any, default: float = 0.0) -> float:
+def _numeric(value: Any, default: float | None = 0.0) -> float | None:
     if value in (None, ""):
         return default
     try:
