@@ -911,6 +911,39 @@ def test_earnings_signal_uses_upcoming_event_history_and_news():
     assert earnings[0]["source"]["raw"]["historical_event_count"] == 1
 
 
+def test_earnings_signal_requires_history_or_news_catalyst_to_score():
+    with patch("src.analysis.phase1_pipeline.store") as mock_store:
+        mock_store.earnings_events_for_ticker.side_effect = [
+            [
+                {
+                    "ticker": "NVDA",
+                    "event_date": "2026-07-20",
+                    "eps_estimate": Decimal("2.15"),
+                    "is_upcoming": True,
+                }
+            ],
+            [
+                {
+                    "ticker": "NVDA",
+                    "event_date": "2026-04-20",
+                    "surprise_percent": Decimal("5.0"),
+                    "post_earnings_price_move_percent": Decimal("8.0"),
+                    "is_upcoming": False,
+                }
+            ],
+        ]
+        mock_store.news_for_ticker.return_value = []
+
+        signals = _event_signals("NVDA", date(2026, 6, 17))
+
+    earnings = [signal for signal in signals if signal["signal_type"] == "earnings"]
+    assert earnings[0]["direction"] == "neutral"
+    assert earnings[0]["score"] == 0
+    prediction = earnings[0]["source"]["raw"]["prediction"]
+    assert prediction["context_only"] is True
+    assert prediction["reaction_history_sufficient"] is False
+
+
 def test_dividend_signal_uses_upcoming_event_and_history():
     with patch("src.analysis.phase1_pipeline.store") as mock_store:
         mock_store.dividend_events_for_ticker.side_effect = [
@@ -939,6 +972,52 @@ def test_dividend_signal_uses_upcoming_event_and_history():
     assert signals[0]["signal_type"] == "dividend"
     assert "goes ex-dividend" in signals[0]["summary"]
     assert signals[0]["source"]["raw"]["historical_event_count"] == 1
+    assert signals[0]["direction"] == "neutral"
+    assert signals[0]["score"] == 0
+    assert signals[0]["source"]["raw"]["prediction"]["context_only"] is True
+
+
+def test_dividend_signal_scores_only_with_sufficient_reaction_history():
+    with patch("src.analysis.phase1_pipeline.store") as mock_store:
+        mock_store.dividend_events_for_ticker.side_effect = [
+            [
+                {
+                    "ticker": "AAPL",
+                    "ex_dividend_date": "2026-08-15",
+                    "dividend_amount": Decimal("0.30"),
+                    "dividend_yield": Decimal("1.50"),
+                    "is_upcoming": True,
+                }
+            ],
+            [
+                {
+                    "ticker": "AAPL",
+                    "ex_dividend_date": "2026-05-15",
+                    "post_ex_dividend_price_move_percent": Decimal("1.0"),
+                    "is_upcoming": False,
+                },
+                {
+                    "ticker": "AAPL",
+                    "ex_dividend_date": "2026-02-15",
+                    "post_ex_dividend_price_move_percent": Decimal("1.2"),
+                    "is_upcoming": False,
+                },
+                {
+                    "ticker": "AAPL",
+                    "ex_dividend_date": "2025-11-15",
+                    "post_ex_dividend_price_move_percent": Decimal("0.8"),
+                    "is_upcoming": False,
+                },
+            ],
+        ]
+
+        signals = _dividend_signals("AAPL", date(2026, 6, 17))
+
+    assert signals[0]["direction"] == "positive"
+    assert signals[0]["score"] > 0
+    prediction = signals[0]["source"]["raw"]["prediction"]
+    assert prediction["context_only"] is False
+    assert prediction["reaction_history_sufficient"] is True
 
 
 def test_upcoming_earnings_summary_returns_jsonable_events():

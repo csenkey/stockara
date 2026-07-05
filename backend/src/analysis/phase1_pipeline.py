@@ -1688,7 +1688,12 @@ def _dividend_prediction(
     avg_move = sum(moves) / len(moves) if moves else 0.0
     avg_abs_move = sum(abs(move) for move in moves) / len(moves) if moves else 0.0
     dividend_yield = float(next_event.get("dividend_yield") or 0)
-    score = int(max(-40, min(40, avg_move * 5 + min(dividend_yield, 8) * 2)))
+    has_reaction_history = len(moves) >= 3
+    score = (
+        int(max(-40, min(40, avg_move * 5 + min(dividend_yield, 8) * 2)))
+        if has_reaction_history
+        else 0
+    )
     direction = "positive" if score > 6 else "negative" if score < -6 else "neutral"
     amount = next_event.get("dividend_amount")
     amount_text = f" Dividend amount is {amount}." if amount is not None else ""
@@ -1707,6 +1712,8 @@ def _dividend_prediction(
         "average_post_ex_dividend_move_percent": round(avg_move, 2),
         "average_abs_post_ex_dividend_move_percent": round(avg_abs_move, 2),
         "dividend_yield": round(dividend_yield, 2),
+        "reaction_history_sufficient": has_reaction_history,
+        "context_only": not has_reaction_history,
     }
 
 
@@ -1734,12 +1741,26 @@ def _earnings_prediction(
     )
     positive_hits = sum(1 for keyword in POSITIVE_KEYWORDS if keyword in news_text)
     negative_hits = sum(1 for keyword in NEGATIVE_KEYWORDS if keyword in news_text)
-    score = int(max(-60, min(60, avg_move * 6 + avg_surprise * 0.25)))
+    has_reaction_history = len(moves) >= 3
+    has_surprise_history = len(surprises) >= 3
+    has_news_catalyst = positive_hits > 0 or negative_hits > 0
+    score = int(
+        max(
+            -60,
+            min(
+                60,
+                (avg_move * 6 if has_reaction_history else 0)
+                + (avg_surprise * 0.25 if has_surprise_history else 0),
+            ),
+        )
+    )
     if positive_hits > negative_hits:
         score += min(20, positive_hits * 5)
     elif negative_hits > positive_hits:
         score -= min(25, negative_hits * 7)
     score = int(max(-75, min(75, score)))
+    if not (has_reaction_history or has_news_catalyst):
+        score = 0
     direction = "positive" if score > 8 else "negative" if score < -8 else "neutral"
     if moves:
         history = (
@@ -1765,6 +1786,10 @@ def _earnings_prediction(
         "average_surprise_percent": round(avg_surprise, 2),
         "positive_news_hits": positive_hits,
         "negative_news_hits": negative_hits,
+        "reaction_history_sufficient": has_reaction_history,
+        "surprise_history_sufficient": has_surprise_history,
+        "news_catalyst_present": has_news_catalyst,
+        "context_only": not (has_reaction_history or has_news_catalyst),
     }
 
 

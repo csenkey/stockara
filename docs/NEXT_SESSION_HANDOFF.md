@@ -26,18 +26,18 @@ Committed and deployed:
 
 Current uncommitted work in progress:
 
-- P1/7 sector-relative signal quality.
+- P1/7 event-signal quality after sector-relative scoring was committed.
 - Files modified:
   - `backend/src/analysis/phase1_pipeline.py`
   - `backend/tests/test_phase1_pipeline.py`
   - `docs/PHASE1_MUST_HAVE_BACKLOG.md`
 - Behavior implemented locally:
-  - `_sector_relative_signals` now uses 5-session and 20-session relative returns versus the mapped sector ETF.
-  - It requires at least 21 rows of stock and ETF close history.
-  - It ignores small/noisy weighted relative moves under 3%.
-  - It publishes raw metrics: stock/sector 5d and 20d returns, relative spreads, weighted spread, row counts, and sector ETF.
-  - It scores positive/negative relative strength with clamp to +/-45.
-  - Added tests for outperformance, underperformance, noise suppression, and insufficient history.
+  - Earnings predictions now score historical reaction/surprise only when at least 3 prior reaction/surprise rows exist.
+  - Earnings can still score from explicit positive/negative recent news catalyst keywords.
+  - Earnings with thin history and no catalyst news becomes neutral context with `context_only=true` inside prediction metadata.
+  - Dividend predictions now require at least 3 historical ex-dividend reaction rows before dividend yield/history affects ranking.
+  - Dividends with thin reaction history become neutral context with `context_only=true`.
+  - Added focused tests for thin earnings history, thin dividend history, and sufficient dividend reaction history.
 
 ## Verification Already Run For Current Uncommitted Work
 
@@ -48,7 +48,7 @@ Current uncommitted work in progress:
 Result:
 
 ```text
-49 passed
+51 passed
 ```
 
 ```bash
@@ -68,7 +68,7 @@ All checks passed!
 Result:
 
 ```text
-309 passed
+311 passed
 ```
 
 ## Immediate Next Steps
@@ -84,7 +84,7 @@ Result:
 
    ```bash
    git add backend/src/analysis/phase1_pipeline.py backend/tests/test_phase1_pipeline.py docs/PHASE1_MUST_HAVE_BACKLOG.md docs/NEXT_SESSION_HANDOFF.md
-   git commit -m "Improve sector-relative signal scoring"
+   git commit -m "Require event evidence before event scoring"
    git push
    gh run list --branch main --limit 5
    gh run watch <run-id> --exit-status
@@ -92,7 +92,6 @@ Result:
 
 3. After deploy is green, continue P1/7 in this preferred order:
 
-   - Event signal quality: earnings/dividend scoring should distinguish expected impact, historical reaction, estimate/surprise context, and uncertainty.
    - Analyst/options/insider/institutional signal quality: avoid scoring mere data availability; score only directionally meaningful provider-backed activity.
    - Valuation/fundamental context where provider data exists.
    - Invalidation criteria enrichment in prompts/reviewer artifacts.
