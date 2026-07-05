@@ -10,7 +10,7 @@ The items below are must-have gaps to close before treating Phase 1 recommendati
 
 ### 1. Reliable Seed Stock Metadata
 
-**Status:** Open. Verified 2026-06-17: `data/watchlist_seed.csv` still has 100 rows with required metadata gaps.
+**Status:** Open. Verified 2026-07-05: `data/watchlist_seed.csv` still has 100 rows with required metadata gaps. The seed handler now rejects missing required static metadata on first seed, existing metadata can be synced without clobbering live collection fields, and the enrichment tool supports gap-only runs that preserve already complete rows. A 2026-07-05 Nasdaq gap-only enrichment did not reduce the 100 gaps; 97 gap tickers were absent from cached Nasdaq screener/profile data and need alternate-provider research, canonical ticker correction, inactive/delisted review, or removal from the active decision-grade universe.
 
 **Gap:** The seed watchlist does not include sector metadata. `seed_watchlist_handler.py` uses a small `SECTOR_MAP` and defaults all unknown tickers to `Technology`.
 
@@ -224,7 +224,7 @@ The items below are must-have gaps to close before treating Phase 1 recommendati
 
 ### 10. Health Endpoint Should Evaluate Freshness
 
-**Status:** Open.
+**Status:** Done.
 
 **Gap:** `/api/health` reports `ok` when the database is reachable, even if data collection, analysis, or publication is stale.
 
@@ -235,6 +235,8 @@ The items below are must-have gaps to close before treating Phase 1 recommendati
 - Health status degrades when stock collection, news collection, analysis, or publication freshness violates SLA.
 - Health response includes enough freshness details to diagnose stale components.
 - Tests cover stale and fresh component states.
+
+**Implemented policy:** `/api/health` reports per-component freshness for stock, news, earnings, dividend, analysis, and publication. Overall health degrades when a required component is missing, stale, or has an unparseable status timestamp while preserving the existing timestamp and summary fields for compatibility.
 
 **References:**
 

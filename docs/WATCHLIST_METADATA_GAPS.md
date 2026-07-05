@@ -2,11 +2,13 @@
 
 Rows listed here still need manual or alternate-provider metadata before they should be treated as decision-grade Phase 1 inputs.
 
-- Verified against `data/watchlist_seed.csv` on 2026-06-17.
+- Verified against `data/watchlist_seed.csv` on 2026-07-05.
 - Total seed rows: 1003
 - Rows with required metadata gaps: 100
 - Duplicate tickers: 0
 - Rows with invalid `company_size`: 0
+- Nasdaq gap-only enrichment was attempted on 2026-07-05 with `backend/src/scripts/enrich_watchlist_metadata.py --only-gaps`; it did not reduce the 100 required-field gaps.
+- Cached Nasdaq coverage classification: 1 gap ticker present in screener (`GEF`), 3 gap tickers with partial company profiles (`BRK.B`, `BF.B`, `GEF`), and 97 gap tickers absent from cached screener/profile data. These 97 likely need alternate-provider research, canonical ticker correction, inactive/delisted review, or removal from the active decision-grade universe.
 
 | Ticker | Missing required fields |
 | --- | --- |

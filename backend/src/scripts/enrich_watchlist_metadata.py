@@ -67,6 +67,15 @@ FIELDNAMES = [
     "market_cap",
 ]
 
+REQUIRED_GAP_FIELDS = (
+    "company_name",
+    "sector",
+    "industry",
+    "metadata_source",
+    "metadata_source_url",
+    "metadata_as_of",
+)
+
 
 def _clean(value: Any) -> str:
     if value is None:
@@ -203,19 +212,16 @@ def enrich_row(
         "market_cap": _clean(screen.get("marketCap")),
     }
 
-    missing = [
-        field
-        for field in (
-            "company_name",
-            "sector",
-            "industry",
-            "metadata_source",
-            "metadata_source_url",
-            "metadata_as_of",
-        )
-        if not enriched[field]
-    ]
+    missing = required_metadata_gaps(enriched)
     return enriched, missing
+
+
+def required_metadata_gaps(row: dict[str, str]) -> list[str]:
+    return [field for field in REQUIRED_GAP_FIELDS if not (row.get(field) or "").strip()]
+
+
+def _preserve_fieldnames(row: dict[str, str]) -> dict[str, str]:
+    return {field: row.get(field, "") for field in FIELDNAMES}
 
 
 def main() -> int:
@@ -227,6 +233,14 @@ def main() -> int:
     parser.add_argument("--metadata-as-of", default=date.today().isoformat())
     parser.add_argument("--max-workers", type=int, default=12)
     parser.add_argument("--refresh", action="store_true")
+    parser.add_argument(
+        "--only-gaps",
+        action="store_true",
+        help=(
+            "Only enrich rows with required metadata gaps and preserve already "
+            "complete rows exactly as they are."
+        ),
+    )
     args = parser.parse_args()
 
     cache_dir = Path(args.cache_dir)
@@ -235,7 +249,8 @@ def main() -> int:
 
     input_path = Path(args.input)
     rows = list(csv.DictReader(input_path.open(newline="", encoding="utf-8")))
-    tickers = [row["ticker"].strip().upper() for row in rows]
+    rows_to_enrich = [row for row in rows if not args.only_gaps or required_metadata_gaps(row)]
+    tickers = [row["ticker"].strip().upper() for row in rows_to_enrich]
     profiles = load_profiles(
         tickers,
         cache_dir / "nasdaq_company_profiles.json",
@@ -246,7 +261,11 @@ def main() -> int:
     enriched_rows = []
     gaps: list[tuple[str, list[str]]] = []
     for row in rows:
-        enriched, missing = enrich_row(row, screener, profiles, args.metadata_as_of)
+        if args.only_gaps and not required_metadata_gaps(row):
+            enriched = _preserve_fieldnames(row)
+            missing = required_metadata_gaps(enriched)
+        else:
+            enriched, missing = enrich_row(row, screener, profiles, args.metadata_as_of)
         enriched_rows.append(enriched)
         if missing:
             gaps.append((enriched["ticker"], missing))
