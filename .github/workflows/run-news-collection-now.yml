@@ -107,14 +107,20 @@ jobs:
               print(f"News collector failed with statusCode={payload.get('statusCode')}")
               sys.exit(1)
           body = payload.get("body", {})
-          if body.get("status") != "success":
+          status = str(body.get("status", "")).lower()
+          sources_available = int(body.get("sources_available", 0) or 0)
+          if status in {"error", "failed"} or sources_available == 0:
               print(f"News collector failed: {body}")
               sys.exit(1)
+          if status != "success":
+              failed_sources = ", ".join(body.get("failed_sources") or [])
+              suffix = f": {failed_sources}" if failed_sources else ""
+              print(f"::warning::News collector completed with status={status}{suffix}")
           print(
               "News summary: "
-              f"status={body.get('status')} "
+              f"status={status} "
               f"articles_processed={body.get('articles_processed')} "
-              f"sources_available={body.get('sources_available')} "
+              f"sources_available={sources_available} "
               f"total_fetched={body.get('total_fetched')}"
           )
           PY
