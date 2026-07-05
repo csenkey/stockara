@@ -31,23 +31,16 @@ Committed and deployed:
 - `270f64d Require directional provider evidence before scoring`
   - Options, analyst, insider, and institutional live provider enrichment no longer scores mere data availability.
   - Deploy run `28752068928` finished green with API and static smoke tests.
+- `b1a89b4 Add directional fundamental signal enrichment`
+  - Fundamental/valuation live provider enrichment scores only coherent provider-backed quality, weakness, or valuation extremes.
+  - Deploy run `28752247513` finished green with API and static smoke tests.
 
-Current uncommitted work in progress:
+Current local state:
 
-- P1/7 fundamental/valuation signal quality.
-- Files modified:
-  - `backend/src/analysis/phase1_pipeline.py`
-  - `backend/tests/test_phase1_pipeline.py`
-  - `docs/PHASE1_MUST_HAVE_BACKLOG.md`
-  - `docs/NEXT_SESSION_HANDOFF.md`
-- Behavior implemented locally:
-  - Fundamental enrichment reads yfinance info under the live-provider enrichment gate.
-  - It scores positive only for coherent growth, profitability, manageable leverage, and optionally moderate forward PE.
-  - It scores negative only for stretched valuation without growth/margin support, or weak profitability/growth/stressed leverage.
-  - Limited or ambiguous fundamentals become neutral context with `context_only=true`.
-  - Added focused tests for quality-at-moderate-valuation, stretched valuation, and ambiguous context-only cases.
+- No implementation changes are intentionally left uncommitted after the handoff-doc refresh.
+- The recurring non-blocking CI annotation remains: `latest news collection did not reach all configured sources`.
 
-## Verification Already Run For Current Uncommitted Work
+## Verification Run For Latest Implementation Commit
 
 ```bash
 /private/tmp/stockara-debug-venv/bin/python -m pytest backend/tests/test_phase1_pipeline.py -q
@@ -81,28 +74,11 @@ Result:
 
 ## Immediate Next Steps
 
-1. Review the current diff:
-
-   ```bash
-   git diff --stat
-   git diff -- backend/src/analysis/phase1_pipeline.py backend/tests/test_phase1_pipeline.py docs/PHASE1_MUST_HAVE_BACKLOG.md
-   ```
-
-2. If satisfied, commit:
-
-   ```bash
-   git add backend/src/analysis/phase1_pipeline.py backend/tests/test_phase1_pipeline.py docs/PHASE1_MUST_HAVE_BACKLOG.md docs/NEXT_SESSION_HANDOFF.md
-   git commit -m "Add directional fundamental signal enrichment"
-   git push
-   gh run list --branch main --limit 5
-   gh run watch <run-id> --exit-status
-   ```
-
-3. After deploy is green, continue P1/7 in this preferred order:
+1. Continue P1/7 in this preferred order:
 
    - Invalidation criteria enrichment in prompts/reviewer artifacts.
 
-4. Then return to P1/8 ticker classification:
+2. Then return to P1/8 ticker classification:
 
    - Word-boundary ticker extraction.
    - Active-watchlist ticker universe.
