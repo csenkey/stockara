@@ -1,5 +1,7 @@
 """Tests for the MonitoringStack CDK stack."""
 
+import json
+
 import aws_cdk as cdk
 import aws_cdk.assertions as assertions
 
@@ -101,3 +103,112 @@ def test_publication_artifact_alarms_are_created():
                 "TreatMissingData": "breaching",
             },
         )
+
+
+def test_product_quality_alarms_are_created():
+    app = cdk.App()
+    stack = MonitoringStack(
+        app, "TestProductQualityMonitoring", deployment_stage="codex-test"
+    )
+    template = assertions.Template.from_stack(stack)
+
+    expected_alarms = [
+        (
+            "StockaraPhase1",
+            "top_picks_published",
+            "Sum",
+            "LessThanThreshold",
+            1,
+            "breaching",
+        ),
+        (
+            "StockaraPhase1",
+            "ai_candidates_analyzed",
+            "Sum",
+            "LessThanThreshold",
+            1,
+            "breaching",
+        ),
+        (
+            "StockaraPhase1",
+            "publication_suppressed",
+            "Sum",
+            "GreaterThanOrEqualToThreshold",
+            1,
+            "notBreaching",
+        ),
+        (
+            "StockaraPhase1",
+            "fallback_analyses",
+            "Sum",
+            "GreaterThanOrEqualToThreshold",
+            1,
+            "notBreaching",
+        ),
+        (
+            "StockMonitoring",
+            "news_sources_failed",
+            "Sum",
+            "GreaterThanOrEqualToThreshold",
+            1,
+            "notBreaching",
+        ),
+        (
+            "StockMonitoring",
+            "stock_collection_failed_tickers",
+            "Sum",
+            "GreaterThanOrEqualToThreshold",
+            25,
+            "notBreaching",
+        ),
+        (
+            "StockMonitoring",
+            "stock_price_gaps_detected",
+            "Sum",
+            "GreaterThanOrEqualToThreshold",
+            1,
+            "notBreaching",
+        ),
+    ]
+
+    for (
+        namespace,
+        metric_name,
+        statistic,
+        comparison_operator,
+        threshold,
+        treat_missing_data,
+    ) in expected_alarms:
+        template.has_resource_properties(
+            "AWS::CloudWatch::Alarm",
+            {
+                "Namespace": namespace,
+                "MetricName": metric_name,
+                "Statistic": statistic,
+                "ComparisonOperator": comparison_operator,
+                "Threshold": threshold,
+                "TreatMissingData": treat_missing_data,
+            },
+        )
+
+
+def test_product_quality_dashboard_widgets_are_created():
+    app = cdk.App()
+    stack = MonitoringStack(
+        app, "TestProductQualityDashboard", deployment_stage="codex-test"
+    )
+    template = assertions.Template.from_stack(stack)
+    resources = template.to_json()["Resources"]
+    dashboard = next(
+        resource
+        for resource in resources.values()
+        if resource["Type"] == "AWS::CloudWatch::Dashboard"
+    )
+    dashboard_body = json.dumps(dashboard["Properties"]["DashboardBody"])
+
+    for widget_title in [
+        "Publication freshness and suppression",
+        "Fallback and review gate usage",
+        "Backfill and gap health",
+    ]:
+        assert widget_title in dashboard_body

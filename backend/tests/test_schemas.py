@@ -64,9 +64,15 @@ def test_stock_accepts_static_business_metadata():
         website="https://www.apple.com",
         founded_year=1976,
         headquarters="Cupertino, California",
+        logo_url="https://cdn.example.com/logos/AAPL/logo.svg",
+        logo_icon_url="https://cdn.example.com/logos/AAPL/icon.png",
+        logo_source="polygon_ticker_details",
+        logo_source_url="https://api.polygon.io/v3/reference/tickers/AAPL",
+        logo_checked_at=datetime(2026, 7, 6, 8, 0, 0),
     )
     assert stock.industry == "Consumer Electronics"
     assert stock.flagship_products == ["iPhone", "Mac", "Services"]
+    assert stock.logo_icon_url == "https://cdn.example.com/logos/AAPL/icon.png"
 
 
 def test_stock_rejects_invalid_sector():

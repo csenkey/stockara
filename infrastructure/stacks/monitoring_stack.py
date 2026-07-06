@@ -85,7 +85,9 @@ class MonitoringStack(Stack):
                 ),
                 threshold=1,
                 evaluation_periods=1,
-                comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                comparison_operator=(
+                    cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD
+                ),
                 treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
             )
             alarm.add_alarm_action(cw_actions.SnsAction(self.alerts_topic))
@@ -291,6 +293,133 @@ class MonitoringStack(Stack):
             )
             alarm.add_alarm_action(cw_actions.SnsAction(self.alerts_topic))
 
+        product_quality_alarms = [
+            (
+                "ZeroTopPicksPublishedAlarm",
+                "stockara-zero-top-picks-published",
+                "zero-top-picks-published",
+                "top_picks_published",
+                "StockaraPhase1",
+                "Sum",
+                Duration.hours(26),
+                1,
+                cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+                cloudwatch.TreatMissingData.BREACHING,
+                "No top picks were published in the expected daily window",
+            ),
+            (
+                "LowAnalyzedCandidateCountAlarm",
+                "stockara-low-analyzed-candidate-count",
+                "low-analyzed-candidate-count",
+                "ai_candidates_analyzed",
+                "StockaraPhase1",
+                "Sum",
+                Duration.hours(26),
+                1,
+                cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+                cloudwatch.TreatMissingData.BREACHING,
+                "No AI candidate analyses completed in the expected daily window",
+            ),
+            (
+                "PublicationSuppressedAlarm",
+                "stockara-publication-suppressed",
+                "publication-suppressed",
+                "publication_suppressed",
+                "StockaraPhase1",
+                "Sum",
+                Duration.hours(26),
+                1,
+                cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                cloudwatch.TreatMissingData.NOT_BREACHING,
+                "Daily publication was suppressed",
+            ),
+            (
+                "FallbackAnalysisUsageAlarm",
+                "stockara-fallback-analysis-usage",
+                "fallback-analysis-usage",
+                "fallback_analyses",
+                "StockaraPhase1",
+                "Sum",
+                Duration.hours(26),
+                1,
+                cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                cloudwatch.TreatMissingData.NOT_BREACHING,
+                "One or more candidates used heuristic fallback analysis",
+            ),
+            (
+                "NewsProviderSourceOutageAlarm",
+                "stockara-news-provider-source-outage",
+                "news-provider-source-outage",
+                "news_sources_failed",
+                "StockMonitoring",
+                "Sum",
+                Duration.hours(1),
+                1,
+                cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                cloudwatch.TreatMissingData.NOT_BREACHING,
+                "One or more configured news providers failed",
+            ),
+            (
+                "ExcessiveTickerFailuresAlarm",
+                "stockara-excessive-ticker-failures",
+                "excessive-ticker-failures",
+                "stock_collection_failed_tickers",
+                "StockMonitoring",
+                "Sum",
+                Duration.hours(1),
+                25,
+                cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                cloudwatch.TreatMissingData.NOT_BREACHING,
+                "Stock collection failed for an excessive number of tickers",
+            ),
+            (
+                "StockPriceGapsDetectedAlarm",
+                "stockara-stock-price-gaps-detected",
+                "stock-price-gaps-detected",
+                "stock_price_gaps_detected",
+                "StockMonitoring",
+                "Sum",
+                Duration.hours(26),
+                1,
+                cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                cloudwatch.TreatMissingData.NOT_BREACHING,
+                "Recent OHLCV gaps were detected and need backfill follow-up",
+            ),
+        ]
+
+        for (
+            construct_id,
+            prod_alarm_name,
+            staged_alarm_name,
+            metric_name,
+            namespace,
+            statistic,
+            period,
+            threshold,
+            comparison_operator,
+            treat_missing_data,
+            description,
+        ) in product_quality_alarms:
+            alarm = cloudwatch.Alarm(
+                self,
+                construct_id,
+                alarm_name=resource_name(
+                    deployment_stage, prod_alarm_name, staged_alarm_name
+                ),
+                alarm_description=description,
+                metric=cloudwatch.Metric(
+                    namespace=namespace,
+                    metric_name=metric_name,
+                    statistic=statistic,
+                    period=period,
+                ),
+                threshold=threshold,
+                evaluation_periods=1,
+                comparison_operator=comparison_operator,
+                treat_missing_data=treat_missing_data,
+            )
+            alarm.add_alarm_action(cw_actions.SnsAction(self.alerts_topic))
+
         missing_metric_alarms = [
             (
                 "TopPicksMissingMetricAlarm",
@@ -483,6 +612,75 @@ class MonitoringStack(Stack):
                         namespace="StockaraPhase1",
                         metric_name="ai_candidates_analyzed",
                         statistic="Sum",
+                        period=Duration.hours(1),
+                    ),
+                ],
+            ),
+            cloudwatch.GraphWidget(
+                title="Publication freshness and suppression",
+                left=[
+                    cloudwatch.Metric(
+                        namespace="StockaraPhase1",
+                        metric_name="top_picks_published",
+                        statistic="SampleCount",
+                        period=Duration.hours(26),
+                    ),
+                    cloudwatch.Metric(
+                        namespace="StockaraPhase1",
+                        metric_name="publication_suppressed",
+                        statistic="Sum",
+                        period=Duration.hours(26),
+                    ),
+                    cloudwatch.Metric(
+                        namespace="StockaraPhase1",
+                        metric_name="artifact_publish_failures",
+                        statistic="Sum",
+                        period=Duration.hours(1),
+                    ),
+                ],
+            ),
+            cloudwatch.GraphWidget(
+                title="Fallback and review gate usage",
+                left=[
+                    cloudwatch.Metric(
+                        namespace="StockaraPhase1",
+                        metric_name="fallback_analyses",
+                        statistic="Sum",
+                        period=Duration.hours(26),
+                    ),
+                    cloudwatch.Metric(
+                        namespace="StockaraPhase1",
+                        metric_name="fallback_publication_suppressed",
+                        statistic="Sum",
+                        period=Duration.hours(26),
+                    ),
+                    cloudwatch.Metric(
+                        namespace="StockaraPhase1",
+                        metric_name="review_publication_suppressed",
+                        statistic="Sum",
+                        period=Duration.hours(26),
+                    ),
+                ],
+            ),
+            cloudwatch.GraphWidget(
+                title="Backfill and gap health",
+                left=[
+                    cloudwatch.Metric(
+                        namespace="StockMonitoring",
+                        metric_name="stock_price_gaps_detected",
+                        statistic="Sum",
+                        period=Duration.hours(26),
+                    ),
+                    cloudwatch.Metric(
+                        namespace="StockMonitoring",
+                        metric_name="stock_price_backfill_records_inserted",
+                        statistic="Sum",
+                        period=Duration.hours(26),
+                    ),
+                    cloudwatch.Metric(
+                        namespace="StockMonitoring",
+                        metric_name="collection_manifest_incomplete_tasks",
+                        statistic="Maximum",
                         period=Duration.hours(1),
                     ),
                 ],

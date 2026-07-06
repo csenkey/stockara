@@ -65,6 +65,11 @@ FIELDNAMES = [
     "headquarters",
     "ipo_year",
     "market_cap",
+    "logo_url",
+    "logo_icon_url",
+    "logo_source",
+    "logo_source_url",
+    "logo_checked_at",
 ]
 
 REQUIRED_GAP_FIELDS = (
@@ -210,6 +215,11 @@ def enrich_row(
         "headquarters": headquarters,
         "ipo_year": _clean(screen.get("ipoyear")),
         "market_cap": _clean(screen.get("marketCap")),
+        "logo_url": row.get("logo_url", ""),
+        "logo_icon_url": row.get("logo_icon_url", ""),
+        "logo_source": row.get("logo_source", ""),
+        "logo_source_url": row.get("logo_source_url", ""),
+        "logo_checked_at": row.get("logo_checked_at", ""),
     }
 
     missing = required_metadata_gaps(enriched)

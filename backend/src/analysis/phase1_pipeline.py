@@ -2699,7 +2699,7 @@ def _with_recommendation_context(
 
 
 def _stock_logo_url(stock: dict[str, Any]) -> str | None:
-    value = stock.get("logo_url") or stock.get("logo")
+    value = stock.get("logo_icon_url") or stock.get("logo_url") or stock.get("logo")
     return str(value).strip() if value else None
 
 
@@ -2726,6 +2726,11 @@ def _company_info(stock: dict[str, Any]) -> dict[str, Any]:
         "metadata_source": _metadata_text(stock.get("metadata_source")),
         "metadata_source_url": _metadata_text(stock.get("metadata_source_url")),
         "metadata_as_of": _metadata_text(stock.get("metadata_as_of")),
+        "logo_url": _metadata_text(stock.get("logo_url")),
+        "logo_icon_url": _metadata_text(stock.get("logo_icon_url")),
+        "logo_source": _metadata_text(stock.get("logo_source")),
+        "logo_source_url": _metadata_text(stock.get("logo_source_url")),
+        "logo_checked_at": _metadata_text(stock.get("logo_checked_at")),
     }
     history_parts = []
     if info.get("founded_year"):

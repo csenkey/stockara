@@ -38,6 +38,11 @@ def _complete_row(**overrides):
         "provider_symbols": "stooq:aapl.us|alpha_vantage:AAPL",
         "provider_symbol_sources": "stooq:manual|alpha_vantage:canonical",
         "provider_symbol_updated_at": "2026-06-20T00:00:00Z",
+        "logo_url": "https://cdn.example.com/logos/AAPL/logo.svg",
+        "logo_icon_url": "https://cdn.example.com/logos/AAPL/icon.png",
+        "logo_source": "polygon_ticker_details",
+        "logo_source_url": "https://api.polygon.io/v3/reference/tickers/AAPL",
+        "logo_checked_at": "2026-07-06T08:00:00Z",
     }
     row.update(overrides)
     return row
@@ -72,6 +77,8 @@ def test_build_stock_item_includes_static_metadata():
     }
     assert item["provider_symbol_sources"]["stooq"] == "manual"
     assert item["provider_symbol_updated_at"] == "2026-06-20T00:00:00Z"
+    assert item["logo_icon_url"] == "https://cdn.example.com/logos/AAPL/icon.png"
+    assert item["logo_source"] == "polygon_ticker_details"
     assert item["is_sell_alert_watch"] is True
 
 
@@ -104,7 +111,13 @@ def test_sync_static_metadata_updates_context_without_clobbering_live_fields(mon
     summary = sync_static_metadata(table, {"AAPL"})
 
     stored = table.items[("STOCK#AAPL", "META")]
-    assert summary == {"created": 0, "changed": 1, "unchanged": 0, "invalid": 0}
+    assert summary == {
+        "created": 0,
+        "missing": 0,
+        "changed": 1,
+        "unchanged": 0,
+        "invalid": 0,
+    }
     assert stored["business_description"] == (
         "Designs and sells consumer electronics and services."
     )
@@ -112,6 +125,32 @@ def test_sync_static_metadata_updates_context_without_clobbering_live_fields(mon
     assert stored["is_sell_alert_watch"] is True
     assert stored["latest_stock_data_date"] == "2026-06-18"
     assert stored["latest_close_price"] == "213.25"
+    assert stored["logo_url"] == "https://cdn.example.com/logos/AAPL/logo.svg"
+    assert table.items[("CONFIG#sell_alert_watchlist", "VALUE")]["values"] == ["AAPL"]
+
+
+def test_sync_static_metadata_does_not_clobber_logo_fields_when_csv_lacks_columns(
+    monkeypatch,
+):
+    existing = _build_stock_item(_complete_row(), set())
+    table = _FakeTable([existing])
+    row_without_logo_columns = {
+        key: value
+        for key, value in _complete_row(company_name="Apple Computer Inc.").items()
+        if not key.startswith("logo_")
+    }
+    monkeypatch.setattr(
+        "backend.src.scripts.seed_watchlist_handler._load_seed_rows",
+        lambda: [row_without_logo_columns],
+    )
+
+    summary = sync_static_metadata(table, set())
+
+    stored = table.items[("STOCK#AAPL", "META")]
+    assert summary["changed"] == 1
+    assert stored["company_name"] == "Apple Computer Inc."
+    assert stored["logo_url"] == "https://cdn.example.com/logos/AAPL/logo.svg"
+    assert stored["logo_icon_url"] == "https://cdn.example.com/logos/AAPL/icon.png"
 
 
 def test_sync_static_metadata_creates_missing_stock(monkeypatch):
@@ -123,7 +162,13 @@ def test_sync_static_metadata_creates_missing_stock(monkeypatch):
 
     summary = sync_static_metadata(table, {"AAPL"})
 
-    assert summary == {"created": 1, "changed": 0, "unchanged": 0, "invalid": 0}
+    assert summary == {
+        "created": 1,
+        "missing": 1,
+        "changed": 0,
+        "unchanged": 0,
+        "invalid": 0,
+    }
     assert table.items[("STOCK#AAPL", "META")]["company_name"] == "Apple Inc."
 
 
@@ -132,13 +177,22 @@ def test_sync_static_metadata_can_skip_invalid_rows(monkeypatch):
     table = _FakeTable([existing])
     monkeypatch.setattr(
         "backend.src.scripts.seed_watchlist_handler._load_seed_rows",
-        lambda: [_complete_row(sector="Consumer Discretionary"), _complete_row(ticker="BAD", sector="")],
+        lambda: [
+            _complete_row(sector="Consumer Discretionary"),
+            _complete_row(ticker="BAD", sector=""),
+        ],
     )
 
     summary = sync_static_metadata(table, {"AAPL"}, strict=False)
 
     stored = table.items[("STOCK#AAPL", "META")]
-    assert summary == {"created": 0, "changed": 1, "unchanged": 0, "invalid": 1}
+    assert summary == {
+        "created": 0,
+        "missing": 0,
+        "changed": 1,
+        "unchanged": 0,
+        "invalid": 1,
+    }
     assert stored["sector"] == "Consumer Discretionary"
 
 
@@ -169,6 +223,7 @@ def test_handler_syncs_existing_metadata_on_custom_resource_update(monkeypatch):
     stored = table.items[("STOCK#AAPL", "META")]
     assert result["Data"]["Skipped"] is True
     assert result["Data"]["MetadataChanged"] == 1
+    assert result["Data"]["MetadataMissing"] == 0
     assert stored["sector"] == "Consumer Discretionary"
 
 

@@ -274,6 +274,11 @@ def test_build_publication_payload_includes_company_info():
             "metadata_source": "nasdaq_company_profile",
             "metadata_source_url": "https://www.nasdaq.com/market-activity/stocks/nvda",
             "metadata_as_of": "2026-06-17",
+            "logo_url": "https://cdn.example.com/logos/NVDA/logo.svg",
+            "logo_icon_url": "https://cdn.example.com/logos/NVDA/icon.png",
+            "logo_source": "polygon_ticker_details",
+            "logo_source_url": "https://api.polygon.io/v3/reference/tickers/NVDA",
+            "logo_checked_at": "2026-07-06T08:00:00Z",
         }
     ]
     scores = [{"ticker": "NVDA", "opportunity_score": 80, "negative_score": 5, "signals": []}]
@@ -302,7 +307,9 @@ def test_build_publication_payload_includes_company_info():
     ):
         payload = build_publication_payload(analyses, scores, stocks, date(2026, 6, 17))
 
-    info = payload["top_picks"][0]["company_info"]
+    pick = payload["top_picks"][0]
+    info = pick["company_info"]
+    assert pick["logo_url"] == "https://cdn.example.com/logos/NVDA/icon.png"
     assert info["description"] == "NVIDIA designs accelerated computing platforms."
     assert info["top_products"] == ["Data center GPUs", "CUDA"]
     assert info["revenue_segments"] == ["Data Center", "Gaming"]
@@ -310,6 +317,9 @@ def test_build_publication_payload_includes_company_info():
         "Founded in 1993; headquartered in Santa Clara, California; IPO in 1999."
     )
     assert info["metadata_source"] == "nasdaq_company_profile"
+    assert info["logo_url"] == "https://cdn.example.com/logos/NVDA/logo.svg"
+    assert info["logo_icon_url"] == "https://cdn.example.com/logos/NVDA/icon.png"
+    assert info["logo_source"] == "polygon_ticker_details"
 
 
 def test_build_publication_payload_includes_partial_coverage_quality():
@@ -1830,6 +1840,58 @@ def test_run_phase1_pipeline_suppresses_publication_when_no_ticker_is_eligible()
     assert payload["publication_date"] == "2026-06-17"
     assert payload["top_picks"] == []
     score_candidates.assert_not_called()
+
+
+def test_publish_from_stored_state_suppresses_when_analysis_is_missing():
+    run_date = date(2026, 6, 17)
+    context = {
+        "eligible_stocks": [
+            _decision_grade_stock("NVDA", latest_stock_data_date="2026-06-17")
+        ],
+        "freshness": {
+            "coverage_status": "complete",
+            "active_ticker_count": 1,
+            "eligible_ticker_count": 1,
+            "excluded_ticker_count": 0,
+            "excluded_tickers": [],
+            "stock_freshness_max_age_days": 3,
+            "min_history_calendar_days": 30,
+            "min_history_rows": 20,
+            "last_news_collection": "2026-06-16T20:30:00+00:00",
+            "news_stale": False,
+            "warnings": [],
+        },
+    }
+    scores = [_candidate_score("NVDA", opportunity_score=90, negative_score=5)]
+
+    with (
+        patch.object(phase1_pipeline, "ARTIFACT_BUCKET", "artifact-bucket"),
+        patch(
+            "src.analysis.phase1_pipeline._with_collection_manifest_quality",
+            side_effect=lambda quality, run_date: quality,
+        ),
+        patch("src.analysis.phase1_pipeline.store.sell_alert_tickers", return_value=[]),
+        patch("src.analysis.phase1_pipeline.publish_payload") as publish_payload,
+        patch("src.analysis.phase1_pipeline._emit_metric") as emit_metric,
+    ):
+        result = phase1_pipeline._publish_from_stored_state(
+            run_date, context, scores, analyses=[]
+        )
+
+    assert result == {
+        "statusCode": 200,
+        "body": "Publication suppressed: no candidate analyses available",
+    }
+    emit_metric.assert_called_once_with("publication_suppressed", 1)
+    payload = publish_payload.call_args.args[0]
+    assert payload["publication_status"] == "suppressed"
+    assert payload["suppression_reason"] == "no_candidate_analyses"
+    assert payload["candidate_count"] == 1
+    assert payload["analyzed_count"] == 0
+    assert payload["top_picks"] == []
+    assert payload["data_warnings"] == [
+        "Publication suppressed: no candidate analyses available."
+    ]
 
 
 def test_collection_manifest_coverage_targets_do_not_suppress_publication():

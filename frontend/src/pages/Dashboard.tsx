@@ -84,6 +84,11 @@ interface CompanyInfo {
   metadata_source?: string;
   metadata_source_url?: string;
   metadata_as_of?: string;
+  logo_url?: string;
+  logo_icon_url?: string;
+  logo_source?: string;
+  logo_source_url?: string;
+  logo_checked_at?: string;
   brief_history?: string;
 }
 
@@ -993,6 +998,28 @@ function CompanyInfoPanel({
               )}
             </div>
           )}
+          {(info.logo_source || info.logo_checked_at) && (
+            <div>
+              <div className="text-xs uppercase text-slate-500">Logo</div>
+              {info.logo_source_url ? (
+                <a
+                  className={`mt-1 inline-block underline underline-offset-4 ${muted}`}
+                  href={info.logo_source_url}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {info.logo_source ?? "Source"}
+                </a>
+              ) : (
+                <div className={`mt-1 ${muted}`}>{info.logo_source}</div>
+              )}
+              {info.logo_checked_at && (
+                <div className={`mt-1 text-xs ${muted}`}>
+                  Checked {formatShortDate(info.logo_checked_at)}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </details>
@@ -1078,6 +1105,7 @@ function TickerLogo({
   logoUrl?: string | null;
   tone?: "slate" | "red";
 }) {
+  const [imageFailed, setImageFailed] = useState(false);
   const initials = companyName
     .split(/\s+/)
     .filter(Boolean)
@@ -1093,8 +1121,13 @@ function TickerLogo({
       className={`flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden border text-xs font-semibold ${base}`}
       aria-label={`${ticker} logo`}
     >
-      {logoUrl ? (
-        <img src={logoUrl} alt="" className="h-full w-full object-contain" />
+      {logoUrl && !imageFailed ? (
+        <img
+          src={logoUrl}
+          alt=""
+          className="h-full w-full object-contain"
+          onError={() => setImageFailed(true)}
+        />
       ) : (
         initials
       )}

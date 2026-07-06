@@ -201,7 +201,7 @@ The items below are must-have gaps to close before treating Phase 1 recommendati
 
 ### 9. Static Business Context Sync
 
-**Status:** Open.
+**Status:** Done.
 
 **Gap:** `data/watchlist_seed.csv` includes source-backed business context fields such as `business_description`, `flagship_products`, `revenue_segments`, `primary_customers`, `competitive_position`, and `key_static_risks`, and the seed handler can store them on first empty-table bootstrap. However, the deployed seed custom resource skips when stock metadata already exists, so new or corrected CSV context does not automatically update existing DynamoDB stock metadata.
 
@@ -215,6 +215,8 @@ The items below are must-have gaps to close before treating Phase 1 recommendati
 - Surface changed, unchanged, missing, and invalid metadata counts in logs/metrics.
 - Feed stored business context into candidate analysis prompts as neutral company context, not scored market evidence.
 - Tests prove static context is stored on first seed and updated when CSV values change.
+
+**Implemented policy:** The watchlist seed custom resource now syncs source-backed static metadata when stock metadata already exists, keyed by a hash of `data/watchlist_seed.csv` so CSV changes retrigger the custom resource on deploy. The sync updates static fields and sell-alert watch flags, creates missing stock metadata rows, refreshes the sell-alert config record, preserves live collection fields such as latest price/date markers, reports created/missing/changed/unchanged/invalid counts, and can be invoked manually through `scripts/seed_watchlist.py` or `mode=sync_static_metadata`. Phase 1 analysis already reads stored business context into neutral company context for recommendation cards/prompts rather than treating it as scored market evidence.
 
 **References:**
 
@@ -248,7 +250,7 @@ The items below are must-have gaps to close before treating Phase 1 recommendati
 
 ### 11. Product-Quality Alarms
 
-**Status:** Open.
+**Status:** Done.
 
 **Gap:** Monitoring alarms mainly catch Lambda errors, while many product failures return success with bad or incomplete outputs.
 
@@ -260,6 +262,8 @@ The items below are must-have gaps to close before treating Phase 1 recommendati
 - Dashboard shows collection completeness, provider availability, fallback usage, and publication freshness.
 - Tests or CDK assertions cover critical alarm definitions.
 
+**Implemented policy:** CloudWatch now includes product-quality alarms for zero top picks, low AI analyzed count, suppressed publication, fallback-analysis usage, news provider/source failures, excessive stock ticker failures, and detected recent OHLCV gaps needing backfill follow-up. The Phase 1 dashboard includes publication freshness/suppression, fallback/review-gate usage, and backfill/gap health widgets alongside existing collection completeness, provider failure, manifest health, and candidate funnel widgets. CDK assertions cover the critical product-quality alarms and dashboard widgets.
+
 **References:**
 
 - `infrastructure/stacks/monitoring_stack.py`
@@ -269,7 +273,7 @@ The items below are must-have gaps to close before treating Phase 1 recommendati
 
 ### 12. Motto-Aligned Test Coverage
 
-**Status:** Open.
+**Status:** Done.
 
 **Gap:** Tests do not yet encode the Phase 1 reliability motto.
 
@@ -283,6 +287,8 @@ The items below are must-have gaps to close before treating Phase 1 recommendati
 - Add tests for provider provenance and collection completeness.
 - Add tests for scan-free or summary-based access paths where practical.
 
+**Implemented policy:** The Phase 1 motto, "decision-grade, not demo-grade," is now encoded across focused tests. `backend/tests/test_watchlist_seed_contract.py` validates the canonical seed CSV has complete required metadata, valid sectors/company sizes, and no duplicate tickers. `backend/tests/test_phase1_pipeline.py` covers stale/provenance/metadata freshness exclusions, publication suppression when no ticker or no analysis is eligible, fallback method labeling/confidence caps, and public suppression of fallback or review-rejected actionable calls. `backend/tests/test_connection.py`, `backend/tests/test_stock_collector.py`, and `backend/tests/test_news_collector.py` cover provider provenance, collection completeness summaries/metrics, and summary/query-based read paths that avoid broad scans where practical.
+
 **References:**
 
 - `backend/tests/`
@@ -292,7 +298,7 @@ The items below are must-have gaps to close before treating Phase 1 recommendati
 
 ### 13. Company Logo Enrichment and Caching
 
-**Status:** Open.
+**Status:** Done.
 
 **Gap:** Ticker panels and company context views do not have source-backed company logos or icons. This is helpful for visual scanning and polish, but it is not required for decision-grade recommendation quality.
 
@@ -316,6 +322,14 @@ The items below are must-have gaps to close before treating Phase 1 recommendati
 - Add S3 artifact publishing for downloaded logo bytes plus normalized logo metadata.
 - Add frontend rendering support for cached `logo_icon_url` on compact ticker panels and `logo_url` in expanded company-info panels.
 - Add tests covering provider normalization, cache key generation, missing-logo fallback, and no scoring impact.
+
+**Implemented:**
+
+- Added optional logo fields to the static metadata contract, stock schema, DynamoDB static sync field set, and publication company-info payload.
+- Added `backend/src/scripts/enrich_watchlist_logos.py` to resolve Polygon/Massive ticker branding first, fall back to Logo.dev by company domain, cache downloaded assets in S3, and write cached CloudFront URLs plus metadata back to the watchlist CSV.
+- Preserved existing cached logos during static metadata sync when an older CSV omits logo columns, so static business syncs cannot accidentally erase enrichment.
+- Updated dashboard logo rendering to prefer cached icon/logo URLs, recover to ticker initials on image load failure, and show logo provenance in expanded company context.
+- Added tests for provider normalization, token-free provenance URLs, cache keys/uploads, schema propagation, sync preservation, and publication payload behavior.
 
 **References:**
 

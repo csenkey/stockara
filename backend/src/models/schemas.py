@@ -137,6 +137,11 @@ class Stock(BaseModel):
     headquarters: Optional[str] = Field(default=None, max_length=255)
     ipo_year: Optional[int] = Field(default=None, ge=1600, le=2200)
     market_cap: Optional[str] = Field(default=None, max_length=50)
+    logo_url: Optional[str] = Field(default=None, max_length=500)
+    logo_icon_url: Optional[str] = Field(default=None, max_length=500)
+    logo_source: Optional[str] = Field(default=None, max_length=100)
+    logo_source_url: Optional[str] = Field(default=None, max_length=500)
+    logo_checked_at: Optional[datetime] = None
     provider_symbols: dict[str, str] = Field(default_factory=dict)
     provider_symbol_sources: dict[str, str] = Field(default_factory=dict)
     provider_symbol_updated_at: Optional[datetime] = None

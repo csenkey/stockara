@@ -34,6 +34,16 @@ These fields help the analysis pipeline produce better business reasoning. They 
 - `ipo_year`: IPO year when known.
 - `market_cap`: Market capitalization from the metadata provider when known.
 
+## Optional Presentation Metadata
+
+These fields improve visual scanning but must never affect scoring, publication, or watchlist eligibility.
+
+- `logo_url`: CloudFront URL for the cached full company logo.
+- `logo_icon_url`: CloudFront URL for the cached compact icon or mark.
+- `logo_source`: Source used for the logo, such as `polygon_ticker_details` or `logo_dev`.
+- `logo_source_url`: Original provider URL or provider detail endpoint used to verify the logo.
+- `logo_checked_at`: ISO timestamp or date when the logo metadata was last checked.
+
 ## Rules
 
 - Do not default missing sectors to `Technology` or any other broad placeholder.
@@ -41,3 +51,4 @@ These fields help the analysis pipeline produce better business reasoning. They 
 - Prefer stable, source-backed metadata from exchange profiles, SEC/company filings, company investor relations pages, or another explicit provider.
 - Use empty optional fields only when the source does not provide the data yet; required fields must be complete before seeding.
 - When metadata changes, update `metadata_as_of` and preserve the source fields.
+- Missing logos must fall back to ticker initials and must not suppress analysis or publication.

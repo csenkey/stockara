@@ -1,6 +1,7 @@
-"""CloudFormation custom resource handler for first-run watchlist seeding."""
+"""CloudFormation custom resource handler for watchlist seeding and metadata sync."""
 
 import csv
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,8 @@ import boto3
 from boto3.dynamodb.conditions import Attr
 from boto3.dynamodb.conditions import Key
 
+
+logger = logging.getLogger(__name__)
 
 VALID_SECTORS = {
     "Technology",
@@ -52,6 +55,14 @@ OPTIONAL_TEXT_FIELDS = (
     "market_cap",
 )
 
+OPTIONAL_LOGO_FIELDS = (
+    "logo_url",
+    "logo_icon_url",
+    "logo_source",
+    "logo_source_url",
+    "logo_checked_at",
+)
+
 OPTIONAL_LIST_FIELDS = (
     "flagship_products",
     "revenue_segments",
@@ -75,6 +86,7 @@ SYNC_FIELDS = (
     "metadata_source_url",
     "metadata_as_of",
     *OPTIONAL_TEXT_FIELDS,
+    *OPTIONAL_LOGO_FIELDS,
     *OPTIONAL_LIST_FIELDS,
     *OPTIONAL_PROVIDER_SYMBOL_FIELDS,
     "provider_symbol_updated_at",
@@ -146,7 +158,7 @@ def _build_stock_item(row: dict[str, str], sell_alert_tickers: set[str]) -> dict
         "is_sell_alert_watch": ticker in sell_alert_tickers,
     }
 
-    for field in OPTIONAL_TEXT_FIELDS:
+    for field in (*OPTIONAL_TEXT_FIELDS, *OPTIONAL_LOGO_FIELDS):
         value = (row.get(field) or "").strip()
         if value:
             item[field] = value
@@ -203,6 +215,9 @@ def _update_stock_metadata(table: Any, item: dict[str, Any]) -> None:
         for field in (*OPTIONAL_TEXT_FIELDS, *OPTIONAL_LIST_FIELDS)
         if field not in values
     ]
+    for field in OPTIONAL_LOGO_FIELDS:
+        if field in item and field not in values:
+            remove_fields.append(field)
     remove_names = {
         f"#r{index}": field for index, field in enumerate(remove_fields)
     }
@@ -223,6 +238,7 @@ def sync_static_metadata(
 ) -> dict[str, int]:
     summary = {
         "created": 0,
+        "missing": 0,
         "changed": 0,
         "unchanged": 0,
         "invalid": 0,
@@ -242,11 +258,23 @@ def sync_static_metadata(
             if not existing:
                 batch.put_item(Item=item)
                 summary["created"] += 1
+                summary["missing"] += 1
             elif _metadata_changed(existing, item):
                 _update_stock_metadata(table, item)
                 summary["changed"] += 1
             else:
                 summary["unchanged"] += 1
+        if sell_alert_tickers:
+            batch.put_item(
+                Item={
+                    "PK": "CONFIG#sell_alert_watchlist",
+                    "SK": "VALUE",
+                    "entity": "config",
+                    "name": "sell_alert_watchlist",
+                    "values": sorted(sell_alert_tickers),
+                }
+            )
+    logger.info("watchlist_static_metadata_sync_complete", extra={"summary": summary})
     return summary
 
 
@@ -273,6 +301,9 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     table = boto3.resource("dynamodb").Table(table_name)
     if event.get("mode") == "sync_static_metadata":
         summary = sync_static_metadata(table, sell_alert_tickers)
+        logger.info(
+            "watchlist_static_metadata_manual_sync", extra={"summary": summary}
+        )
         return {"statusCode": 200, "body": summary}
 
     existing = table.query(
@@ -289,6 +320,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 "Seeded": summary["created"],
                 "Skipped": True,
                 "MetadataCreated": summary["created"],
+                "MetadataMissing": summary["missing"],
                 "MetadataChanged": summary["changed"],
                 "MetadataUnchanged": summary["unchanged"],
                 "MetadataInvalid": summary["invalid"],
