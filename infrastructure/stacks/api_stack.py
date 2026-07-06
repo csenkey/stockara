@@ -324,10 +324,13 @@ class ApiStack(Stack):
             environment={
                 **common_env,
                 "FINNHUB_KEY_SECRET_NAME": finnhub_key_secret_name,
+                "ALPHA_VANTAGE_API_KEY_SECRET_NAME": alpha_vantage_key_secret_name,
                 "POWERTOOLS_SERVICE_NAME": "earnings-collector",
                 "EARNINGS_CALENDAR_LOOKBACK_DAYS": "1825",
                 "EARNINGS_CALENDAR_LOOKAHEAD_DAYS": "120",
                 "EARNINGS_CALENDAR_YFINANCE_LIMIT": "32",
+                "EARNINGS_ALPHA_VANTAGE_REQUEST_INTERVAL_SECONDS": "1.25",
+                "EARNINGS_ALPHA_VANTAGE_MAX_CALLS_PER_INVOCATION": "20",
             },
             description="Collects earnings calendar events and historical reactions",
         )
@@ -462,6 +465,7 @@ class ApiStack(Stack):
         finnhub_key_secret.grant_read(self.dividend_collector_fn)
         alpha_vantage_key_secret.grant_read(self.news_collector_fn)
         alpha_vantage_key_secret.grant_read(self.stock_collector_fn)
+        alpha_vantage_key_secret.grant_read(self.earnings_collector_fn)
         alpha_vantage_key_secret.grant_read(self.dividend_collector_fn)
 
         watchlist_seed_provider = cr.Provider(

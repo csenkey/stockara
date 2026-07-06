@@ -43,6 +43,10 @@ on:
         description: "Seconds to wait between ticker requests"
         required: true
         default: "1.5"
+      alpha_vantage_max_calls:
+        description: "Maximum Alpha Vantage fallback calls for this run"
+        required: true
+        default: "20"
       publish_artifact:
         description: "Publish S3 audit artifact after non-dry run"
         required: true
@@ -77,7 +81,7 @@ jobs:
       - name: Validate inputs
         shell: bash
         run: |
-          for value in "${{ inputs.max_tickers }}" "${{ inputs.offset }}" "${{ inputs.yfinance_limit }}" "${{ inputs.lookback_days }}" "${{ inputs.lookahead_days }}"; do
+          for value in "${{ inputs.max_tickers }}" "${{ inputs.offset }}" "${{ inputs.yfinance_limit }}" "${{ inputs.lookback_days }}" "${{ inputs.lookahead_days }}" "${{ inputs.alpha_vantage_max_calls }}"; do
             if ! [[ "$value" =~ ^[0-9]+$ ]]; then
               echo "Numeric inputs must be non-negative integers."
               exit 1
@@ -122,6 +126,7 @@ jobs:
         env:
           STOCKARA_TABLE_NAME: stockara
           STOCKARA_ARTIFACT_BUCKET: ${{ vars.STOCKARA_ARTIFACT_BUCKET || '' }}
+          ALPHA_VANTAGE_API_KEY_SECRET_NAME: stockara/prod/alpha-vantage-api-key-current
         run: |
           set -euo pipefail
           args=(
@@ -131,6 +136,7 @@ jobs:
             --lookback-days "${{ inputs.lookback_days }}"
             --lookahead-days "${{ inputs.lookahead_days }}"
             --sleep "${{ inputs.sleep_seconds }}"
+            --alpha-vantage-max-calls "${{ inputs.alpha_vantage_max_calls }}"
           )
           if [[ -n "${{ inputs.ticker_csv }}" ]]; then
             args+=(--tickers "${{ inputs.ticker_csv }}")

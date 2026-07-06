@@ -69,6 +69,12 @@ def _parse_args() -> argparse.Namespace:
         help="Seconds to wait between ticker requests.",
     )
     parser.add_argument(
+        "--alpha-vantage-max-calls",
+        type=int,
+        default=20,
+        help="Maximum Alpha Vantage fallback calls for this run.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Fetch and summarize events without writing DynamoDB rows.",
@@ -124,6 +130,7 @@ def _manual_artifact_scope(args: argparse.Namespace) -> str | None:
 
 def backfill_earnings_calendar_history(args: argparse.Namespace) -> dict[str, Any]:
     from src.collectors.earnings_collector import (
+        _reset_alpha_vantage_invocation_state,
         enrich_price_reaction,
         fetch_earnings_events,
     )
@@ -132,6 +139,9 @@ def backfill_earnings_calendar_history(args: argparse.Namespace) -> dict[str, An
 
     DatabasePool.initialize()
     try:
+        _reset_alpha_vantage_invocation_state(
+            {"alpha_vantage_max_calls": args.alpha_vantage_max_calls}
+        )
         collection_date = date.today()
         range_start = collection_date - timedelta(days=max(args.lookback_days, 0))
         range_end = collection_date + timedelta(days=max(args.lookahead_days, 0))

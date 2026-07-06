@@ -140,7 +140,14 @@ def test_calendar_collector_lambdas_and_schedules_are_created():
             "Handler": "src.collectors.earnings_collector.handler",
             "Environment": {
                 "Variables": assertions.Match.object_like(
-                    {"POWERTOOLS_SERVICE_NAME": "earnings-collector"}
+                    {
+                        "POWERTOOLS_SERVICE_NAME": "earnings-collector",
+                        "ALPHA_VANTAGE_API_KEY_SECRET_NAME": (
+                            "stockara/codex-test/alpha-vantage-api-key-current"
+                        ),
+                        "EARNINGS_ALPHA_VANTAGE_REQUEST_INTERVAL_SECONDS": "1.25",
+                        "EARNINGS_ALPHA_VANTAGE_MAX_CALLS_PER_INVOCATION": "20",
+                    }
                 )
             },
         },

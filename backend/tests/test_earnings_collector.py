@@ -11,6 +11,7 @@ from src.models.schemas import CollectionTaskStatus, CollectionTaskType
 
 from backend.src.collectors.earnings_collector import (
     enrich_price_reaction,
+    fetch_alpha_vantage_earnings_events,
     fetch_earnings_calendar_events,
     fetch_earnings_events,
     handler,
@@ -80,6 +81,107 @@ def test_fetch_earnings_events_captures_raw_yfinance_provider_rows():
             "collected_at": provider_events[0]["collected_at"],
         }
     ]
+
+
+@patch("backend.src.collectors.earnings_collector.requests.get")
+def test_fetch_alpha_vantage_earnings_events_normalizes_quarterly_rows(
+    mock_get, monkeypatch
+):
+    monkeypatch.setenv("ALPHA_VANTAGE_API_KEY", "test-alpha-key")
+    from backend.src.services.secrets import get_provider_api_key
+
+    get_provider_api_key.cache_clear()
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {
+        "symbol": "AAPL",
+        "quarterlyEarnings": [
+            {
+                "fiscalDateEnding": "2026-03-31",
+                "reportedDate": "2026-04-30",
+                "reportedEPS": "1.65",
+                "estimatedEPS": "1.60",
+                "surprisePercentage": "3.125",
+            },
+            {
+                "fiscalDateEnding": "2021-03-31",
+                "reportedDate": "2021-04-28",
+                "reportedEPS": "1.40",
+            },
+        ],
+    }
+    mock_get.return_value = response
+    provider_events: list[dict] = []
+
+    class FrozenDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 6, 17)
+
+    with patch("backend.src.collectors.earnings_collector.date", FrozenDate):
+        events = fetch_alpha_vantage_earnings_events(
+            "aapl",
+            company_name="Apple",
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 12, 31),
+            provider_events=provider_events,
+        )
+
+    assert len(events) == 1
+    assert events[0]["ticker"] == "AAPL"
+    assert events[0]["company_name"] == "Apple"
+    assert events[0]["event_date"] == date(2026, 4, 30)
+    assert events[0]["reported_eps"] == Decimal("1.65")
+    assert events[0]["eps_estimate"] == Decimal("1.6")
+    assert events[0]["surprise_percent"] == Decimal("3.125")
+    assert events[0]["is_upcoming"] is False
+    assert events[0]["provider"] == "alpha_vantage"
+    assert provider_events[0]["provider"] == "alpha_vantage"
+    assert provider_events[0]["raw_fields"]["reportedEPS"] == "1.65"
+    params = mock_get.call_args.kwargs["params"]
+    assert params["function"] == "EARNINGS"
+    assert params["symbol"] == "AAPL"
+
+
+@patch("backend.src.collectors.earnings_collector.fetch_alpha_vantage_earnings_events")
+def test_fetch_earnings_events_uses_alpha_vantage_when_yfinance_empty(
+    mock_alpha,
+):
+    ticker = MagicMock()
+    ticker.get_earnings_dates.return_value = None
+    mock_alpha.return_value = [
+        {
+            "ticker": "AAPL",
+            "event_date": date(2026, 4, 30),
+            "provider": "alpha_vantage",
+        }
+    ]
+
+    with patch("backend.src.collectors.earnings_collector.yf.Ticker", return_value=ticker):
+        events = fetch_earnings_events("aapl", company_name="Apple")
+
+    assert events == mock_alpha.return_value
+    mock_alpha.assert_called_once()
+    assert mock_alpha.call_args.args[0] == "aapl"
+    assert mock_alpha.call_args.kwargs["company_name"] == "Apple"
+
+
+@patch("backend.src.collectors.earnings_collector.requests.get")
+def test_fetch_alpha_vantage_earnings_events_treats_provider_error_as_empty(
+    mock_get, monkeypatch
+):
+    monkeypatch.setenv("ALPHA_VANTAGE_API_KEY", "test-alpha-key")
+    from backend.src.services.secrets import get_provider_api_key
+
+    get_provider_api_key.cache_clear()
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {"Information": "standard API call frequency"}
+    mock_get.return_value = response
+
+    events = fetch_alpha_vantage_earnings_events("aapl")
+
+    assert events == []
 
 
 @patch("backend.src.collectors.earnings_collector.requests.get")
