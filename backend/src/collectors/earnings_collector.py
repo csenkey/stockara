@@ -97,6 +97,8 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
                 collected_events.append(enrich_price_reaction(earnings_event))
 
         stored_count = _store_events(collected_events)
+        artifact_scope = manifest_task_run.task_id if manifest_task_run else None
+        publish_latest_artifacts = manifest_task_run is None
         publish_calendar_artifacts(
             bucket=str(event.get("artifact_bucket") or ARTIFACT_BUCKET),
             event_type="earnings",
@@ -105,6 +107,8 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
             range_start=range_start,
             range_end=range_end,
             selected_tickers=[stock["ticker"] for stock in selected],
+            artifact_scope=artifact_scope,
+            publish_latest=publish_latest_artifacts,
         )
         publish_calendar_provider_snapshots(
             bucket=str(event.get("artifact_bucket") or ARTIFACT_BUCKET),
@@ -114,6 +118,8 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
             range_start=range_start,
             range_end=range_end,
             selected_tickers=[stock["ticker"] for stock in selected],
+            artifact_scope=artifact_scope,
+            publish_latest=publish_latest_artifacts,
         )
 
         _emit_metric("earnings_events_collected", stored_count)

@@ -118,6 +118,8 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
         )
         warnings = _calendar_warnings(provider_health)
         response_status = _response_status(failed_tickers, provider_health)
+        artifact_scope = manifest_task_run.task_id if manifest_task_run else None
+        publish_latest_artifacts = manifest_task_run is None
         publish_calendar_artifacts(
             bucket=str(event.get("artifact_bucket") or ARTIFACT_BUCKET),
             event_type="dividends",
@@ -130,6 +132,8 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
             provider_health=provider_health,
             warnings=warnings,
             zero_event_tickers=zero_event_tickers,
+            artifact_scope=artifact_scope,
+            publish_latest=publish_latest_artifacts,
         )
         publish_calendar_provider_snapshots(
             bucket=str(event.get("artifact_bucket") or ARTIFACT_BUCKET),
@@ -139,6 +143,8 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
             range_start=range_start,
             range_end=range_end,
             selected_tickers=[stock["ticker"] for stock in stocks],
+            artifact_scope=artifact_scope,
+            publish_latest=publish_latest_artifacts,
         )
 
         _emit_metric("dividend_events_collected", stored_count)

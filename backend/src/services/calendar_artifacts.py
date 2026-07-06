@@ -26,6 +26,8 @@ def publish_calendar_artifacts(
     provider_health: dict[str, Any] | None = None,
     warnings: list[str] | None = None,
     zero_event_tickers: list[str] | None = None,
+    artifact_scope: str | None = None,
+    publish_latest: bool = True,
 ) -> None:
     """Publish normalized calendar events to stable S3 paths."""
     if not bucket:
@@ -46,20 +48,27 @@ def publish_calendar_artifacts(
         "zero_event_tickers": sorted(set(zero_event_tickers or [])),
         "events": normalized_events,
     }
-    _safe_publish(
-        bucket,
-        f"calendar/normalized/{event_type}/collection_date={collection_date.isoformat()}/events.json",
-        payload,
+    collection_prefix = _collection_prefix(
+        "normalized",
+        event_type,
+        collection_date,
+        artifact_scope,
     )
-    _safe_publish(bucket, f"calendar/normalized/{event_type}/latest.json", payload)
-    for ticker, ticker_events in _events_by_ticker(normalized_events).items():
-        ticker_payload = {
-            **payload,
-            "ticker": ticker,
-            "event_count": len(ticker_events),
-            "events": ticker_events,
-        }
-        _safe_publish(bucket, f"calendar/by-ticker/{ticker}/{event_type}.json", ticker_payload)
+    _safe_publish(bucket, f"{collection_prefix}/events.json", payload)
+    if publish_latest:
+        _safe_publish(bucket, f"calendar/normalized/{event_type}/latest.json", payload)
+        for ticker, ticker_events in _events_by_ticker(normalized_events).items():
+            ticker_payload = {
+                **payload,
+                "ticker": ticker,
+                "event_count": len(ticker_events),
+                "events": ticker_events,
+            }
+            _safe_publish(
+                bucket,
+                f"calendar/by-ticker/{ticker}/{event_type}.json",
+                ticker_payload,
+            )
 
 
 def publish_calendar_provider_snapshots(
@@ -71,6 +80,8 @@ def publish_calendar_provider_snapshots(
     range_start: date,
     range_end: date,
     selected_tickers: list[str],
+    artifact_scope: str | None = None,
+    publish_latest: bool = True,
 ) -> None:
     """Publish raw provider calendar responses for audit and backfill debugging."""
     if not bucket:
@@ -88,12 +99,34 @@ def publish_calendar_provider_snapshots(
             "raw_event_count": len(events),
             "raw_events": events,
         }
-        _safe_publish(
-            bucket,
-            f"calendar/raw/{provider}/{event_type}/collection_date={collection_date.isoformat()}/events.json",
-            payload,
+        collection_prefix = _collection_prefix(
+            f"raw/{provider}",
+            event_type,
+            collection_date,
+            artifact_scope,
         )
-        _safe_publish(bucket, f"calendar/raw/{provider}/{event_type}/latest.json", payload)
+        _safe_publish(bucket, f"{collection_prefix}/events.json", payload)
+        if publish_latest:
+            _safe_publish(bucket, f"calendar/raw/{provider}/{event_type}/latest.json", payload)
+
+
+def _collection_prefix(
+    kind: str,
+    event_type: str,
+    collection_date: date,
+    artifact_scope: str | None,
+) -> str:
+    prefix = f"calendar/{kind}/{event_type}/collection_date={collection_date.isoformat()}"
+    if artifact_scope:
+        prefix = f"{prefix}/task_id={_safe_path_segment(artifact_scope)}"
+    return prefix
+
+
+def _safe_path_segment(value: str) -> str:
+    return "".join(
+        character if character.isalnum() or character in {"-", "_", "."} else "-"
+        for character in value.strip()
+    )
 
 
 def _safe_publish(bucket: str, key: str, payload: dict[str, Any]) -> None:

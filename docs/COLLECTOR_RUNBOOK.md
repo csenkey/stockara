@@ -62,6 +62,47 @@ Invoke the matching worker Lambda with:
 Tasks in `retry_wait` should not be retried until `next_retry_at`, unless the
 operator has confirmed the provider quota or outage has recovered.
 
+## Manual Earnings History Backfill
+
+For one-time earnings-calendar history fills, prefer the local operator script
+over adding a short-lived Lambda. It uses the same yfinance normalization and
+DynamoDB row shape as the earnings collector, paces requests between tickers,
+and upserts by ticker/date.
+
+Dry-run a small batch first:
+
+```bash
+STOCKARA_TABLE_NAME=<table-name> \
+AWS_REGION=<region> \
+python -m scripts.backfill_earnings_calendar_history \
+  --max-tickers 10 \
+  --sleep 1.5 \
+  --dry-run
+```
+
+Run the backfill in paced chunks. Chunked runs should write DynamoDB only; the
+daily publisher will rebuild the public `top-picks/latest.json` calendar view
+from the full database state.
+
+```bash
+STOCKARA_TABLE_NAME=<table-name> \
+STOCKARA_ARTIFACT_BUCKET=<artifact-bucket> \
+AWS_REGION=<region> \
+python -m scripts.backfill_earnings_calendar_history \
+  --max-tickers 100 \
+  --offset 0 \
+  --limit 64 \
+  --sleep 1.5
+```
+
+Repeat with increasing `--offset` values until the active watchlist is covered.
+After the final chunk, run the analyzer/publisher so
+`top-picks/latest.json` includes the refreshed upcoming earnings summary.
+If `--publish-artifact` is used with `--max-tickers`, `--offset`, or `--tickers`,
+the script writes a scoped manual artifact under the collection date and does
+not overwrite `calendar/normalized/earnings/latest.json`. Only an uncapped
+all-active run refreshes that audit `latest.json`.
+
 ## Provider Outage Triage
 
 Check task `failure_reason`, `provider_attempts`, and ticker health values:

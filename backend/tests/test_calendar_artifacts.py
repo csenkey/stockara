@@ -61,6 +61,35 @@ def test_publish_calendar_artifacts_writes_latest_collection_and_ticker_views(mo
 
 
 @patch("backend.src.services.calendar_artifacts.publish_json_artifact")
+def test_publish_calendar_artifacts_with_scope_skips_latest_views(mock_publish):
+    publish_calendar_artifacts(
+        bucket="artifact-bucket",
+        event_type="earnings",
+        collection_date=date(2026, 7, 3),
+        range_start=date(2021, 7, 4),
+        range_end=date(2026, 10, 31),
+        selected_tickers=["AAPL"],
+        artifact_scope="earnings-0000-AAPL-MSFT",
+        publish_latest=False,
+        events=[
+            {
+                "ticker": "AAPL",
+                "event_date": date(2026, 7, 30),
+                "provider": "yfinance",
+            },
+        ],
+    )
+
+    keys = [call.args[1] for call in mock_publish.call_args_list]
+    assert (
+        "calendar/normalized/earnings/collection_date=2026-07-03/"
+        "task_id=earnings-0000-AAPL-MSFT/events.json"
+    ) in keys
+    assert "calendar/normalized/earnings/latest.json" not in keys
+    assert "calendar/by-ticker/AAPL/earnings.json" not in keys
+
+
+@patch("backend.src.services.calendar_artifacts.publish_json_artifact")
 def test_publish_calendar_provider_snapshots_writes_raw_provider_views(mock_publish):
     publish_calendar_provider_snapshots(
         bucket="artifact-bucket",
@@ -91,3 +120,32 @@ def test_publish_calendar_provider_snapshots_writes_raw_provider_views(mock_publ
     assert latest_payload["raw_event_count"] == 1
     assert latest_payload["raw_events"][0]["event_date"] == "2026-07-30"
     assert latest_payload["raw_events"][0]["raw_fields"]["epsEstimate"] == 2.15
+
+
+@patch("backend.src.services.calendar_artifacts.publish_json_artifact")
+def test_publish_calendar_provider_snapshots_with_scope_skips_latest(mock_publish):
+    publish_calendar_provider_snapshots(
+        bucket="artifact-bucket",
+        event_type="dividends",
+        collection_date=date(2026, 7, 3),
+        range_start=date(2021, 7, 4),
+        range_end=date(2026, 10, 31),
+        selected_tickers=["ZTS"],
+        artifact_scope="dividend-0090-ZS-ZWS",
+        publish_latest=False,
+        provider_events=[
+            {
+                "provider": "alpha_vantage",
+                "ticker": "ZTS",
+                "ex_dividend_date": date(2026, 4, 20),
+                "raw_fields": {"amount": Decimal("0.53")},
+            }
+        ],
+    )
+
+    keys = [call.args[1] for call in mock_publish.call_args_list]
+    assert (
+        "calendar/raw/alpha_vantage/dividends/collection_date=2026-07-03/"
+        "task_id=dividend-0090-ZS-ZWS/events.json"
+    ) in keys
+    assert "calendar/raw/alpha_vantage/dividends/latest.json" not in keys

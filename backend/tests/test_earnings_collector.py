@@ -219,6 +219,8 @@ def test_handler_collects_and_stores_events(mock_store, mock_pool, mock_fetch, m
 
 @patch("backend.src.collectors.earnings_collector.write_manifest")
 @patch("backend.src.collectors.earnings_collector.load_manifest")
+@patch("backend.src.collectors.earnings_collector.publish_calendar_provider_snapshots")
+@patch("backend.src.collectors.earnings_collector.publish_calendar_artifacts")
 @patch("backend.src.collectors.earnings_collector._emit_metric")
 @patch("backend.src.collectors.earnings_collector.fetch_earnings_calendar_events")
 @patch("backend.src.collectors.earnings_collector.fetch_earnings_events")
@@ -230,6 +232,8 @@ def test_handler_processes_manifest_earnings_task(
     mock_fetch,
     mock_fetch_calendar,
     mock_metric,
+    mock_publish_artifacts,
+    mock_publish_snapshots,
     mock_load_manifest,
     mock_write_manifest,
 ):
@@ -275,6 +279,10 @@ def test_handler_processes_manifest_earnings_task(
     assert task.status == CollectionTaskStatus.SUCCEEDED
     assert task.output_counts.records_written == len(task.tickers)
     assert task.output_counts.successful_tickers == len(task.tickers)
+    assert mock_publish_artifacts.call_args.kwargs["artifact_scope"] == task.task_id
+    assert mock_publish_artifacts.call_args.kwargs["publish_latest"] is False
+    assert mock_publish_snapshots.call_args.kwargs["artifact_scope"] == task.task_id
+    assert mock_publish_snapshots.call_args.kwargs["publish_latest"] is False
 
 
 @patch("backend.src.collectors.earnings_collector.write_manifest")
