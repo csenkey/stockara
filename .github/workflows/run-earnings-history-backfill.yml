@@ -107,6 +107,25 @@ jobs:
           role-session-name: stockara-earnings-backfill-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Resolve artifact bucket
+        shell: bash
+        env:
+          CONFIGURED_ARTIFACT_BUCKET: ${{ vars.STOCKARA_ARTIFACT_BUCKET || '' }}
+        run: |
+          set -euo pipefail
+          bucket="$CONFIGURED_ARTIFACT_BUCKET"
+          if [[ -z "$bucket" ]]; then
+            bucket="$(aws cloudformation describe-stacks \
+              --stack-name StockMonitoringFrontend \
+              --query "Stacks[0].Outputs[?OutputKey=='BucketName'].OutputValue | [0]" \
+              --output text)"
+          fi
+          if [[ -z "$bucket" || "$bucket" == "None" ]]; then
+            echo "Unable to resolve artifact bucket."
+            exit 1
+          fi
+          echo "STOCKARA_ARTIFACT_BUCKET=$bucket" >> "$GITHUB_ENV"
+
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
         with:
@@ -125,7 +144,6 @@ jobs:
         shell: bash
         env:
           STOCKARA_TABLE_NAME: stockara
-          STOCKARA_ARTIFACT_BUCKET: ${{ vars.STOCKARA_ARTIFACT_BUCKET || '' }}
           ALPHA_VANTAGE_API_KEY_SECRET_NAME: stockara/prod/alpha-vantage-api-key-current
         run: |
           set -euo pipefail
