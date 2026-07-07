@@ -7,10 +7,12 @@ from backend.src.backtesting.analysis_strategy import (
     load_analysis_strategy_manifest,
 )
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
 
 def test_loads_current_yaml_strategy_manifest():
     manifest = load_analysis_strategy_manifest(
-        Path("configs/analysis-strategies/analysis_strategy_current.yaml")
+        REPO_ROOT / "configs/analysis-strategies/analysis_strategy_current.yaml"
     )
 
     assert manifest.strategy_id == "analysis_strategy_current"
