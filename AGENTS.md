@@ -1,6 +1,17 @@
 # AGENTS.md
 
-This document initializes coding-agent sessions for Stockara. It is distilled from the Kiro specs in `.kiro/specs/stock-monitoring-system/` and `.kiro/specs/demo-trading-accounts/`. When product behavior is unclear, read those spec files first and preserve their requirement traceability.
+This document initializes coding-agent sessions for Stockara. Shared, tool-neutral steering lives in `docs/steering/` and should be treated as canonical for both Codex and Claude. `.kiro/specs/` is legacy reference material only; do not create or update Kiro specs unless Istvan explicitly asks for that format.
+
+## First Read
+
+Before making product, architecture, or implementation changes, read:
+
+1. `docs/steering/README.md`
+2. `docs/steering/project-context.md`
+3. `docs/steering/engineering-rules.md`
+4. `docs/steering/work-queue.md`
+5. `docs/steering/analysis-strategies/` when changing analyzer logic
+6. Relevant feature files under `docs/steering/features/`
 
 ## Project Purpose
 
@@ -34,7 +45,8 @@ The project also includes a public demo-trading feature: 100 superhero-named sim
 - `frontend/src/components/`: portfolio and suggestion UI components
 - `frontend/src/services/`: axios API/auth clients
 - `infrastructure/stacks/`: CDK stacks for API, database, frontend, monitoring, and demo trading
-- `.kiro/specs/`: product requirements, technical designs, and task plans
+- `docs/steering/`: canonical product, architecture, and backlog steering for Codex and Claude
+- `.kiro/specs/`: legacy source material only
 
 ## Common Commands
 
@@ -159,13 +171,17 @@ Public demo endpoints:
 - Use structured logs for batch and API operations, especially partial failures.
 - Keep public demo routes outside authenticated frontend layout and backend auth middleware.
 - Prefer CDK table/index changes for database schema access patterns; do not silently mutate data shapes in application code.
-- Preserve `.kiro` requirements as the source for acceptance criteria and task traceability.
+- Preserve `docs/steering/` requirements as the source for acceptance criteria and task traceability.
 
 ## Useful Source Specs
 
-- `.kiro/specs/stock-monitoring-system/requirements.md`
-- `.kiro/specs/stock-monitoring-system/design.md`
-- `.kiro/specs/stock-monitoring-system/tasks.md`
-- `.kiro/specs/demo-trading-accounts/requirements.md`
-- `.kiro/specs/demo-trading-accounts/design.md`
-- `.kiro/specs/demo-trading-accounts/tasks.md`
+- `docs/steering/README.md`
+- `docs/steering/project-context.md`
+- `docs/steering/engineering-rules.md`
+- `docs/steering/work-queue.md`
+- `docs/steering/analysis-strategies/README.md`
+- `docs/steering/analysis-strategies/analysis_strategy_schema.md`
+- `docs/steering/analysis-strategies/strategy_registry.md`
+- `docs/steering/features/backtest-support-with-shadowed-portfolios/requirements.md`
+- `docs/steering/features/backtest-support-with-shadowed-portfolios/design.md`
+- `docs/steering/features/backtest-support-with-shadowed-portfolios/backlog.md`

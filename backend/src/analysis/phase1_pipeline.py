@@ -431,23 +431,129 @@ def _collection_gate_response(
     run_date: date,
     publish_status_artifact: bool = False,
 ) -> dict[str, Any] | None:
-    """Log collection coverage diagnostics without blocking best-available picks."""
+    """Return a waiting response until the daily collection manifest opens analysis."""
     if not ARTIFACT_BUCKET:
         return None
     manifest = _load_collection_manifest(run_date)
     if manifest is None:
         logger.warning("phase1_collection_manifest_missing", run_date=run_date.isoformat())
-        return None
+        _emit_metric("collection_gates_closed", 1)
+        response_body = {
+            "mode": "collection_gate",
+            "stage": "waiting_for_collection_manifest",
+            "publication_date": run_date.isoformat(),
+            "reason": "collection_manifest_missing",
+            "manifest_key": collection_manifest_s3_key(run_date),
+        }
+        if publish_status_artifact:
+            _publish_collection_gate_status(
+                run_date,
+                response_body,
+                warnings=[
+                    "Publication waiting: daily collection manifest is not available."
+                ],
+            )
+        return {"statusCode": 202, "body": response_body}
+
+    now = datetime.now(timezone.utc)
+    if manifest.analysis_not_before and manifest.analysis_not_before > now:
+        logger.info(
+            "phase1_collection_analysis_window_not_open",
+            manifest_key=manifest.s3_key,
+            analysis_not_before=manifest.analysis_not_before.isoformat(),
+        )
+        _emit_metric("collection_gates_closed", 1)
+        response_body = {
+            "mode": "collection_gate",
+            "stage": "waiting_for_analysis_window",
+            "publication_date": run_date.isoformat(),
+            "reason": "analysis_not_before",
+            "manifest_key": manifest.s3_key,
+            "analysis_not_before": manifest.analysis_not_before.isoformat(),
+        }
+        if publish_status_artifact:
+            _publish_collection_gate_status(
+                run_date,
+                response_body,
+                manifest=manifest,
+                warnings=[
+                    "Publication waiting: configured analysis window has not opened."
+                ],
+            )
+        return {"statusCode": 202, "body": response_body}
+
     failed_gates = [gate for gate in manifest.summary.coverage_gates if not gate.passed]
     if not failed_gates:
+        _emit_metric("collection_gates_open", 1)
         return None
     logger.warning(
-        "phase1_collection_coverage_targets_below_threshold",
+        "phase1_collection_gates_closed",
         failed_gates=[gate.name for gate in failed_gates],
         manifest_key=manifest.s3_key,
     )
     _emit_metric("collection_coverage_targets_below_threshold", len(failed_gates))
-    return None
+    _emit_metric("collection_gates_closed", 1)
+    response_body = {
+        "mode": "collection_gate",
+        "stage": "waiting_for_collection_gates",
+        "publication_date": run_date.isoformat(),
+        "reason": "coverage_gates_failed",
+        "manifest_key": manifest.s3_key,
+        "failed_gates": [
+            {
+                "name": gate.name,
+                "observed_value": str(gate.observed_value),
+                "required_value": str(gate.required_value),
+                "unit": gate.unit,
+                "message": gate.message,
+            }
+            for gate in failed_gates
+        ],
+    }
+    if publish_status_artifact:
+        _publish_collection_gate_status(
+            run_date,
+            response_body,
+            manifest=manifest,
+            warnings=[
+                "Publication waiting: collection coverage gates have not passed.",
+                *[
+                    gate.message or f"{gate.name} is below threshold."
+                    for gate in failed_gates
+                ],
+            ],
+        )
+    return {"statusCode": 202, "body": response_body}
+
+
+def _publish_collection_gate_status(
+    run_date: date,
+    gate_status: dict[str, Any],
+    manifest: CollectionManifest | None = None,
+    warnings: list[str] | None = None,
+) -> None:
+    data_quality: dict[str, Any] = {
+        "coverage_status": "waiting_for_collection_gates",
+        "warnings": warnings or [],
+        "collection_gate": gate_status,
+    }
+    if manifest is not None:
+        data_quality["collection_manifest"] = {
+            "manifest_key": manifest.s3_key,
+            "manifest_date": manifest.manifest_date.isoformat(),
+            "updated_at": manifest.updated_at.isoformat(),
+            "analysis_not_before": manifest.analysis_not_before.isoformat()
+            if manifest.analysis_not_before
+            else None,
+            "active_ticker_count": manifest.active_ticker_count,
+            "summary": manifest.summary.model_dump(mode="json"),
+        }
+    _publish_suppressed_publication(
+        run_date,
+        reason=gate_status["reason"],
+        warnings=warnings or [],
+        data_quality=data_quality,
+    )
 
 
 def _load_collection_manifest(run_date: date) -> CollectionManifest | None:

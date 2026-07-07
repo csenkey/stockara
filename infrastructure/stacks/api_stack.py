@@ -449,7 +449,7 @@ class ApiStack(Stack):
         artifact_bucket.grant_read_write(self.stooq_zip_extractor_fn)
         artifact_bucket.grant_read_write(self.collection_distributor_fn)
         artifact_bucket.grant_read_write(self.stock_gap_scanner_fn)
-        artifact_bucket.grant_put(self.ai_analyzer_fn)
+        artifact_bucket.grant_read_write(self.ai_analyzer_fn)
         batch_role.add_to_policy(
             iam.PolicyStatement(
                 actions=["lambda:InvokeFunction"],
@@ -633,11 +633,17 @@ class ApiStack(Stack):
                 "stockara-phase1-publish",
                 "phase1-publish",
             ),
-            description="Publishes static top picks and sell alerts daily at 22:00 UTC",
-            schedule=events.Schedule.cron(
-                minute="0", hour="22", day="*", month="*", year="*"
+            description=(
+                "Advances gated Phase 1 analysis until daily static top picks "
+                "and sell alerts are published"
             ),
-            targets=[targets.LambdaFunction(self.ai_analyzer_fn)],
+            schedule=events.Schedule.rate(Duration.minutes(5)),
+            targets=[
+                targets.LambdaFunction(
+                    self.ai_analyzer_fn,
+                    event=events.RuleTargetInput.from_object({"mode": "daily"}),
+                )
+            ],
         )
 
         CfnOutput(

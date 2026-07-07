@@ -1,5 +1,9 @@
 # Phase 1 Must-Have Backlog
 
+> Steering note: this file is a historical completed Phase 1 quality checklist.
+> The canonical current priority queue is `docs/steering/work-queue.md`.
+> Use this file for rationale, references, and completed quality gates, not for choosing the next active task.
+
 Phase 1 is an accurate, reliable stock analysis product intended to support real business and investment decisions. It is not a throwaway MVP, demo, or proof of concept.
 
 The Phase 1 recommendation promise is to publish a very promising list of opportunities that are backed by fresh, reliable data and clear evidence. It does not need to claim the absolute top 5 or top 10 stocks across the full universe when coverage is partial. It must show business opportunities when they appear, but only for tickers whose own data quality is strong enough to support decision-grade analysis.

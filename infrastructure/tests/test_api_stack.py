@@ -127,6 +127,22 @@ def test_calendar_collector_lambdas_and_schedules_are_created():
         },
     )
     template.has_resource_properties(
+        "AWS::Events::Rule",
+        {
+            "Name": "stockara-codex-test-phase1-publish",
+            "ScheduleExpression": "rate(5 minutes)",
+            "Targets": assertions.Match.array_with(
+                [
+                    assertions.Match.object_like(
+                        {
+                            "Input": '{"mode":"daily"}',
+                        }
+                    )
+                ]
+            ),
+        },
+    )
+    template.has_resource_properties(
         "AWS::CloudFormation::CustomResource",
         {
             "SellAlertTickers": "AAPL,MSFT,NVDA",

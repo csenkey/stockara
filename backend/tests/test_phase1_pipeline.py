@@ -1,6 +1,6 @@
 """Tests for Phase 1 scoring and publication ranking."""
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -1894,7 +1894,7 @@ def test_publish_from_stored_state_suppresses_when_analysis_is_missing():
     ]
 
 
-def test_collection_manifest_coverage_targets_do_not_suppress_publication():
+def test_collection_manifest_coverage_targets_wait_for_collection_gates():
     run_date = date(2026, 6, 17)
     manifest_payload = {
         "manifest_date": run_date.isoformat(),
@@ -1924,6 +1924,7 @@ def test_collection_manifest_coverage_targets_do_not_suppress_publication():
         patch("src.analysis.phase1_pipeline.ARTIFACT_BUCKET", "artifact-bucket"),
         patch("src.analysis.phase1_pipeline.boto3.client") as client,
         patch("src.analysis.phase1_pipeline._emit_metric") as emit_metric,
+        patch("src.analysis.phase1_pipeline.publish_payload") as publish_payload,
     ):
         client.return_value.get_object.return_value = {"Body": body}
         result = phase1_pipeline._collection_gate_response(
@@ -1931,8 +1932,107 @@ def test_collection_manifest_coverage_targets_do_not_suppress_publication():
             publish_status_artifact=True,
         )
 
-    assert result is None
-    emit_metric.assert_called_once_with("collection_coverage_targets_below_threshold", 1)
+    assert result["statusCode"] == 202
+    assert result["body"]["stage"] == "waiting_for_collection_gates"
+    assert result["body"]["reason"] == "coverage_gates_failed"
+    assert result["body"]["failed_gates"][0]["name"] == "price_freshness"
+    emit_metric.assert_any_call("collection_coverage_targets_below_threshold", 1)
+    emit_metric.assert_any_call("collection_gates_closed", 1)
+    payload = publish_payload.call_args.args[0]
+    assert payload["publication_status"] == "suppressed"
+    assert payload["suppression_reason"] == "coverage_gates_failed"
+    assert payload["data_quality"]["coverage_status"] == "waiting_for_collection_gates"
+    assert payload["data_quality"]["collection_manifest"]["manifest_key"] == (
+        "collection_manifest/2026-06-17.json"
+    )
+    assert "collection coverage gates" in payload["data_warnings"][0]
+
+
+def test_collection_manifest_missing_waits_for_manifest():
+    run_date = date(2026, 6, 17)
+    with (
+        patch("src.analysis.phase1_pipeline.ARTIFACT_BUCKET", "artifact-bucket"),
+        patch("src.analysis.phase1_pipeline.boto3.client") as client,
+        patch("src.analysis.phase1_pipeline._emit_metric") as emit_metric,
+        patch("src.analysis.phase1_pipeline.publish_payload") as publish_payload,
+    ):
+        client.return_value.get_object.side_effect = RuntimeError("missing")
+        result = phase1_pipeline._collection_gate_response(
+            run_date,
+            publish_status_artifact=True,
+        )
+
+    assert result == {
+        "statusCode": 202,
+        "body": {
+            "mode": "collection_gate",
+            "stage": "waiting_for_collection_manifest",
+            "publication_date": "2026-06-17",
+            "reason": "collection_manifest_missing",
+            "manifest_key": "collection_manifest/2026-06-17.json",
+        },
+    }
+    emit_metric.assert_called_once_with("collection_gates_closed", 1)
+    payload = publish_payload.call_args.args[0]
+    assert payload["suppression_reason"] == "collection_manifest_missing"
+    assert payload["data_quality"]["collection_gate"]["manifest_key"] == (
+        "collection_manifest/2026-06-17.json"
+    )
+
+
+def test_collection_manifest_analysis_window_waits_until_not_before():
+    run_date = date(2026, 6, 17)
+    manifest_payload = {
+        "manifest_date": run_date.isoformat(),
+        "generated_at": "2026-06-17T07:30:00Z",
+        "updated_at": "2026-06-17T08:00:00Z",
+        "analysis_not_before": "2026-06-17T22:00:00Z",
+        "active_ticker_count": 1,
+        "task_types": ["price", "news", "earnings", "dividend"],
+        "tasks": [],
+        "summary": {
+            "coverage_gates": [
+                {
+                    "name": "price_freshness",
+                    "passed": True,
+                    "observed_value": "1",
+                    "required_value": "0.9",
+                    "unit": "ratio",
+                }
+            ],
+        },
+    }
+    body = SimpleNamespace(
+        read=lambda: phase1_pipeline.json.dumps(manifest_payload).encode("utf-8")
+    )
+    class FixedDateTime:
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.fromisoformat("2026-06-17T21:00:00+00:00")
+
+        @classmethod
+        def utcnow(cls):
+            return datetime.fromisoformat("2026-06-17T21:00:00+00:00")
+
+    with (
+        patch("src.analysis.phase1_pipeline.ARTIFACT_BUCKET", "artifact-bucket"),
+        patch("src.analysis.phase1_pipeline.boto3.client") as client,
+        patch("src.analysis.phase1_pipeline.datetime", FixedDateTime),
+        patch("src.analysis.phase1_pipeline._emit_metric") as emit_metric,
+        patch("src.analysis.phase1_pipeline.publish_payload") as publish_payload,
+    ):
+        client.return_value.get_object.return_value = {"Body": body}
+        result = phase1_pipeline._collection_gate_response(
+            run_date,
+            publish_status_artifact=True,
+        )
+
+    assert result["statusCode"] == 202
+    assert result["body"]["stage"] == "waiting_for_analysis_window"
+    assert result["body"]["analysis_not_before"] == "2026-06-17T22:00:00+00:00"
+    emit_metric.assert_called_once_with("collection_gates_closed", 1)
+    payload = publish_payload.call_args.args[0]
+    assert payload["suppression_reason"] == "analysis_not_before"
 
 
 def test_collection_manifest_quality_metadata_is_added_when_available():

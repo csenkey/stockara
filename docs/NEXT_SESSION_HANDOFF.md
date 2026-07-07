@@ -1,5 +1,9 @@
 # Next Session Handoff: Phase 1 Signal Quality and News Classification
 
+> Steering note: this handoff is historical and dated 2026-07-05.
+> The canonical current priority queue is `docs/steering/work-queue.md`.
+> Use this file only for reconstructing past deployment/news-source hardening context.
+
 Date: 2026-07-05
 
 ## Current State

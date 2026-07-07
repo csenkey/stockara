@@ -1,5 +1,28 @@
 # Backlog
 
+> Steering note: the canonical current priority queue is now `docs/steering/work-queue.md`.
+> This file is retained as detailed historical/product backlog material. Use it for context and deeper task notes, but do not treat its ordering as authoritative unless `docs/steering/work-queue.md` points to a section here.
+
+## Future Feature: Backtest Support With Shadowed Portfolios
+
+Status: Proposed
+
+Requirement: Build an offline-first historical portfolio simulator that validates whether Stockara recommendations improve portfolio value versus hold-only and ETF baselines.
+
+Canonical artifacts:
+
+- `docs/steering/features/backtest-support-with-shadowed-portfolios/requirements.md`
+- `docs/steering/features/backtest-support-with-shadowed-portfolios/design.md`
+- `docs/steering/features/backtest-support-with-shadowed-portfolios/backlog.md`
+- `docs/steering/features/backtest-support-with-shadowed-portfolios/README.md`
+
+Scope notes:
+
+- This is not the real-user portfolio tracking system.
+- Simulated portfolios should use S3-backed artifacts as the canonical run record.
+- The first milestone should use S3-backed artifacts and include historical OHLCV, ETF, news, earnings, dividend, inactive/delisted ticker, and point-in-time provenance inputs for decision-grade runs.
+- Decision shadows should fork only when Stockara changes a main portfolio, then compare fixed future windows instead of recursively spawning alternate universes.
+
 ## Immediate Priority: Rock-Solid Data Collection
 
 Status: Proposed
@@ -37,7 +60,7 @@ Execution tasks:
 - [x] Add symbol-mapping/provenance fields so provider symbols like Yahoo, Nasdaq, Stooq, Alpha Vantage, NewsAPI, and Finnhub can differ from canonical ticker when needed.
 - [x] Add rate-limit aware backoff policies per provider, including daily quota budgeting for free-tier APIs.
 - [x] Add collection coverage gates before daily analysis: price freshness, news freshness, earnings coverage, dividend coverage, and minimum active-universe percentage.
-- [ ] Update the analyzer/publisher so daily analysis runs once after collection gates: cheap filters -> AI analysis -> stronger AI review -> publish.
+- [x] Update the analyzer/publisher so daily analysis runs once after collection gates: cheap filters -> AI analysis -> stronger AI review -> publish.
 - [x] Publish collection coverage metadata with every daily artifact so partial universe coverage is visible to users and later diagnostics.
 - [x] Add CloudWatch metrics and alarms for manifest age, incomplete manifest tasks, provider failures, retry exhaustion, low coverage, and stale inputs.
 - [x] Add a stock price gap scanner that detects missing recent trading-day OHLCV rows per active ticker.
@@ -325,10 +348,10 @@ Phase 4: Intraday intelligence
 Phase 5: Strategy and backtesting
 
 - Promise: help users trust, compare, and tune the recommendation system.
-- Backtest recommendation strategies against historical data.
+- Backtest versioned `AnalysisStrategy` snapshots against historical data.
 - Compare AI picks against relevant benchmarks.
 - Show win rate, drawdown, volatility, and sector performance over time.
-- Add strategy profiles such as conservative, balanced, aggressive, income, and growth.
+- Add portfolio policies such as conservative, balanced, aggressive, income, and growth.
 - Use demo trading results as a visible credibility signal.
 
 Phase 6: Automation and premium layer
@@ -369,7 +392,7 @@ Proposed behavior:
 
 Implementation notes:
 
-- Add an `analyzer_version` or `analysis_channel` dimension to stored analysis results.
+- Add an `analysis_strategy_id` or `analysis_channel` dimension to stored analysis results.
 - Ensure existing dashboards and suggestion flows default to Alpha if no channel is specified.
 - Add user preference support for Alpha/Beta opt-in.
 - Consider an admin-only comparison view showing recommendation differences, confidence changes, risk changes, and later performance.
