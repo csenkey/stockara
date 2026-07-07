@@ -145,6 +145,7 @@ jobs:
         env:
           STOCKARA_TABLE_NAME: stockara
           ALPHA_VANTAGE_API_KEY_SECRET_NAME: stockara/prod/alpha-vantage-api-key-current
+          EARNINGS_ALPHA_VANTAGE_REQUEST_INTERVAL_SECONDS: "1.25"
         run: |
           set -euo pipefail
           args=(
