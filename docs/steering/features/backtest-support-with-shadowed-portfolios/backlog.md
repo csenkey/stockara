@@ -6,49 +6,50 @@ Implement an offline-first historical portfolio simulator that tests versioned S
 
 ## Tasks
 
-- [ ] 1. Spec alignment and scope guardrails
-  - [ ] 1.1 Link this feature from `docs/steering/work-queue.md` and agent steering docs as a future portfolio-evaluation initiative.
+- [x] 1. Spec alignment and scope guardrails
+  - [x] 1.1 Link this feature from `docs/steering/work-queue.md` and agent steering docs as a future portfolio-evaluation initiative.
     - Emphasize that this is not real-user portfolio management.
     - Preserve traceability to current steering docs and product rules where trading/accounting rules overlap.
     - _Requirements: 10.1, 10.2, 10.3, 10.6_
 
-  - [ ] 1.2 Define the first supported backtest configuration schema.
+  - [x] 1.2 Define the first supported backtest configuration schema.
     - Create `backend/src/backtesting/config.py`.
     - Include date range, seed, portfolio count, commission rate, analysis strategy IDs, portfolio policy IDs, ETF baselines, execution timing, S3 prefix, and shadow windows.
-    - Validate defaults: start date `2022-01-01`, portfolio count `100`, initial capital `10000.00`, commission rate `0.01`.
+    - Validate defaults: start date `2022-01-01`, portfolio count `20`, initial capital `10000.00`, commission rate `0.01`.
+    - Default to fixture-only recommendation replay and reduced-evidence labeling to avoid unintended AI cost.
     - _Requirements: 3.1, 3.2, 4.1, 4.6, 6.1, 7.4, 8.2, 9.2_
 
-  - [ ] 1.3 Define the analysis strategy steering and registry files.
+  - [x] 1.3 Define the analysis strategy steering and registry files.
     - Create `docs/steering/analysis-strategies/README.md`.
     - Create `docs/steering/analysis-strategies/analysis_strategy_schema.md`.
     - Create `docs/steering/analysis-strategies/strategy_registry.md`.
     - Document the distinction between `AnalysisStrategy` and `PortfolioPolicy`.
     - _Requirements: 4.1, 4.2, 4.10_
 
-- [ ] 2. Backtesting package and core models
-  - [ ] 2.1 Create `backend/src/backtesting/` package.
+- [x] 2. Backtesting package and core models
+  - [x] 2.1 Create `backend/src/backtesting/` package.
     - Add `__init__.py`, `models.py`, `simulator.py`, `analysis_strategy.py`, `portfolio_policies.py`, `shadows.py`, `metrics.py`, `reporting.py`, `data_loader.py`, `portfolio_generator.py`, and `cli.py`.
     - Keep implementation separate from authenticated portfolio services.
     - _Requirements: 11.1, 11.2, 11.3_
 
-  - [ ] 2.2 Define Pydantic or dataclass models for simulation state.
+  - [x] 2.2 Define Pydantic or dataclass models for simulation state.
     - Define `BacktestPortfolio`, `BacktestHolding`, `BacktestTransaction`, `BacktestSnapshot`, `DecisionShadow`, `BacktestRunSummary`, and `BacktestMetricSummary`.
     - Use Decimal-compatible fields for cash, prices, commissions, and values.
     - _Requirements: 6.1, 6.5, 6.6, 7.2, 9.1_
 
-  - [ ] 2.3 Define `AnalysisStrategy` manifest models.
+  - [x] 2.3 Define `AnalysisStrategy` manifest models.
     - Include strategy ID, status, parent ID, git commit, preselection flow, predicates, filters, scoring weights, candidate limits, prompt templates, AI models, review gates, publication rules, and evidence usage.
     - Add manifest validation for required fields and stable IDs.
     - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5_
 
-  - [ ] 2.4 Freeze the current hardcoded analyzer behavior as the first baseline strategy.
+  - [x] 2.4 Freeze the current hardcoded analyzer behavior as the first baseline strategy.
     - Create `configs/analysis-strategies/analysis_strategy_current.yaml`.
     - Register it as baseline in steering docs.
     - Include current preselection, prompt, model, review, suppression, and publication behavior as accurately as current code allows.
     - _Requirements: 4.1, 4.2, 4.6, 4.10_
 
 - [ ] 3. Historical price and ETF data loading
-  - [ ] 3.1 Implement a historical market data loader interface.
+  - [x] 3.1 Implement a historical market data loader interface.
     - Load ticker metadata and daily OHLCV rows from existing repositories or local fixtures.
     - Require an `as_of` or decision date filter.
     - Return clear incomplete-data states.
@@ -60,7 +61,7 @@ Implement an offline-first historical portfolio simulator that tests versioned S
     - _Requirements: 1.3, 1.4, 7.2, 7.3_
 
   - [ ] 3.3 Add tests for price-window and missing-data behavior.
-    - Prove future price rows are excluded.
+    - [x] Prove future price rows are excluded.
     - Prove stale/missing prices mark valuations incomplete.
     - Prove ETF data follows the same valuation rules as stocks.
     - _Requirements: 1.5, 1.6, 2.1, 9.6_
@@ -87,23 +88,24 @@ Implement an offline-first historical portfolio simulator that tests versioned S
     - _Requirements: 3.1, 3.3, 3.5, 3.6, 9.7_
 
 - [ ] 5. Commission-aware simulation engine
-  - [ ] 5.1 Implement buy, sell, hold, and valuation primitives.
+  - [x] 5.1 Implement buy, sell, hold, and valuation primitives.
     - Buy whole shares only.
     - Prevent negative cash.
     - Charge configurable commission on buys and sells.
     - Sell all shares for accepted liquidation signals.
     - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.8_
 
-  - [ ] 5.2 Implement daily portfolio snapshots.
+  - [x] 5.2 Implement daily portfolio snapshots.
     - Include cash, holdings value, total value, realized gain/loss, unrealized gain/loss, and commission paid to date.
     - Mark snapshot data quality when prices are incomplete.
     - _Requirements: 5.6, 5.7, 5.8_
 
   - [ ] 5.3 Add accounting property tests.
-    - Prove cash never becomes negative after valid execution.
-    - Prove commission equals configured percentage of gross trade value.
-    - Prove sell liquidation cannot leave negative holdings.
-    - Prove daily snapshots reconcile cash plus holdings value.
+    - [x] Prove cash never becomes negative after valid execution with focused unit tests.
+    - [x] Prove commission equals configured percentage of gross trade value with focused unit tests.
+    - [x] Prove sell liquidation cannot leave negative holdings with focused unit tests.
+    - [ ] Prove the same accounting invariants with property tests.
+    - [ ] Prove daily snapshots reconcile cash plus holdings value with property tests.
     - _Requirements: 9.1, 9.2, 9.3, 9.8_
 
 - [ ] 6. Analysis strategy replay and comparison

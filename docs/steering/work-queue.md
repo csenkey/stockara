@@ -14,28 +14,37 @@ Other backlog-like files are reference material unless this file links to them a
 
 ## Current Priority Order
 
-### 1. Phase 1 Production Analysis Gating
+### 1. Backtest Support With Shadowed Portfolios
 
-Status: Implemented locally; needs deployment verification.
+Status: Active implementation. Offline framework foundation implemented; decision-grade data ingestion and historical recommendation replay remain open.
 
-Goal: Daily analysis should run only after collection coverage gates are satisfied, then publish with explicit coverage and suppression behavior.
+Goal: Compare versioned `AnalysisStrategy` snapshots using deterministic historical simulations, shadow portfolios, ETF baselines, and S3 artifacts.
 
-Source detail:
+Canonical feature backlog:
 
-- Historical detailed backlog: `BACKLOG.md`, section `Immediate Priority: Rock-Solid Data Collection`
+- `docs/steering/features/backtest-support-with-shadowed-portfolios/backlog.md`
 
-Completed locally:
+First milestone:
 
-- Update the analyzer/publisher so daily analysis runs once after collection gates: cheap filters -> AI analysis -> stronger AI review -> publish.
+- One bounded 365-day benchmark window, initially 2022 for a stress/bearish year.
+- 20 deterministic portfolios starting with USD 10,000.00 for budget-controlled comparison runs.
+- Freeze current hardcoded analyzer behavior as `analysis_strategy_current`.
+- Compare one candidate `AnalysisStrategy` against the current baseline.
+- Store all artifacts in S3.
 
-Next executable item:
+Completed setup tasks:
 
-- Run full relevant local checks, commit, push to `main`, watch deployment, then smoke test that the scheduled Phase 1 publisher waits on collection gates and publishes once gates pass.
+- Define the first supported backtest configuration schema.
+- Define analysis strategy steering and registry files.
+- Define `AnalysisStrategy` manifest models.
+- Freeze current hardcoded analyzer behavior as the first baseline strategy.
+- Create the initial `backend/src/backtesting/` package with offline-only replay, accounting primitives, shadow helpers, S3 artifact path planning, fixture market data loader, and tests.
 
-Why this is still above backtesting:
+Next executable items:
 
-- Backtesting is valuable only if the production analyzer/data pipeline has clear gating, provenance, and publication semantics.
-- This item also helps define the first baseline `AnalysisStrategy`.
+- Implement full initial allocation from historical price-supported ticker universes.
+- Add S3-backed historical OHLCV/ETF loader and artifact writer.
+- Add cached recommendation artifact loading keyed by analysis strategy, ticker, date, model, prompt version, evidence hash, and schema version.
 
 ### 2. Calendar and Historical Evidence Foundation
 
@@ -60,32 +69,7 @@ Why this matters:
 - Backtest promotion should not rely on reduced-evidence runs.
 - Earnings/dividend context is required by the S3-backed backtest evidence snapshot.
 
-### 3. Backtest Support With Shadowed Portfolios
-
-Status: Proposed feature, ready for implementation planning.
-
-Goal: Compare versioned `AnalysisStrategy` snapshots using deterministic historical simulations, shadow portfolios, ETF baselines, and S3 artifacts.
-
-Canonical feature backlog:
-
-- `docs/steering/features/backtest-support-with-shadowed-portfolios/backlog.md`
-
-First milestone:
-
-- One bounded 365-day benchmark window, initially 2022 for a stress/bearish year.
-- 20 deterministic portfolios starting with USD 10,000.00 for budget-controlled comparison runs.
-- Freeze current hardcoded analyzer behavior as `analysis_strategy_current`.
-- Compare one candidate `AnalysisStrategy` against the current baseline.
-- Store all artifacts in S3.
-
-Immediate setup tasks:
-
-- Define the first supported backtest configuration schema.
-- Define analysis strategy steering and registry files.
-- Define `AnalysisStrategy` manifest models.
-- Freeze current hardcoded analyzer behavior as the first baseline strategy.
-
-### 4. Phase 1 UI and Static Artifact Refinement
+### 3. Phase 1 UI and Static Artifact Refinement
 
 Status: Proposed/secondary.
 
@@ -103,6 +87,22 @@ Representative open items:
 - Add frontend tests or build checks for rendering empty, loading, successful, and stale-artifact states.
 
 ## Completed Or Historical Sources
+
+### Phase 1 Production Analysis Gating
+
+Status: Done and deployed.
+
+Goal: Daily analysis should run only after collection coverage gates are satisfied, then publish with explicit coverage and suppression behavior.
+
+Deployment:
+
+- Commit `087bab3` deployed successfully through GitHub Actions run `28867910920`.
+- CI passed local-equivalent checks, CDK deploy, deployed API smoke test, and static artifact smoke test.
+
+Why this mattered:
+
+- Backtesting is valuable only if the production analyzer/data pipeline has clear gating, provenance, and publication semantics.
+- This item also helped define the first baseline `AnalysisStrategy`.
 
 ### Phase 1 Must-Have Backlog
 
