@@ -1948,6 +1948,64 @@ def test_collection_manifest_coverage_targets_wait_for_collection_gates():
     assert "collection coverage gates" in payload["data_warnings"][0]
 
 
+def test_collection_manifest_news_gate_is_advisory_when_required_gates_pass():
+    run_date = date(2026, 6, 17)
+    manifest_payload = {
+        "manifest_date": run_date.isoformat(),
+        "generated_at": "2026-06-17T07:30:00Z",
+        "updated_at": "2026-06-17T08:00:00Z",
+        "active_ticker_count": 1,
+        "task_types": ["price", "news", "earnings", "dividend"],
+        "tasks": [],
+        "summary": {
+            "total_tasks": 0,
+            "coverage_gates": [
+                {
+                    "name": "price_freshness",
+                    "passed": True,
+                    "observed_value": "0.95",
+                    "required_value": "0.9",
+                    "unit": "ratio",
+                },
+                {
+                    "name": "news_freshness",
+                    "passed": False,
+                    "observed_value": "0.05",
+                    "required_value": "1",
+                    "unit": "ratio",
+                    "message": "News chunks are incomplete.",
+                },
+                {
+                    "name": "calendar_coverage",
+                    "passed": True,
+                    "observed_value": "0.95",
+                    "required_value": "0.9",
+                    "unit": "ratio",
+                },
+            ],
+        },
+    }
+    body = SimpleNamespace(
+        read=lambda: phase1_pipeline.json.dumps(manifest_payload).encode("utf-8")
+    )
+    with (
+        patch("src.analysis.phase1_pipeline.ARTIFACT_BUCKET", "artifact-bucket"),
+        patch("src.analysis.phase1_pipeline.boto3.client") as client,
+        patch("src.analysis.phase1_pipeline._emit_metric") as emit_metric,
+        patch("src.analysis.phase1_pipeline.publish_payload") as publish_payload,
+    ):
+        client.return_value.get_object.return_value = {"Body": body}
+        result = phase1_pipeline._collection_gate_response(
+            run_date,
+            publish_status_artifact=True,
+        )
+
+    assert result is None
+    publish_payload.assert_not_called()
+    emit_metric.assert_any_call("collection_coverage_targets_below_threshold", 1)
+    emit_metric.assert_any_call("collection_gates_open", 1)
+
+
 def test_collection_manifest_missing_waits_for_manifest():
     run_date = date(2026, 6, 17)
     with (
@@ -2079,6 +2137,58 @@ def test_collection_manifest_quality_metadata_is_added_when_available():
         "collection_manifest/2026-06-17.json"
     )
     assert quality["collection_manifest"]["summary"]["coverage_gates"][0]["passed"] is True
+
+
+def test_collection_manifest_quality_warns_when_optional_news_gate_is_degraded():
+    run_date = date(2026, 6, 17)
+    manifest_payload = {
+        "manifest_date": run_date.isoformat(),
+        "generated_at": "2026-06-17T07:30:00Z",
+        "updated_at": "2026-06-17T08:00:00Z",
+        "active_ticker_count": 1000,
+        "task_types": ["price", "news", "earnings", "dividend"],
+        "tasks": [],
+        "summary": {
+            "total_tasks": 4,
+            "succeeded_tasks": 3,
+            "total_tickers": 1000,
+            "successful_tickers": 1000,
+            "coverage_ratio": "1.0",
+            "coverage_gates": [
+                {
+                    "name": "price_freshness",
+                    "passed": True,
+                    "observed_value": "1.0",
+                    "required_value": "0.9",
+                    "unit": "ratio",
+                },
+                {
+                    "name": "news_freshness",
+                    "passed": False,
+                    "observed_value": "0.25",
+                    "required_value": "1",
+                    "unit": "ratio",
+                    "message": "News chunks are incomplete.",
+                },
+            ],
+        },
+    }
+    body = SimpleNamespace(
+        read=lambda: phase1_pipeline.json.dumps(manifest_payload).encode("utf-8")
+    )
+    with (
+        patch("src.analysis.phase1_pipeline.ARTIFACT_BUCKET", "artifact-bucket"),
+        patch("src.analysis.phase1_pipeline.boto3.client") as client,
+    ):
+        client.return_value.get_object.return_value = {"Body": body}
+        quality = phase1_pipeline._with_collection_manifest_quality(
+            {"coverage_status": "complete", "warnings": []},
+            run_date,
+        )
+
+    assert quality["warnings"] == [
+        "Publication is continuing with degraded optional data: News chunks are incomplete."
+    ]
 
 
 def test_run_phase1_pipeline_scores_only_eligible_tickers_when_coverage_is_partial():

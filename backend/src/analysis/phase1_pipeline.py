@@ -40,6 +40,7 @@ EARNINGS_HISTORY_DAYS = int(os.environ.get("PHASE1_EARNINGS_HISTORY_DAYS", "730"
 DIVIDEND_LOOKAHEAD_DAYS = int(os.environ.get("PHASE1_DIVIDEND_LOOKAHEAD_DAYS", "60"))
 DIVIDEND_HISTORY_DAYS = int(os.environ.get("PHASE1_DIVIDEND_HISTORY_DAYS", "730"))
 CLOUDWATCH_NAMESPACE = "StockaraPhase1"
+ADVISORY_COLLECTION_GATES = {"news_freshness"}
 FALLBACK_CONFIDENCE_CAP = int(os.environ.get("PHASE1_FALLBACK_CONFIDENCE_CAP", "55"))
 ALLOW_FALLBACK_ACTIONABLE_RECOMMENDATIONS = (
     os.environ.get("PHASE1_ALLOW_FALLBACK_ACTIONABLE_RECOMMENDATIONS", "false").lower()
@@ -483,12 +484,29 @@ def _collection_gate_response(
         return {"statusCode": 202, "body": response_body}
 
     failed_gates = [gate for gate in manifest.summary.coverage_gates if not gate.passed]
-    if not failed_gates:
+    blocking_failed_gates = [
+        gate for gate in failed_gates if gate.name not in ADVISORY_COLLECTION_GATES
+    ]
+    advisory_failed_gates = [
+        gate for gate in failed_gates if gate.name in ADVISORY_COLLECTION_GATES
+    ]
+    if not blocking_failed_gates:
+        if advisory_failed_gates:
+            logger.warning(
+                "phase1_collection_advisory_gates_degraded",
+                advisory_gates=[gate.name for gate in advisory_failed_gates],
+                manifest_key=manifest.s3_key,
+            )
+            _emit_metric(
+                "collection_coverage_targets_below_threshold",
+                len(advisory_failed_gates),
+            )
         _emit_metric("collection_gates_open", 1)
         return None
     logger.warning(
         "phase1_collection_gates_closed",
-        failed_gates=[gate.name for gate in failed_gates],
+        failed_gates=[gate.name for gate in blocking_failed_gates],
+        advisory_gates=[gate.name for gate in advisory_failed_gates],
         manifest_key=manifest.s3_key,
     )
     _emit_metric("collection_coverage_targets_below_threshold", len(failed_gates))
@@ -507,7 +525,17 @@ def _collection_gate_response(
                 "unit": gate.unit,
                 "message": gate.message,
             }
-            for gate in failed_gates
+            for gate in blocking_failed_gates
+        ],
+        "advisory_gates": [
+            {
+                "name": gate.name,
+                "observed_value": str(gate.observed_value),
+                "required_value": str(gate.required_value),
+                "unit": gate.unit,
+                "message": gate.message,
+            }
+            for gate in advisory_failed_gates
         ],
     }
     if publish_status_artifact:
@@ -519,11 +547,24 @@ def _collection_gate_response(
                 "Publication waiting: collection coverage gates have not passed.",
                 *[
                     gate.message or f"{gate.name} is below threshold."
-                    for gate in failed_gates
+                    for gate in blocking_failed_gates
                 ],
+                *_collection_manifest_advisory_warnings(manifest),
             ],
         )
     return {"statusCode": 202, "body": response_body}
+
+
+def _collection_manifest_advisory_warnings(manifest: CollectionManifest) -> list[str]:
+    warnings: list[str] = []
+    for gate in manifest.summary.coverage_gates:
+        if gate.passed or gate.name not in ADVISORY_COLLECTION_GATES:
+            continue
+        message = gate.message or f"{gate.name} is below threshold."
+        warnings.append(
+            f"Publication is continuing with degraded optional data: {message}"
+        )
+    return warnings
 
 
 def _publish_collection_gate_status(
@@ -576,8 +617,13 @@ def _with_collection_manifest_quality(
     manifest = _load_collection_manifest(run_date)
     if manifest is None:
         return data_quality
+    warnings = list(data_quality.get("warnings") or [])
+    for warning in _collection_manifest_advisory_warnings(manifest):
+        if warning not in warnings:
+            warnings.append(warning)
     return {
         **data_quality,
+        "warnings": warnings,
         "collection_manifest": {
             "manifest_key": manifest.s3_key,
             "manifest_date": manifest.manifest_date.isoformat(),
