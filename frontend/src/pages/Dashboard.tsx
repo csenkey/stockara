@@ -172,8 +172,11 @@ interface DataQuality {
 }
 
 interface TopPicksPayload {
+  artifact_type?: string;
   publication_date: string;
   generated_at: string;
+  publication_status?: string;
+  suppression_reason?: string;
   top_picks: TopPick[];
   sell_alerts: SellAlert[];
   review_rejections?: ReviewRejection[];
@@ -183,9 +186,56 @@ interface TopPicksPayload {
   data_warnings: string[];
 }
 
+interface PublicationStatusPayload {
+  artifact_type?: string;
+  publication_date: string;
+  generated_at: string;
+  publication_status?: string;
+  suppression_reason?: string;
+  candidate_count?: number;
+  analyzed_count?: number;
+  data_quality?: DataQuality;
+  data_warnings: string[];
+}
+
 const TOP_PICKS_URL =
   import.meta.env.VITE_TOP_PICKS_URL || "/top-picks/latest.json";
+const TOP_PICKS_STATUS_URL =
+  import.meta.env.VITE_TOP_PICKS_STATUS_URL || statusUrlFor(TOP_PICKS_URL);
 const DEV_DEMO_PAYLOAD = createDemoPayload();
+const TRANSIENT_GATE_REASONS = new Set([
+  "collection_manifest_missing",
+  "analysis_not_before",
+  "coverage_gates_failed",
+]);
+
+function statusUrlFor(url: string) {
+  return url.replace("/top-picks/latest.json", "/top-picks/status/latest.json");
+}
+
+function historyUrlFor(publicationDate: string) {
+  return TOP_PICKS_URL.replace(
+    "/top-picks/latest.json",
+    `/top-picks/history/${publicationDate}.json`,
+  );
+}
+
+function previousPublicationDate(publicationDate: string) {
+  const date = new Date(`${publicationDate}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() - 1);
+  return date.toISOString().slice(0, 10);
+}
+
+function isTransientGatePayload(payload: TopPicksPayload | PublicationStatusPayload) {
+  if (payload.artifact_type === "collection_gate_status") return true;
+  if (payload.publication_status === "waiting") return true;
+  return (
+    payload.publication_status === "suppressed" &&
+    TRANSIENT_GATE_REASONS.has(payload.suppression_reason ?? "") &&
+    (payload.candidate_count ?? 0) === 0 &&
+    (payload.analyzed_count ?? 0) === 0
+  );
+}
 
 function badgeClass(value: string) {
   switch (value) {
@@ -538,8 +588,27 @@ interface DashboardProps {
 
 export default function Dashboard({ onNavigate }: DashboardProps) {
   const [payload, setPayload] = useState<TopPicksPayload | null>(null);
+  const [statusPayload, setStatusPayload] = useState<PublicationStatusPayload | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+
+  async function loadOptionalStatus() {
+    try {
+      const response = await fetch(TOP_PICKS_STATUS_URL, { cache: "no-store" });
+      if (!response.ok) return null;
+      const status = (await response.json()) as PublicationStatusPayload;
+      return isTransientGatePayload(status) ? status : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function loadPreviousCompletedPublication(transientPayload: TopPicksPayload) {
+    const previousDate = previousPublicationDate(transientPayload.publication_date);
+    const response = await fetch(historyUrlFor(previousDate), { cache: "no-store" });
+    if (!response.ok) return null;
+    return (await response.json()) as TopPicksPayload;
+  }
 
   async function loadTopPicks() {
     setLoading(true);
@@ -549,10 +618,20 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
-      setPayload(await response.json());
+      const latestPayload = (await response.json()) as TopPicksPayload;
+      const latestStatus = await loadOptionalStatus();
+      if (isTransientGatePayload(latestPayload)) {
+        const fallbackPayload = await loadPreviousCompletedPublication(latestPayload);
+        setPayload(fallbackPayload ?? latestPayload);
+        setStatusPayload(latestStatus ?? latestPayload);
+        return;
+      }
+      setPayload(latestPayload);
+      setStatusPayload(latestStatus);
     } catch {
       if (import.meta.env.DEV) {
         setPayload(DEV_DEMO_PAYLOAD);
+        setStatusPayload(null);
         return;
       }
       setError("Daily top picks have not been published yet.");
@@ -570,6 +649,12 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
     return formatDate(payload.generated_at);
   }, [payload]);
   const reviewRejections = payload?.review_rejections ?? [];
+  const statusIsForDisplayedPublication =
+    statusPayload?.publication_date === payload?.publication_date;
+  const currentStatusWarnings =
+    statusPayload && !statusIsForDisplayedPublication
+      ? statusPayload.data_warnings
+      : [];
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
@@ -645,6 +730,27 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
 
         {!loading && payload && (
           <div className="space-y-8">
+            {statusPayload && !statusIsForDisplayedPublication && (
+              <section>
+                <h2 className="mb-3 text-lg font-semibold">
+                  Current Publication Status
+                </h2>
+                <div className="border border-amber-700 bg-amber-950 p-4 text-sm text-amber-100">
+                  <p className="font-medium">
+                    {statusPayload.publication_date} publication is still waiting.
+                    Showing the latest completed publication from {payload.publication_date}.
+                  </p>
+                  {currentStatusWarnings.length > 0 && (
+                    <ul className="mt-2 space-y-1">
+                      {currentStatusWarnings.map((warning, index) => (
+                        <li key={`${warning}-${index}`}>{warning}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </section>
+            )}
+
             <section>
               <h2 className="mb-3 text-lg font-semibold">Top Picks</h2>
               {payload.top_picks.length === 0 ? (

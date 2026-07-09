@@ -573,6 +573,7 @@ def _publish_collection_gate_status(
     manifest: CollectionManifest | None = None,
     warnings: list[str] | None = None,
 ) -> None:
+    generated_at = datetime.utcnow().isoformat()
     data_quality: dict[str, Any] = {
         "coverage_status": "waiting_for_collection_gates",
         "warnings": warnings or [],
@@ -589,12 +590,18 @@ def _publish_collection_gate_status(
             "active_ticker_count": manifest.active_ticker_count,
             "summary": manifest.summary.model_dump(mode="json"),
         }
-    _publish_suppressed_publication(
-        run_date,
-        reason=gate_status["reason"],
-        warnings=warnings or [],
-        data_quality=data_quality,
-    )
+    payload = {
+        "artifact_type": "collection_gate_status",
+        "publication_date": run_date.isoformat(),
+        "generated_at": generated_at,
+        "publication_status": "waiting",
+        "suppression_reason": gate_status["reason"],
+        "candidate_count": 0,
+        "analyzed_count": 0,
+        "data_quality": data_quality,
+        "data_warnings": warnings or [],
+    }
+    publish_collection_status_payload(payload, run_date)
 
 
 def _load_collection_manifest(run_date: date) -> CollectionManifest | None:
@@ -716,6 +723,35 @@ def _publish_suppressed_publication(
         "data_warnings": warnings,
     }
     publish_payload(payload, run_date)
+
+
+def publish_collection_status_payload(payload: dict[str, Any], run_date: date) -> None:
+    """Publish transient collection-gate status without replacing latest picks."""
+    if not ARTIFACT_BUCKET:
+        return
+    s3 = boto3.client("s3")
+    body = json.dumps(payload, indent=2, default=str).encode("utf-8")
+    keys = [
+        "top-picks/status/latest.json",
+        f"top-picks/status/history/{run_date.isoformat()}.json",
+    ]
+    try:
+        for key in keys:
+            s3.put_object(
+                Bucket=ARTIFACT_BUCKET,
+                Key=key,
+                Body=body,
+                ContentType="application/json",
+                CacheControl="public, max-age=300",
+            )
+    except Exception as exc:
+        logger.error(
+            "collection_status_artifact_publish_failed",
+            bucket=ARTIFACT_BUCKET,
+            error=str(exc),
+        )
+        _emit_metric("artifact_publish_failures", 1)
+        raise
 
 
 def score_candidates(stocks: list[dict[str, Any]], run_date: date) -> list[dict[str, Any]]:

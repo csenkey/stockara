@@ -10,6 +10,10 @@ venv/
 .pytest_cache/
 .hypothesis/
 
+# Manual/raw market data imports
+data/backtest-import/raw/
+data/backtest-import/normalized/
+
 # Node
 node_modules/
 frontend/dist/

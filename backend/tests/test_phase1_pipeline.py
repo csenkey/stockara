@@ -21,6 +21,7 @@ from src.analysis.phase1_pipeline import (
     analyze_shortlist,
     build_publication_payload,
     evaluate_data_freshness,
+    publish_collection_status_payload,
     publish_payload,
     run_phase1_pipeline,
     score_candidates,
@@ -1661,6 +1662,33 @@ def test_publish_payload_writes_latest_and_history_artifacts():
     emit_metric.assert_called_once_with("artifact_publish_failures", 0)
 
 
+def test_publish_collection_status_payload_writes_status_artifacts_only():
+    payload = {
+        "artifact_type": "collection_gate_status",
+        "publication_date": "2026-06-17",
+        "generated_at": "2026-06-17T21:00:00",
+        "publication_status": "waiting",
+        "suppression_reason": "analysis_not_before",
+        "candidate_count": 0,
+        "analyzed_count": 0,
+        "data_quality": {},
+        "data_warnings": ["Publication waiting: configured analysis window has not opened."],
+    }
+
+    with (
+        patch.object(phase1_pipeline, "ARTIFACT_BUCKET", "stockara-artifacts"),
+        patch("src.analysis.phase1_pipeline.boto3.client") as boto_client,
+    ):
+        publish_collection_status_payload(payload, date(2026, 6, 17))
+
+    s3 = boto_client.return_value
+    keys = [call.kwargs["Key"] for call in s3.put_object.call_args_list]
+    assert keys == [
+        "top-picks/status/latest.json",
+        "top-picks/status/history/2026-06-17.json",
+    ]
+
+
 def test_publish_payload_emits_failure_metric_when_s3_write_fails():
     payload = {
         "publication_date": "2026-06-17",
@@ -1924,7 +1952,9 @@ def test_collection_manifest_coverage_targets_wait_for_collection_gates():
         patch("src.analysis.phase1_pipeline.ARTIFACT_BUCKET", "artifact-bucket"),
         patch("src.analysis.phase1_pipeline.boto3.client") as client,
         patch("src.analysis.phase1_pipeline._emit_metric") as emit_metric,
-        patch("src.analysis.phase1_pipeline.publish_payload") as publish_payload,
+        patch(
+            "src.analysis.phase1_pipeline.publish_collection_status_payload"
+        ) as publish_status,
     ):
         client.return_value.get_object.return_value = {"Body": body}
         result = phase1_pipeline._collection_gate_response(
@@ -1938,14 +1968,16 @@ def test_collection_manifest_coverage_targets_wait_for_collection_gates():
     assert result["body"]["failed_gates"][0]["name"] == "price_freshness"
     emit_metric.assert_any_call("collection_coverage_targets_below_threshold", 1)
     emit_metric.assert_any_call("collection_gates_closed", 1)
-    payload = publish_payload.call_args.args[0]
-    assert payload["publication_status"] == "suppressed"
+    payload = publish_status.call_args.args[0]
+    assert payload["artifact_type"] == "collection_gate_status"
+    assert payload["publication_status"] == "waiting"
     assert payload["suppression_reason"] == "coverage_gates_failed"
     assert payload["data_quality"]["coverage_status"] == "waiting_for_collection_gates"
     assert payload["data_quality"]["collection_manifest"]["manifest_key"] == (
         "collection_manifest/2026-06-17.json"
     )
     assert "collection coverage gates" in payload["data_warnings"][0]
+    assert publish_status.call_args.args[1] == run_date
 
 
 def test_collection_manifest_news_gate_is_advisory_when_required_gates_pass():
@@ -1993,6 +2025,9 @@ def test_collection_manifest_news_gate_is_advisory_when_required_gates_pass():
         patch("src.analysis.phase1_pipeline.boto3.client") as client,
         patch("src.analysis.phase1_pipeline._emit_metric") as emit_metric,
         patch("src.analysis.phase1_pipeline.publish_payload") as publish_payload,
+        patch(
+            "src.analysis.phase1_pipeline.publish_collection_status_payload"
+        ) as publish_status,
     ):
         client.return_value.get_object.return_value = {"Body": body}
         result = phase1_pipeline._collection_gate_response(
@@ -2002,6 +2037,7 @@ def test_collection_manifest_news_gate_is_advisory_when_required_gates_pass():
 
     assert result is None
     publish_payload.assert_not_called()
+    publish_status.assert_not_called()
     emit_metric.assert_any_call("collection_coverage_targets_below_threshold", 1)
     emit_metric.assert_any_call("collection_gates_open", 1)
 
@@ -2012,7 +2048,9 @@ def test_collection_manifest_missing_waits_for_manifest():
         patch("src.analysis.phase1_pipeline.ARTIFACT_BUCKET", "artifact-bucket"),
         patch("src.analysis.phase1_pipeline.boto3.client") as client,
         patch("src.analysis.phase1_pipeline._emit_metric") as emit_metric,
-        patch("src.analysis.phase1_pipeline.publish_payload") as publish_payload,
+        patch(
+            "src.analysis.phase1_pipeline.publish_collection_status_payload"
+        ) as publish_status,
     ):
         client.return_value.get_object.side_effect = RuntimeError("missing")
         result = phase1_pipeline._collection_gate_response(
@@ -2031,7 +2069,9 @@ def test_collection_manifest_missing_waits_for_manifest():
         },
     }
     emit_metric.assert_called_once_with("collection_gates_closed", 1)
-    payload = publish_payload.call_args.args[0]
+    payload = publish_status.call_args.args[0]
+    assert payload["artifact_type"] == "collection_gate_status"
+    assert payload["publication_status"] == "waiting"
     assert payload["suppression_reason"] == "collection_manifest_missing"
     assert payload["data_quality"]["collection_gate"]["manifest_key"] == (
         "collection_manifest/2026-06-17.json"
@@ -2077,7 +2117,9 @@ def test_collection_manifest_analysis_window_waits_until_not_before():
         patch("src.analysis.phase1_pipeline.boto3.client") as client,
         patch("src.analysis.phase1_pipeline.datetime", FixedDateTime),
         patch("src.analysis.phase1_pipeline._emit_metric") as emit_metric,
-        patch("src.analysis.phase1_pipeline.publish_payload") as publish_payload,
+        patch(
+            "src.analysis.phase1_pipeline.publish_collection_status_payload"
+        ) as publish_status,
     ):
         client.return_value.get_object.return_value = {"Body": body}
         result = phase1_pipeline._collection_gate_response(
@@ -2089,7 +2131,9 @@ def test_collection_manifest_analysis_window_waits_until_not_before():
     assert result["body"]["stage"] == "waiting_for_analysis_window"
     assert result["body"]["analysis_not_before"] == "2026-06-17T22:00:00+00:00"
     emit_metric.assert_called_once_with("collection_gates_closed", 1)
-    payload = publish_payload.call_args.args[0]
+    payload = publish_status.call_args.args[0]
+    assert payload["artifact_type"] == "collection_gate_status"
+    assert payload["publication_status"] == "waiting"
     assert payload["suppression_reason"] == "analysis_not_before"
 
 
