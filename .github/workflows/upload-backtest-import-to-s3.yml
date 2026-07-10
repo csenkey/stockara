@@ -1,0 +1,217 @@
+name: Upload Backtest Import To S3
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_url:
+        description: Direct HTTPS URL to a zip or tar.gz containing downloaded provider files
+        required: true
+      archive_format:
+        description: Archive format
+        required: true
+        default: zip
+        type: choice
+        options:
+          - zip
+          - tar.gz
+      provider:
+        description: Provider layout to stage
+        required: true
+        default: tiingo
+        type: choice
+        options:
+          - tiingo
+          - alpha_vantage
+      archive_subdir:
+        description: Subdirectory inside the archive to upload; use . when archive root is already the provider folder
+        required: true
+        default: "."
+      bucket:
+        description: Destination S3 bucket; blank resolves the Stockara artifact bucket
+        required: false
+        default: ""
+      s3_prefix:
+        description: Destination S3 prefix; blank uses the provider's backtest raw prefix
+        required: false
+        default: ""
+      start_tiingo_backfill:
+        description: Invoke stock collector Tiingo backfill after upload
+        required: true
+        default: false
+        type: boolean
+      tiingo_max_files:
+        description: Tiingo CSV files to import in the kick-off invocation
+        required: true
+        default: "10"
+      tiingo_continue_backfill:
+        description: Let the stock collector asynchronously continue after the kick-off invocation
+        required: true
+        default: true
+        type: boolean
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+jobs:
+  upload:
+    name: Upload backtest import archive
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Validate inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ inputs.source_url }}" != https://* ]]; then
+            echo "source_url must be an HTTPS URL."
+            exit 1
+          fi
+          if ! [[ "${{ inputs.tiingo_max_files }}" =~ ^[0-9]+$ ]] || [[ "${{ inputs.tiingo_max_files }}" -lt 1 ]]; then
+            echo "tiingo_max_files must be a positive integer."
+            exit 1
+          fi
+          if [[ "${{ inputs.archive_subdir }}" == /* || "${{ inputs.archive_subdir }}" == *".."* ]]; then
+            echo "archive_subdir must be a safe relative path."
+            exit 1
+          fi
+
+      - name: Check AWS OIDC role configuration
+        run: |
+          if [[ -z "${{ secrets.AWS_ROLE_TO_ASSUME }}" ]]; then
+            echo "Missing GitHub secret AWS_ROLE_TO_ASSUME."
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: stockara-backtest-import-upload-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve artifact bucket and destination prefix
+        shell: bash
+        env:
+          INPUT_BUCKET: ${{ inputs.bucket }}
+          INPUT_PREFIX: ${{ inputs.s3_prefix }}
+          CONFIGURED_ARTIFACT_BUCKET: ${{ vars.STOCKARA_ARTIFACT_BUCKET || '' }}
+          PROVIDER: ${{ inputs.provider }}
+        run: |
+          set -euo pipefail
+          bucket="$INPUT_BUCKET"
+          if [[ -z "$bucket" ]]; then
+            bucket="$CONFIGURED_ARTIFACT_BUCKET"
+          fi
+          if [[ -z "$bucket" ]]; then
+            bucket="$(aws cloudformation describe-stacks \
+              --stack-name StockMonitoringFrontend \
+              --query "Stacks[0].Outputs[?OutputKey=='BucketName'].OutputValue | [0]" \
+              --output text)"
+          fi
+          if [[ -z "$bucket" || "$bucket" == "None" ]]; then
+            echo "Unable to resolve artifact bucket."
+            exit 1
+          fi
+
+          prefix="$INPUT_PREFIX"
+          if [[ -z "$prefix" ]]; then
+            case "$PROVIDER" in
+              tiingo) prefix="backtests/data/raw/tiingo/" ;;
+              alpha_vantage) prefix="backtests/data/raw/alpha_vantage/" ;;
+              *) echo "Unsupported provider: $PROVIDER"; exit 1 ;;
+            esac
+          fi
+
+          echo "STOCKARA_ARTIFACT_BUCKET=$bucket" >> "$GITHUB_ENV"
+          echo "STOCKARA_DESTINATION_PREFIX=${prefix%/}/" >> "$GITHUB_ENV"
+
+      - name: Download and extract source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/backtest-import/archive /tmp/backtest-import/extracted
+          archive_path="/tmp/backtest-import/archive/source"
+
+          curl --fail --location --show-error \
+            --connect-timeout 30 \
+            --max-time 1800 \
+            --output "$archive_path" \
+            "${{ inputs.source_url }}"
+
+          case "${{ inputs.archive_format }}" in
+            zip)
+              unzip -q "$archive_path" -d /tmp/backtest-import/extracted
+              ;;
+            tar.gz)
+              tar -xzf "$archive_path" -C /tmp/backtest-import/extracted
+              ;;
+            *)
+              echo "Unsupported archive format: ${{ inputs.archive_format }}"
+              exit 1
+              ;;
+          esac
+
+      - name: Upload extracted files to S3
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_dir="/tmp/backtest-import/extracted/${{ inputs.archive_subdir }}"
+          if [[ ! -d "$source_dir" ]]; then
+            echo "Archive subdirectory does not exist: $source_dir"
+            echo "Top-level archive entries:"
+            find /tmp/backtest-import/extracted -maxdepth 2 -type d -print | sort
+            exit 1
+          fi
+
+          echo "Uploading $source_dir to s3://$STOCKARA_ARTIFACT_BUCKET/$STOCKARA_DESTINATION_PREFIX"
+          aws s3 sync "$source_dir/" "s3://$STOCKARA_ARTIFACT_BUCKET/$STOCKARA_DESTINATION_PREFIX" \
+            --no-progress \
+            --exclude ".DS_Store"
+
+          echo "Uploaded object sample:"
+          aws s3api list-objects-v2 \
+            --bucket "$STOCKARA_ARTIFACT_BUCKET" \
+            --prefix "$STOCKARA_DESTINATION_PREFIX" \
+            --max-keys 20 \
+            --query "Contents[].Key" \
+            --output text
+
+      - name: Invoke Tiingo backfill kick-off
+        if: ${{ inputs.start_tiingo_backfill }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ inputs.provider }}" != "tiingo" ]]; then
+            echo "start_tiingo_backfill can only be used with provider=tiingo."
+            exit 1
+          fi
+
+          payload="$(jq -n \
+            --arg bucket "$STOCKARA_ARTIFACT_BUCKET" \
+            --arg s3Prefix "$STOCKARA_DESTINATION_PREFIX" \
+            --argjson maxFiles "${{ inputs.tiingo_max_files }}" \
+            --argjson continueBackfill "${{ inputs.tiingo_continue_backfill }}" \
+            '{
+              mode: "tiingo_s3_backfill",
+              bucket: $bucket,
+              s3_prefix: $s3Prefix,
+              max_files: $maxFiles,
+              continue_backfill: $continueBackfill
+            }')"
+
+          echo "$payload"
+          aws lambda invoke \
+            --function-name stockara-stock-collector \
+            --log-type Tail \
+            --cli-read-timeout 900 \
+            --cli-binary-format raw-in-base64-out \
+            --payload "$payload" \
+            /tmp/tiingo-backfill-response.json > /tmp/tiingo-backfill-invoke.json
+          python -c "import base64, json; meta=json.load(open('/tmp/tiingo-backfill-invoke.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
+          python -c "import json, sys; meta=json.load(open('/tmp/tiingo-backfill-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
+          cat /tmp/tiingo-backfill-response.json
+          python -m json.tool /tmp/tiingo-backfill-response.json
