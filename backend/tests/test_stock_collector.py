@@ -39,6 +39,8 @@ from backend.src.collectors.stock_collector import (
     _parse_nasdaq_response,
     _parse_stooq_csv,
     _parse_stooq_backfill_txt,
+    _parse_tiingo_backfill_csv,
+    _tiingo_backfill_key_metadata,
     _stooq_backfill_ticker_from_key,
     _limit_stooq_backfill_records,
     _stooq_fallback_with_details,
@@ -932,6 +934,101 @@ class TestDueStockSelection:
         assert stored_records[0]["volume"] == 35127128
         assert stored_records[0]["price_adjustment"] == "adjusted"
 
+    def test_tiingo_s3_backfill_loads_uploaded_csv(self):
+        stocks = [{"ticker": "AAPL", "exchange": "NASDAQ", "currency": "USD"}]
+        body = MagicMock()
+        body.read.return_value = (
+            b"date,close,high,low,open,volume,adjClose,adjHigh,adjLow,adjOpen,adjVolume,divCash,splitFactor\n"
+            b"2022-12-01T00:00:00.000Z,148.31,149.13,146.61,148.21,71250416,146.95,147.76,145.27,146.86,71250416,0,1\n"
+        )
+        s3 = MagicMock()
+        s3.list_objects_v2.return_value = {
+            "Contents": [{"Key": "backtests/data/raw/tiingo/prices/stocks/AAPL.csv"}]
+        }
+        s3.get_object.return_value = {"Body": body}
+
+        with (
+            patch("backend.src.collectors.stock_collector.DatabasePool"),
+            patch(
+                "backend.src.collectors.stock_collector.store.active_stock_metadata",
+                return_value=stocks,
+            ),
+            patch("backend.src.collectors.stock_collector.boto3.client", return_value=s3),
+            patch(
+                "backend.src.collectors.stock_collector._store_stooq_backfill_records"
+            ) as store_records,
+            patch("backend.src.collectors.stock_collector._record_collection_summary"),
+            patch("backend.src.collectors.stock_collector._emit_metric"),
+            patch("backend.src.collectors.stock_collector._emit_collection_summary_metrics"),
+            patch("backend.src.collectors.stock_collector._record_tiingo_s3_backfill_status"),
+        ):
+            store_records.return_value = StoreResult(inserted_records=1)
+
+            result = handler(
+                {
+                    "mode": "tiingo_s3_backfill",
+                    "bucket": "stockara-artifacts",
+                    "s3_prefix": "backtests/data/raw/tiingo/",
+                    "max_files": 1,
+                },
+                None,
+            )
+
+        assert result["statusCode"] == 200
+        assert result["body"]["records_inserted"] == 1
+        stored_records = store_records.call_args.args[0]
+        assert stored_records[0]["ticker"] == "AAPL"
+        assert stored_records[0]["trading_date"] == date(2022, 12, 1)
+        assert stored_records[0]["close_price"] == Decimal("148.31")
+        assert stored_records[0]["adjusted_close_price"] == Decimal("146.95")
+        assert stored_records[0]["data_provider"] == "tiingo"
+        assert stored_records[0]["instrument_type"] == "stock"
+
+    def test_tiingo_s3_backfill_allows_etf_without_watchlist_metadata(self):
+        body = MagicMock()
+        body.read.return_value = (
+            b"date,close,high,low,open,volume,adjClose\n"
+            b"2022-12-01T00:00:00.000Z,407.38,410.00,404.75,408.77,76398200,397.22\n"
+        )
+        s3 = MagicMock()
+        s3.list_objects_v2.return_value = {
+            "Contents": [{"Key": "backtests/data/raw/tiingo/prices/etfs/SPY.csv"}]
+        }
+        s3.get_object.return_value = {"Body": body}
+
+        with (
+            patch("backend.src.collectors.stock_collector.DatabasePool"),
+            patch(
+                "backend.src.collectors.stock_collector.store.active_stock_metadata",
+                return_value=[{"ticker": "AAPL", "exchange": "NASDAQ", "currency": "USD"}],
+            ),
+            patch("backend.src.collectors.stock_collector.boto3.client", return_value=s3),
+            patch(
+                "backend.src.collectors.stock_collector._store_stooq_backfill_records"
+            ) as store_records,
+            patch("backend.src.collectors.stock_collector._record_collection_summary"),
+            patch("backend.src.collectors.stock_collector._emit_metric"),
+            patch("backend.src.collectors.stock_collector._emit_collection_summary_metrics"),
+            patch("backend.src.collectors.stock_collector._record_tiingo_s3_backfill_status"),
+        ):
+            store_records.return_value = StoreResult(inserted_records=1)
+
+            result = handler(
+                {
+                    "mode": "tiingo_s3_backfill",
+                    "bucket": "stockara-artifacts",
+                    "s3_prefix": "backtests/data/raw/tiingo/",
+                    "max_files": 1,
+                },
+                None,
+            )
+
+        assert result["statusCode"] == 200
+        stored_records = store_records.call_args.args[0]
+        assert stored_records[0]["ticker"] == "SPY"
+        assert stored_records[0]["instrument_type"] == "etf"
+        assert result["body"]["unavailable_tickers"] == []
+
     def test_stooq_s3_backfill_skips_non_utf8_malformed_file(self):
         stocks = [{"ticker": "ZWS", "exchange": "NYSE", "currency": "USD"}]
         malformed_body = MagicMock()
@@ -1697,6 +1794,43 @@ class TestNoKeyMarketDataFallbacks:
         assert result[0]["corporate_action_adjusted"] is True
         assert result[0]["exchange"] == "NYSE"
         assert result[0]["currency"] == "USD"
+
+    def test_parse_tiingo_backfill_csv_returns_raw_ohlcv_with_adjusted_close(self):
+        csv_text = (
+            "date,close,high,low,open,volume,adjClose,adjHigh,adjLow,adjOpen,adjVolume,divCash,splitFactor\n"
+            "2022-12-01T00:00:00.000Z,148.31,149.13,146.61,148.21,71250416,146.95,147.76,145.27,146.86,71250416,0,1\n"
+        )
+
+        result = _parse_tiingo_backfill_csv(
+            "AAPL",
+            csv_text,
+            stock_metadata={"exchange": "NASDAQ", "currency": "USD"},
+        )
+
+        assert result is not None
+        assert len(result) == 1
+        assert result[0]["ticker"] == "AAPL"
+        assert result[0]["trading_date"] == date(2022, 12, 1)
+        assert result[0]["open_price"] == Decimal("148.21")
+        assert result[0]["close_price"] == Decimal("148.31")
+        assert result[0]["adjusted_close_price"] == Decimal("146.95")
+        assert result[0]["volume"] == 71250416
+        assert result[0]["data_provider"] == "tiingo"
+        assert result[0]["provider_priority"] == "operator_backfill"
+        assert result[0]["price_adjustment"] == "unadjusted"
+        assert result[0]["has_adjusted_close"] is True
+        assert result[0]["exchange"] == "NASDAQ"
+
+    def test_tiingo_backfill_key_metadata_infers_instrument_type(self):
+        assert _tiingo_backfill_key_metadata(
+            "backtests/data/raw/tiingo/prices/stocks/AAPL.csv"
+        ) == ("AAPL", "stock")
+        assert _tiingo_backfill_key_metadata(
+            "backtests/data/raw/tiingo/prices/etfs/SPY.csv"
+        ) == ("SPY", "etf")
+        assert _tiingo_backfill_key_metadata(
+            "backtests/data/raw/tiingo/manifest.json"
+        ) is None
 
     def test_limit_stooq_backfill_records_keeps_latest_rows(self):
         records = [

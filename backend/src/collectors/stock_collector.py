@@ -60,9 +60,16 @@ STOCK_HISTORY_PREFIX = os.environ.get("STOCK_HISTORY_PREFIX", "stock-history")
 STOOQ_BACKFILL_PREFIX = os.environ.get(
     "STOOQ_BACKFILL_PREFIX", f"{STOCK_HISTORY_PREFIX}/stooq-upload"
 )
+TIINGO_BACKFILL_PREFIX = os.environ.get(
+    "TIINGO_BACKFILL_PREFIX", "backtests/data/raw/tiingo"
+)
 STOOQ_BACKFILL_FILES_PER_RUN = int(os.environ.get("STOOQ_BACKFILL_FILES_PER_RUN", "1"))
 STOOQ_BACKFILL_RECORDS_PER_FILE = int(
     os.environ.get("STOOQ_BACKFILL_RECORDS_PER_FILE", "120")
+)
+TIINGO_BACKFILL_FILES_PER_RUN = int(os.environ.get("TIINGO_BACKFILL_FILES_PER_RUN", "5"))
+TIINGO_BACKFILL_RECORDS_PER_FILE = int(
+    os.environ.get("TIINGO_BACKFILL_RECORDS_PER_FILE", "1500")
 )
 BATCH_SIZE = int(os.environ.get("STOCK_COLLECTOR_BATCH_SIZE", "5"))
 MAX_TICKERS_PER_RUN = int(os.environ.get("STOCK_COLLECTOR_MAX_TICKERS", "25"))
@@ -158,6 +165,8 @@ def handler(event: dict, context: Any) -> dict:
             return _run_historical_backfill(stocks, event or {}, context)
         if (event or {}).get("mode") == "stooq_s3_backfill":
             return _run_stooq_s3_backfill(stocks, event or {}, context)
+        if (event or {}).get("mode") == "tiingo_s3_backfill":
+            return _run_tiingo_s3_backfill(stocks, event or {}, context)
         if manifest_task_run and manifest_task_run.start_date and manifest_task_run.end_date:
             return _run_price_gap_backfill(
                 stocks,
@@ -819,6 +828,188 @@ def _run_stooq_s3_backfill(
     }
 
 
+def _run_tiingo_s3_backfill(
+    stocks: list[dict[str, Any]], event: dict[str, Any], context: Any
+) -> dict[str, Any]:
+    bucket = event.get("bucket") or STOCK_HISTORY_BUCKET
+    prefix = event.get("s3_prefix") or TIINGO_BACKFILL_PREFIX
+    if not bucket:
+        return {
+            "statusCode": 400,
+            "body": {
+                "mode": "tiingo_s3_backfill",
+                "status": "failed",
+                "message": "No S3 bucket configured for Tiingo backfill",
+            },
+        }
+
+    stock_by_ticker = {stock["ticker"].upper(): stock for stock in stocks}
+    requested_tickers = {str(ticker).upper() for ticker in event.get("tickers", [])}
+    max_files = int(event.get("max_files", TIINGO_BACKFILL_FILES_PER_RUN))
+    max_records_per_file = int(
+        event.get("max_records_per_file", TIINGO_BACKFILL_RECORDS_PER_FILE)
+    )
+    run_id = str(
+        event.get("backfill_run_id")
+        or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    )
+    continuation_token = event.get("continuation_token")
+    start_after_key = event.get("start_after_key")
+    processed_tickers = {str(ticker).upper() for ticker in event.get("processed_tickers", [])}
+
+    s3 = boto3.client("s3")
+    processed_files = 0
+    skipped_files = 0
+    inserted_records = 0
+    duplicate_records = 0
+    failed_records = 0
+    malformed_files: list[str] = []
+    unavailable_tickers: list[str] = []
+    collected_tickers: set[str] = set()
+    next_continuation_token = continuation_token
+    next_start_after_key = start_after_key
+    exhausted = False
+
+    while processed_files < max_files and not _should_stop_for_time(context):
+        list_kwargs: dict[str, Any] = {
+            "Bucket": bucket,
+            "Prefix": prefix,
+            "MaxKeys": 1000,
+        }
+        if next_continuation_token:
+            list_kwargs["ContinuationToken"] = next_continuation_token
+        elif next_start_after_key:
+            list_kwargs["StartAfter"] = next_start_after_key
+        response = s3.list_objects_v2(**list_kwargs)
+        keys = [
+            item["Key"]
+            for item in response.get("Contents", [])
+            if item.get("Key") and str(item["Key"]).lower().endswith(".csv")
+        ]
+        next_continuation_token = response.get("NextContinuationToken")
+        if not keys and not next_continuation_token:
+            exhausted = True
+            break
+
+        for key in keys:
+            if processed_files >= max_files:
+                break
+            next_start_after_key = key
+            parsed_key = _tiingo_backfill_key_metadata(key)
+            if not parsed_key:
+                skipped_files += 1
+                continue
+            ticker_from_key, instrument_type = parsed_key
+            if requested_tickers and ticker_from_key not in requested_tickers:
+                skipped_files += 1
+                continue
+            if instrument_type == "stock" and ticker_from_key not in stock_by_ticker:
+                unavailable_tickers.append(ticker_from_key)
+                skipped_files += 1
+                continue
+
+            object_response = s3.get_object(Bucket=bucket, Key=key)
+            text = _decode_tiingo_backfill_bytes(object_response["Body"].read(), key)
+            records = _parse_tiingo_backfill_csv(
+                ticker_from_key,
+                text,
+                instrument_type=instrument_type,
+                stock_metadata=stock_by_ticker.get(ticker_from_key),
+            )
+            records = _limit_stooq_backfill_records(records, max_records_per_file)
+            if not records:
+                malformed_files.append(key)
+                skipped_files += 1
+                continue
+
+            stored = _store_stooq_backfill_records(records)
+            inserted_records += stored.inserted_records
+            duplicate_records += stored.duplicate_records
+            failed_records += stored.failed_records
+            processed_tickers.add(ticker_from_key)
+            processed_files += 1
+            if stored.inserted_records > 0 or stored.duplicate_records > 0:
+                collected_tickers.add(ticker_from_key)
+
+        if processed_files >= max_files and keys and next_start_after_key != keys[-1]:
+            next_continuation_token = None
+
+        if not next_continuation_token and (not keys or next_start_after_key == keys[-1]):
+            exhausted = True
+            break
+
+    continue_queued = False
+    if (
+        bool(event.get("continue_backfill", False))
+        and not exhausted
+        and (next_continuation_token or next_start_after_key)
+    ):
+        continue_queued = _invoke_next_tiingo_s3_backfill(
+            event,
+            next_continuation_token,
+            next_start_after_key,
+            processed_tickers,
+            run_id,
+        )
+
+    summary = _build_collection_summary(
+        active_ticker_count=len(stocks),
+        selected_ticker_count=processed_files,
+        records_collected=inserted_records,
+        duplicate_records=duplicate_records,
+        failed_tickers=sorted(set(unavailable_tickers)),
+        malformed_tickers=malformed_files,
+        recovered_tickers=sorted(collected_tickers),
+    )
+    summary["mode"] = "tiingo_s3_backfill"
+    summary["failed_record_count"] = failed_records
+    summary["skipped_file_count"] = skipped_files
+    _record_collection_summary(summary)
+    _emit_collection_summary_metrics(summary)
+    _emit_metric("tiingo_s3_backfill_files_processed", processed_files)
+    _emit_metric("tiingo_s3_backfill_records_inserted", inserted_records)
+
+    _record_tiingo_s3_backfill_status(
+        run_id=run_id,
+        bucket=bucket,
+        prefix=prefix,
+        processed_files=processed_files,
+        skipped_files=skipped_files,
+        processed_tickers=processed_tickers,
+        inserted_records=inserted_records,
+        duplicate_records=duplicate_records,
+        failed_records=failed_records,
+        malformed_files=malformed_files,
+        unavailable_tickers=unavailable_tickers,
+        continuation_token=next_continuation_token,
+        start_after_key=next_start_after_key,
+        continue_queued=continue_queued,
+        complete=exhausted and not continue_queued,
+    )
+
+    return {
+        "statusCode": 200,
+        "body": {
+            "mode": "tiingo_s3_backfill",
+            "backfill_run_id": run_id,
+            "bucket": bucket,
+            "s3_prefix": prefix,
+            "processed_files": processed_files,
+            "skipped_files": skipped_files,
+            "processed_total": len(processed_tickers),
+            "records_inserted": inserted_records,
+            "duplicate_records": duplicate_records,
+            "failed_records": failed_records,
+            "malformed_files": malformed_files,
+            "unavailable_tickers": sorted(set(unavailable_tickers)),
+            "continuation_token": next_continuation_token,
+            "start_after_key": next_start_after_key,
+            "continue_queued": continue_queued,
+            "complete": exhausted and not continue_queued,
+        },
+    }
+
+
 def _invoke_next_stooq_s3_backfill(
     event: dict[str, Any],
     continuation_token: str | None,
@@ -852,6 +1043,42 @@ def _invoke_next_stooq_s3_backfill(
         return True
     except Exception as exc:
         logger.warning("stooq_s3_backfill_continue_invoke_failed", error=str(exc))
+        return False
+
+
+def _invoke_next_tiingo_s3_backfill(
+    event: dict[str, Any],
+    continuation_token: str | None,
+    start_after_key: str | None,
+    processed_tickers: set[str],
+    run_id: str,
+) -> bool:
+    function_name = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "")
+    if not function_name:
+        logger.warning("tiingo_s3_backfill_continue_unavailable_no_function_name")
+        return False
+    payload = {
+        **event,
+        "mode": "tiingo_s3_backfill",
+        "continue_backfill": True,
+        "continuation_token": continuation_token,
+        "start_after_key": start_after_key,
+        "processed_tickers": sorted(processed_tickers),
+        "backfill_run_id": run_id,
+    }
+    try:
+        boto3.client("lambda").invoke(
+            FunctionName=function_name,
+            InvocationType="Event",
+            Payload=json.dumps(payload).encode("utf-8"),
+        )
+        logger.info(
+            "tiingo_s3_backfill_continue_invoked",
+            processed_ticker_count=len(processed_tickers),
+        )
+        return True
+    except Exception as exc:
+        logger.warning("tiingo_s3_backfill_continue_invoke_failed", error=str(exc))
         return False
 
 
@@ -1264,6 +1491,68 @@ def _record_stooq_s3_backfill_status(
         )
     except Exception as exc:
         logger.warning("stooq_s3_backfill_status_write_failed", error=str(exc))
+
+
+def _record_tiingo_s3_backfill_status(
+    *,
+    run_id: str,
+    bucket: str,
+    prefix: str,
+    processed_files: int,
+    skipped_files: int,
+    processed_tickers: set[str],
+    inserted_records: int,
+    duplicate_records: int,
+    failed_records: int,
+    malformed_files: list[str],
+    unavailable_tickers: list[str],
+    continuation_token: str | None,
+    start_after_key: str | None,
+    continue_queued: bool,
+    complete: bool,
+) -> None:
+    if not STOCK_HISTORY_BUCKET:
+        return
+    body = json.dumps(
+        {
+            "mode": "tiingo_s3_backfill",
+            "run_id": run_id,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "source_bucket": bucket,
+            "source_prefix": prefix,
+            "processed_files": processed_files,
+            "skipped_files": skipped_files,
+            "processed_ticker_count": len(processed_tickers),
+            "inserted_records": inserted_records,
+            "duplicate_records": duplicate_records,
+            "failed_records": failed_records,
+            "malformed_files_sample": malformed_files[-25:],
+            "unavailable_tickers_sample": sorted(set(unavailable_tickers))[-50:],
+            "continuation_token": continuation_token,
+            "start_after_key": start_after_key,
+            "continue_queued": continue_queued,
+            "complete": complete,
+            "processed_tickers_sample": sorted(processed_tickers)[-50:],
+        },
+        default=str,
+    ).encode("utf-8")
+    key = f"{STOCK_HISTORY_PREFIX}/_backfill/tiingo-upload-latest.json"
+    try:
+        boto3.client("s3").put_object(
+            Bucket=STOCK_HISTORY_BUCKET,
+            Key=key,
+            Body=body,
+            ContentType="application/json",
+            CacheControl="no-store",
+        )
+        logger.info(
+            "tiingo_s3_backfill_status_written",
+            key=key,
+            processed_files=processed_files,
+            continue_queued=continue_queued,
+        )
+    except Exception as exc:
+        logger.warning("tiingo_s3_backfill_status_write_failed", error=str(exc))
 
 
 def _merge_history_archive(ticker: str, records: list[dict[str, Any]]) -> None:
@@ -2706,12 +2995,36 @@ def _decode_stooq_backfill_bytes(data: bytes, key: str) -> str:
         return data.decode("cp1250", errors="replace")
 
 
+def _decode_tiingo_backfill_bytes(data: bytes, key: str) -> str:
+    try:
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        logger.warning(
+            "tiingo_backfill_utf8_decode_failed",
+            key=key,
+            error=str(exc),
+        )
+        return data.decode("utf-8", errors="replace")
+
+
 def _stooq_backfill_ticker_from_key(key: str) -> str | None:
     filename = key.rsplit("/", 1)[-1].lower()
     if not filename.endswith(".us.txt"):
         return None
     ticker = filename.removesuffix(".us.txt").strip()
     return ticker.upper() if ticker else None
+
+
+def _tiingo_backfill_key_metadata(key: str) -> tuple[str, str] | None:
+    filename = key.rsplit("/", 1)[-1]
+    if not filename.lower().endswith(".csv") or filename.lower() == "manifest.csv":
+        return None
+    ticker = filename[:-4].strip().upper()
+    if not ticker or ticker == "MANIFEST":
+        return None
+    lowered = key.lower()
+    instrument_type = "etf" if "/etfs/" in lowered or "/etf/" in lowered else "stock"
+    return ticker, instrument_type
 
 
 def _parse_stooq_backfill_txt(
@@ -2759,6 +3072,37 @@ def _parse_stooq_backfill_txt(
         return None
 
 
+def _parse_tiingo_backfill_csv(
+    ticker: str,
+    text: str,
+    *,
+    instrument_type: str = "stock",
+    stock_metadata: dict[str, Any] | None = None,
+) -> list[dict[str, Any]] | None:
+    try:
+        import csv
+        from io import StringIO
+
+        rows = list(csv.DictReader(StringIO(text.strip())))
+        if not rows:
+            return None
+
+        records: list[dict[str, Any]] = []
+        for row in rows:
+            record = _parse_tiingo_backfill_record(
+                ticker,
+                row,
+                instrument_type=instrument_type,
+                stock_metadata=stock_metadata,
+            )
+            if record:
+                records.append(record)
+        return records or None
+    except csv.Error as exc:
+        logger.warning("tiingo_backfill_csv_parse_failed", ticker=ticker, error=str(exc))
+        return None
+
+
 def _limit_stooq_backfill_records(
     records: list[dict[str, Any]] | None,
     max_records: int,
@@ -2770,6 +3114,94 @@ def _limit_stooq_backfill_records(
     return sorted(records, key=lambda record: _record_date(record["trading_date"]))[
         -max_records:
     ]
+
+
+def _parse_tiingo_backfill_record(
+    ticker: str,
+    values: dict[str, Any],
+    *,
+    instrument_type: str = "stock",
+    stock_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    try:
+        date_value = str(values.get("date") or "").strip()
+        record_date = date.fromisoformat(date_value[:10])
+        open_price = _to_decimal(values.get("open"))
+        high_price = _to_decimal(values.get("high"))
+        low_price = _to_decimal(values.get("low"))
+        close_price = _to_decimal(values.get("close"))
+        adjusted_close_price = _to_decimal(values.get("adjClose"))
+        volume = int(Decimal(str(values.get("volume") or "0")))
+
+        if any(p is None for p in [open_price, high_price, low_price, close_price]):
+            logger.warning(
+                "tiingo_backfill_malformed_record",
+                ticker=ticker,
+                trading_date=date_value,
+            )
+            return None
+
+        if any(p <= 0 for p in [open_price, high_price, low_price, close_price]):
+            logger.warning(
+                "tiingo_backfill_invalid_prices",
+                ticker=ticker,
+                trading_date=date_value,
+            )
+            return None
+
+        if volume < 0:
+            logger.warning(
+                "tiingo_backfill_invalid_volume",
+                ticker=ticker,
+                trading_date=date_value,
+            )
+            return None
+
+        return {
+            "ticker": ticker.upper(),
+            "trading_date": record_date,
+            "open_price": open_price,
+            "high_price": high_price,
+            "low_price": low_price,
+            "close_price": close_price,
+            "adjusted_close_price": adjusted_close_price,
+            "volume": volume,
+            "data_provider": "tiingo",
+            "provider_symbol": ticker.upper().replace(".", "-"),
+            "provider_endpoint": "uploaded_tiingo_csv",
+            "provider_priority": "operator_backfill",
+            "price_adjustment": "unadjusted",
+            "has_adjusted_close": adjusted_close_price is not None,
+            "corporate_action_adjusted": adjusted_close_price is not None,
+            "adjustment_context": (
+                "raw_ohlcv_with_adjusted_close"
+                if adjusted_close_price is not None
+                else "raw_ohlcv_only"
+            ),
+            "split_dividend_adjustment": (
+                "adjusted_close_available"
+                if adjusted_close_price is not None
+                else "not_available"
+            ),
+            "instrument_type": instrument_type,
+            "currency": _metadata_value(
+                stock_metadata,
+                "currency",
+                DEFAULT_MARKET_DATA_CURRENCY,
+            ),
+            "exchange": _metadata_value(stock_metadata, "exchange"),
+            "fetch_period": "tiingo_uploaded_history",
+            "fetch_window_start": None,
+            "fetch_window_end": None,
+        }
+    except (ValueError, TypeError, InvalidOperation) as exc:
+        logger.warning(
+            "tiingo_backfill_parse_failed",
+            ticker=ticker,
+            values=values,
+            error=str(exc),
+        )
+        return None
 
 
 def _parse_stooq_backfill_record(

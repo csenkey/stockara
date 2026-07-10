@@ -1,0 +1,176 @@
+name: Run Tiingo S3 Backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      bucket:
+        description: S3 bucket containing staged Tiingo CSV files; blank resolves the Stockara artifact bucket
+        required: false
+        default: ""
+      s3_prefix:
+        description: S3 prefix containing Tiingo CSV files
+        required: true
+        default: backtests/data/raw/tiingo/
+      max_files:
+        description: Tiingo CSV files to import per Lambda invocation
+        required: true
+        default: "10"
+      max_records_per_file:
+        description: Maximum rows to import per ticker file; 0 means all rows
+        required: true
+        default: "1500"
+      continue_backfill:
+        description: Let the stock collector asynchronously continue Tiingo import
+        required: true
+        default: "true"
+        type: boolean
+      start_after_key:
+        description: Optional S3 key to resume after
+        required: false
+        default: ""
+      continuation_token:
+        description: Optional S3 continuation token to resume with
+        required: false
+        default: ""
+      repeat_until_complete:
+        description: Repeatedly invoke from returned cursors inside GitHub Actions
+        required: true
+        default: "false"
+        type: boolean
+      max_invocations:
+        description: Maximum synchronous Lambda invocations when repeat_until_complete is true
+        required: true
+        default: "1000"
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+jobs:
+  invoke:
+    name: Invoke Tiingo S3 backfill
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Validate inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          for value in "${{ inputs.max_files }}" "${{ inputs.max_records_per_file }}" "${{ inputs.max_invocations }}"; do
+            if ! [[ "$value" =~ ^[0-9]+$ ]]; then
+              echo "Numeric inputs must be non-negative integers."
+              exit 1
+            fi
+          done
+          if [[ "${{ inputs.max_files }}" -lt 1 || "${{ inputs.max_invocations }}" -lt 1 ]]; then
+            echo "max_files and max_invocations must be positive."
+            exit 1
+          fi
+
+      - name: Check AWS OIDC role configuration
+        run: |
+          if [[ -z "${{ secrets.AWS_ROLE_TO_ASSUME }}" ]]; then
+            echo "Missing GitHub secret AWS_ROLE_TO_ASSUME."
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: stockara-tiingo-backfill-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve artifact bucket
+        shell: bash
+        env:
+          INPUT_BUCKET: ${{ inputs.bucket }}
+          CONFIGURED_ARTIFACT_BUCKET: ${{ vars.STOCKARA_ARTIFACT_BUCKET || '' }}
+        run: |
+          set -euo pipefail
+          bucket="$INPUT_BUCKET"
+          if [[ -z "$bucket" ]]; then
+            bucket="$CONFIGURED_ARTIFACT_BUCKET"
+          fi
+          if [[ -z "$bucket" ]]; then
+            bucket="$(aws cloudformation describe-stacks \
+              --stack-name StockMonitoringFrontend \
+              --query "Stacks[0].Outputs[?OutputKey=='BucketName'].OutputValue | [0]" \
+              --output text)"
+          fi
+          if [[ -z "$bucket" || "$bucket" == "None" ]]; then
+            echo "Unable to resolve artifact bucket."
+            exit 1
+          fi
+          echo "STOCKARA_ARTIFACT_BUCKET=$bucket" >> "$GITHUB_ENV"
+
+      - name: Invoke stock collector Tiingo backfill
+        shell: bash
+        run: |
+          set -euo pipefail
+          start_after_key="${{ inputs.start_after_key }}"
+          continuation_token="${{ inputs.continuation_token }}"
+          invocation_count=0
+          repeat_until_complete="${{ inputs.repeat_until_complete }}"
+          max_invocations="${{ inputs.max_invocations }}"
+
+          while true; do
+            invocation_count=$((invocation_count + 1))
+            continue_backfill="${{ inputs.continue_backfill }}"
+            if [[ "$repeat_until_complete" == "true" ]]; then
+              continue_backfill=false
+            fi
+
+            payload="$(jq -n \
+              --arg bucket "$STOCKARA_ARTIFACT_BUCKET" \
+              --arg s3Prefix "${{ inputs.s3_prefix }}" \
+              --arg startAfterKey "$start_after_key" \
+              --arg continuationToken "$continuation_token" \
+              --argjson maxFiles "${{ inputs.max_files }}" \
+              --argjson maxRecordsPerFile "${{ inputs.max_records_per_file }}" \
+              --argjson continueBackfill "$continue_backfill" \
+              '{
+                mode: "tiingo_s3_backfill",
+                bucket: $bucket,
+                s3_prefix: $s3Prefix,
+                max_files: $maxFiles,
+                max_records_per_file: $maxRecordsPerFile,
+                continue_backfill: $continueBackfill
+              }
+              + (if $startAfterKey == "" then {} else {start_after_key: $startAfterKey} end)
+              + (if $continuationToken == "" then {} else {continuation_token: $continuationToken} end)')"
+
+            echo "Invocation $invocation_count payload:"
+            echo "$payload"
+            aws lambda invoke \
+              --function-name stockara-stock-collector \
+              --log-type Tail \
+              --cli-read-timeout 900 \
+              --cli-binary-format raw-in-base64-out \
+              --payload "$payload" \
+              /tmp/tiingo-backfill-response.json > /tmp/tiingo-backfill-invoke.json
+            python -c "import base64, json; meta=json.load(open('/tmp/tiingo-backfill-invoke.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
+            python -c "import json, sys; meta=json.load(open('/tmp/tiingo-backfill-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
+            cat /tmp/tiingo-backfill-response.json
+            python -m json.tool /tmp/tiingo-backfill-response.json
+
+            complete="$(jq -r '.body.complete // false' /tmp/tiingo-backfill-response.json)"
+            start_after_key="$(jq -r '.body.start_after_key // ""' /tmp/tiingo-backfill-response.json)"
+            continuation_token="$(jq -r '.body.continuation_token // ""' /tmp/tiingo-backfill-response.json)"
+
+            if [[ "$repeat_until_complete" != "true" || "$complete" == "true" ]]; then
+              break
+            fi
+            if [[ -z "$start_after_key" && -z "$continuation_token" ]]; then
+              echo "No continuation cursor returned; stopping repeat loop."
+              break
+            fi
+            if [[ "$invocation_count" -ge "$max_invocations" ]]; then
+              echo "Reached max_invocations=$max_invocations before completion."
+              break
+            fi
+            sleep 1
+          done
