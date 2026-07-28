@@ -261,7 +261,11 @@ def _recompute_coverage_gates(manifest: CollectionManifest) -> None:
         _coverage_gate(
             existing_by_name,
             name="price_freshness",
-            observed_value=_task_type_ticker_ratio(manifest, {CollectionTaskType.PRICE}),
+            observed_value=_task_type_ticker_ratio(
+                manifest,
+                {CollectionTaskType.PRICE},
+                publication_gate_only=True,
+            ),
             default_required=Decimal("0.9"),
             unit="ratio",
             message=(
@@ -321,13 +325,24 @@ def _coverage_gate(
 def _task_type_ticker_ratio(
     manifest: CollectionManifest,
     task_types: set[CollectionTaskType],
+    publication_gate_only: bool = False,
 ) -> Decimal:
-    relevant = [task for task in manifest.tasks if task.task_type in task_types]
+    relevant = [
+        task
+        for task in manifest.tasks
+        if task.task_type in task_types
+        and (not publication_gate_only or _counts_toward_publication_gate(task))
+    ]
     total = sum(len(task.tickers) for task in relevant)
     if total == 0:
         return Decimal("1")
     successful = sum(task.output_counts.successful_tickers for task in relevant)
     return Decimal(min(successful, total)) / Decimal(total)
+
+
+def _counts_toward_publication_gate(task: CollectionTask) -> bool:
+    """Exclude ad hoc gap/backfill tasks from daily publication freshness gates."""
+    return not (task.start_date or task.end_date or str(task.reason or "").strip())
 
 
 def _task_type_completion_ratio(
