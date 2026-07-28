@@ -3,7 +3,7 @@
 Polls NewsAPI and Finnhub for stock-related news articles, deduplicates them,
 generates AI summaries via OpenAI, and stores results in the database.
 
-Triggered by EventBridge every 15 minutes (configurable).
+Triggered by EventBridge a few times per day (configurable).
 """
 
 import hashlib

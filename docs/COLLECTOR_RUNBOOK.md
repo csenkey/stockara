@@ -16,6 +16,11 @@ recovery before the analyzer publishes recommendations.
 6. Published artifacts include `data_quality.collection_manifest` when the
    manifest is available.
 
+The global news collector is intentionally scheduled only three times per day.
+The daily manifest also runs ticker-scoped news chunks, so frequent global
+polling can exhaust low-cost NewsAPI development quotas without improving the
+once-daily recommendation publication.
+
 ## Required Secrets
 
 Store provider keys in AWS Secrets Manager and expose their secret names through

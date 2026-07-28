@@ -123,7 +123,7 @@ def test_calendar_collector_lambdas_and_schedules_are_created():
         "AWS::Events::Rule",
         {
             "Name": "stockara-codex-test-news-collection",
-            "ScheduleExpression": "rate(15 minutes)",
+            "ScheduleExpression": "cron(30 6,14,21 * * ? *)",
         },
     )
     template.has_resource_properties(

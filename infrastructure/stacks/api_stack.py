@@ -272,6 +272,7 @@ class ApiStack(Stack):
                 **news_provider_env,
                 "OPENAI_NEWS_MODEL": "gpt-5.4-mini",
                 "ALPHA_VANTAGE_NEWS_MAX_TICKERS": "25",
+                "NEWS_POLL_INTERVAL_MINUTES": "480",
                 "POWERTOOLS_SERVICE_NAME": "news-collector",
             },
             description="Collects and summarizes news for Phase 1 signals",
@@ -560,8 +561,12 @@ class ApiStack(Stack):
                 "stockara-news-collection",
                 "news-collection",
             ),
-            description="Triggers frequent news collection for catalyst freshness",
-            schedule=events.Schedule.rate(Duration.minutes(15)),
+            description=(
+                "Triggers quota-conscious news collection for daily catalyst freshness"
+            ),
+            schedule=events.Schedule.cron(
+                minute="30", hour="6,14,21", day="*", month="*", year="*"
+            ),
             targets=[targets.LambdaFunction(self.news_collector_fn)],
         )
 
