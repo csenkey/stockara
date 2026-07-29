@@ -434,6 +434,90 @@ def test_build_data_readiness_payload_summarizes_missing_data_and_ai_fallbacks()
     )
 
 
+def test_metadata_drift_flags_active_not_in_seed_and_seed_mismatch():
+    seed_rows = [
+        {
+            "ticker": "NVDA",
+            "company_name": "NVIDIA Corp",
+            "sector": "Technology",
+            "industry": "Semiconductors",
+            "company_size": "blue_chip",
+            "source": "seed",
+            "metadata_source": "nasdaq_company_profile",
+            "metadata_source_url": "https://www.nasdaq.com/market-activity/stocks/nvda",
+            "metadata_as_of": "2026-06-17",
+        }
+    ]
+    stocks = [
+        _decision_grade_stock(
+            "NVDA",
+            company_name="Old NVIDIA Name",
+            latest_stock_data_date="2026-07-29",
+        ),
+        _decision_grade_stock("REMOVED", latest_stock_data_date="2026-07-29"),
+    ]
+
+    with patch(
+        "src.analysis.phase1_pipeline._load_packaged_watchlist_seed",
+        return_value=seed_rows,
+    ):
+        drift = phase1_pipeline.evaluate_metadata_drift(stocks)
+
+    assert drift["status"] == "drift_detected"
+    assert drift["reason_counts"] == {
+        "active_not_in_seed": 1,
+        "metadata_seed_mismatch": 1,
+    }
+    assert any(
+        row["ticker"] == "REMOVED" and row["reason"] == "active_not_in_seed"
+        for row in drift["rows"]
+    )
+    assert any(
+        row["ticker"] == "NVDA"
+        and row["reason"] == "metadata_seed_mismatch"
+        and "company_name" in row["mismatched_fields"]
+        for row in drift["rows"]
+    )
+
+
+def test_data_readiness_payload_includes_metadata_drift_rows():
+    run_date = date(2026, 7, 29)
+    freshness = {
+        "run_date": run_date.isoformat(),
+        "coverage_status": "complete",
+        "active_ticker_count": 1,
+        "eligible_ticker_count": 1,
+        "excluded_ticker_count": 0,
+        "excluded_tickers": [],
+        "metadata_drift": {
+            "status": "drift_detected",
+            "rows": [
+                {
+                    "ticker": "REMOVED",
+                    "reason": "active_not_in_seed",
+                    "missing_required_fields": [],
+                    "mismatched_fields": [],
+                    "seed_present": False,
+                    "production_active": True,
+                    "repair_mode": "sync_static_metadata",
+                }
+            ],
+        },
+        "last_news_collection": "2026-07-29T21:30:00+00:00",
+        "news_stale": False,
+        "warnings": [],
+    }
+
+    payload = build_data_readiness_payload(run_date, freshness)
+
+    assert payload["overall_status"] == "blocked"
+    assert payload["summary"]["data_type_counts"]["metadata"] == 1
+    assert payload["summary"]["reason_counts"] == {
+        "metadata_drift:active_not_in_seed": 1
+    }
+    assert payload["items"][0]["repair_mode"] == "sync_static_metadata"
+
+
 def test_publish_data_readiness_report_writes_latest_and_history_artifacts():
     payload = {
         "artifact_type": "data_readiness",

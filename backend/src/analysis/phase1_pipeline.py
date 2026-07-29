@@ -1,9 +1,11 @@
 """Phase 1 candidate scanning, AI analysis, ranking, and static publishing."""
 
+import csv
 import json
 import os
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import boto3
@@ -60,6 +62,20 @@ DECISION_GRADE_REQUIRED_METADATA_FIELDS = (
     "metadata_source",
     "metadata_source_url",
     "metadata_as_of",
+)
+PACKAGED_WATCHLIST_SEED_PATH = (
+    Path(__file__).resolve().parents[1] / "data" / "watchlist_seed.csv"
+)
+METADATA_DRIFT_SYNC_FIELDS = (
+    "company_name",
+    "sector",
+    "industry",
+    "company_size",
+    "source",
+    "metadata_source",
+    "metadata_source_url",
+    "metadata_as_of",
+    "is_active",
 )
 
 SECTOR_ETFS = {
@@ -886,6 +902,8 @@ def evaluate_data_freshness(
     freshness_cutoff = run_date - timedelta(days=STOCK_FRESHNESS_MAX_AGE_DAYS)
     history_cutoff = run_date - timedelta(days=MIN_HISTORY_CALENDAR_DAYS)
 
+    metadata_drift = evaluate_metadata_drift(stocks)
+
     for stock in stocks:
         ticker = stock["ticker"]
         reasons: list[str] = []
@@ -1005,6 +1023,7 @@ def evaluate_data_freshness(
         "excluded_ticker_count": len(excluded_tickers),
         "eligible_stocks": eligible_stocks,
         "excluded_tickers": excluded_tickers,
+        "metadata_drift": metadata_drift,
         "stock_freshness_max_age_days": STOCK_FRESHNESS_MAX_AGE_DAYS,
         "min_history_calendar_days": MIN_HISTORY_CALENDAR_DAYS,
         "min_history_rows": MIN_HISTORY_ROWS,
@@ -1026,6 +1045,7 @@ def publication_data_quality(freshness: dict[str, Any]) -> dict[str, Any]:
         "active_ticker_count": freshness["active_ticker_count"],
         "eligible_ticker_count": freshness["eligible_ticker_count"],
         "excluded_ticker_count": freshness["excluded_ticker_count"],
+        "metadata_drift": freshness.get("metadata_drift", {}),
         "exclusion_reason_counts": dict(sorted(exclusion_reason_counts.items())),
         "excluded_ticker_examples": excluded[:20],
         "stock_freshness_max_age_days": freshness["stock_freshness_max_age_days"],
@@ -1035,6 +1055,128 @@ def publication_data_quality(freshness: dict[str, Any]) -> dict[str, Any]:
         "news_stale": freshness["news_stale"],
         "warnings": freshness["warnings"],
     }
+
+
+def evaluate_metadata_drift(stocks: list[dict[str, Any]]) -> dict[str, Any]:
+    """Compare active production stock metadata with the packaged seed snapshot."""
+    seed_rows = _load_packaged_watchlist_seed()
+    if not seed_rows:
+        return {
+            "status": "unknown",
+            "seed_row_count": 0,
+            "active_ticker_count": len(stocks),
+            "drift_count": 0,
+            "reason_counts": {},
+            "rows": [],
+            "warnings": ["Packaged watchlist seed could not be loaded."],
+        }
+
+    seed_by_ticker = {
+        _metadata_ticker(row.get("ticker")): row
+        for row in seed_rows
+        if _metadata_ticker(row.get("ticker"))
+    }
+    rows: list[dict[str, Any]] = []
+    for stock in stocks:
+        ticker = _metadata_ticker(stock.get("ticker"))
+        if not ticker:
+            rows.append(
+                {
+                    "ticker": None,
+                    "reason": "missing_ticker",
+                    "missing_required_fields": ["ticker"],
+                    "mismatched_fields": [],
+                    "seed_present": False,
+                    "production_active": bool(stock.get("is_active", True)),
+                    "repair_mode": "sync_static_metadata",
+                }
+            )
+            continue
+        seed = seed_by_ticker.get(ticker)
+        missing = _decision_grade_metadata_gaps(stock)
+        mismatched = _metadata_mismatched_fields(stock, seed) if seed else []
+        reasons: list[str] = []
+        if not seed:
+            reasons.append("active_not_in_seed")
+        if missing:
+            reasons.append("missing_required_metadata")
+        if mismatched:
+            reasons.append("metadata_seed_mismatch")
+        for reason in reasons:
+            rows.append(
+                {
+                    "ticker": ticker,
+                    "reason": reason,
+                    "missing_required_fields": missing,
+                    "mismatched_fields": mismatched,
+                    "seed_present": seed is not None,
+                    "production_active": bool(stock.get("is_active", True)),
+                    "repair_mode": "sync_static_metadata",
+                }
+            )
+
+    reason_counts = _readiness_counts(rows, "reason")
+    return {
+        "status": "drift_detected" if rows else "in_sync",
+        "seed_row_count": len(seed_by_ticker),
+        "active_ticker_count": len(stocks),
+        "drift_count": len(rows),
+        "reason_counts": reason_counts,
+        "rows": rows[:250],
+        "warnings": [],
+    }
+
+
+def _load_packaged_watchlist_seed() -> list[dict[str, str]]:
+    try:
+        with PACKAGED_WATCHLIST_SEED_PATH.open(newline="", encoding="utf-8") as file:
+            return list(csv.DictReader(file))
+    except Exception as exc:
+        logger.warning(
+            "packaged_watchlist_seed_load_failed",
+            path=str(PACKAGED_WATCHLIST_SEED_PATH),
+            error=str(exc),
+        )
+        return []
+
+
+def _metadata_ticker(value: Any) -> str:
+    return str(value or "").strip().upper()
+
+
+def _metadata_mismatched_fields(
+    stock: dict[str, Any], seed: dict[str, str] | None
+) -> list[str]:
+    if not seed:
+        return []
+    mismatched = []
+    for field in METADATA_DRIFT_SYNC_FIELDS:
+        expected = _metadata_seed_value(seed, field)
+        observed = _metadata_observed_value(stock, field)
+        if expected != observed:
+            mismatched.append(field)
+    return mismatched
+
+
+def _metadata_seed_value(seed: dict[str, str], field: str) -> Any:
+    if field == "is_active":
+        return True
+    value = (seed.get(field) or "").strip()
+    if field == "company_size":
+        return value.lower()
+    return value
+
+
+def _metadata_observed_value(stock: dict[str, Any], field: str) -> Any:
+    if field == "is_active":
+        return bool(stock.get(field, True))
+    value = stock.get(field)
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if field == "company_size":
+        return text.lower()
+    return text
 
 
 READINESS_REASON_DETAILS = {
@@ -1154,6 +1296,30 @@ def build_data_readiness_payload(
                 "details": {
                     "max_age_hours": NEWS_FRESHNESS_MAX_HOURS,
                     "warnings": freshness.get("warnings", []),
+                },
+            }
+        )
+
+    metadata_drift = freshness.get("metadata_drift") or {}
+    for drift in metadata_drift.get("rows", []):
+        items.append(
+            {
+                "ticker": drift.get("ticker"),
+                "data_type": "metadata",
+                "status": "blocked",
+                "required_for": "decision_grade",
+                "provider": "watchlist_seed",
+                "provider_symbol": drift.get("ticker"),
+                "reason": f"metadata_drift:{drift.get('reason')}",
+                "latest_observed_at": None,
+                "last_attempted_at": None,
+                "next_retry_at": None,
+                "repair_mode": drift.get("repair_mode", "sync_static_metadata"),
+                "terminal": False,
+                "details": {
+                    key: value
+                    for key, value in drift.items()
+                    if key not in {"ticker", "reason", "repair_mode"}
                 },
             }
         )

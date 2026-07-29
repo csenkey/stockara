@@ -78,6 +78,16 @@ Each readiness item should include:
 - `terminal`
 - `details`
 
+Metadata drift detection compares active production stock metadata with the
+repository seed expectations. Because the analyzer Lambda is packaged from
+`backend/` while the canonical seed lives at repository root under
+`data/watchlist_seed.csv`, keep `backend/src/data/watchlist_seed.csv` as a
+packaged runtime snapshot. A contract test must verify the packaged snapshot
+matches the canonical seed. Drift readiness rows should classify production
+metadata as `active_not_in_seed`, `missing_required_metadata`, or
+`metadata_seed_mismatch`, and point to `sync_static_metadata` as the repair
+mode.
+
 ## Migration Path
 
 First version should keep existing EventBridge schedules mostly intact while adding the workflow in shadow/manual mode. After the workflow proves stable:
@@ -86,4 +96,3 @@ First version should keep existing EventBridge schedules mostly intact while add
 - Disable or narrow the 5-minute `CollectionDistributorSchedule`.
 - Keep low-frequency news collection only if it refreshes optional articles outside the daily workflow.
 - Keep gap scanning as either a workflow step or a separate after-market maintenance job, but ensure it cannot affect publication gates for the same day unless explicitly counted.
-

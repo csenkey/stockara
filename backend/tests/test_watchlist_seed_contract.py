@@ -11,6 +11,9 @@ from backend.src.scripts.seed_watchlist_handler import (
 
 
 WATCHLIST_SEED = Path(__file__).resolve().parents[2] / "data" / "watchlist_seed.csv"
+PACKAGED_WATCHLIST_SEED = (
+    Path(__file__).resolve().parents[1] / "src" / "data" / "watchlist_seed.csv"
+)
 
 
 def test_watchlist_seed_has_decision_grade_required_metadata():
@@ -50,3 +53,7 @@ def test_watchlist_seed_has_decision_grade_required_metadata():
     assert missing_by_ticker == {}
     assert invalid_sectors == {}
     assert invalid_sizes == {}
+
+
+def test_packaged_watchlist_seed_matches_canonical_seed():
+    assert PACKAGED_WATCHLIST_SEED.read_text() == WATCHLIST_SEED.read_text()
