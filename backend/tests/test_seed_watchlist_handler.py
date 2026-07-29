@@ -219,6 +219,31 @@ def test_sync_static_metadata_reports_inactive_and_out_of_scope_rows(monkeypatch
     assert summary["out_of_scope"] == 1
 
 
+def test_sync_static_metadata_dry_run_reports_without_writing(monkeypatch):
+    existing = _build_stock_item(
+        _complete_row(
+            business_description="Old description.",
+            flagship_products="Old product",
+        ),
+        set(),
+    )
+    table = _FakeTable([existing])
+    monkeypatch.setattr(
+        "backend.src.scripts.seed_watchlist_handler._load_seed_rows",
+        lambda: [_complete_row(), _complete_row(ticker="MSFT")],
+    )
+
+    summary = sync_static_metadata(table, {"AAPL"}, dry_run=True)
+
+    stored = table.items[("STOCK#AAPL", "META")]
+    assert summary["created"] == 1
+    assert summary["missing"] == 1
+    assert summary["changed"] == 1
+    assert stored["business_description"] == "Old description."
+    assert ("STOCK#MSFT", "META") not in table.items
+    assert ("CONFIG#sell_alert_watchlist", "VALUE") not in table.items
+
+
 def test_handler_syncs_existing_metadata_on_custom_resource_update(monkeypatch):
     existing = _build_stock_item(_complete_row(sector="Technology"), set())
     table = _FakeTable([existing])
@@ -250,6 +275,37 @@ def test_handler_syncs_existing_metadata_on_custom_resource_update(monkeypatch):
     assert result["Data"]["MetadataInactive"] == 0
     assert result["Data"]["MetadataOutOfScope"] == 0
     assert stored["sector"] == "Consumer Discretionary"
+
+
+def test_handler_accepts_shared_repair_request_payload(monkeypatch):
+    existing = _build_stock_item(_complete_row(sector="Technology"), set())
+    table = _FakeTable([existing])
+    monkeypatch.setattr(
+        "backend.src.scripts.seed_watchlist_handler._load_seed_rows",
+        lambda: [_complete_row(sector="Consumer Discretionary")],
+    )
+    monkeypatch.setattr(
+        "backend.src.scripts.seed_watchlist_handler.boto3.resource",
+        lambda _service: _FakeDynamo(table),
+    )
+
+    result = handler(
+        {
+            "table_name": "stockara",
+            "mode": "sync_static_metadata",
+            "run_date": "2026-07-29",
+            "tickers": [],
+            "max_tickers": 1000,
+            "provider_budget": {},
+            "dry_run": True,
+        },
+        None,
+    )
+
+    stored = table.items[("STOCK#AAPL", "META")]
+    assert result["statusCode"] == 200
+    assert result["body"]["changed"] == 1
+    assert stored["sector"] == "Technology"
 
 
 class _FakeBatch:

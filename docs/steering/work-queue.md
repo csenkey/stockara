@@ -35,7 +35,7 @@ First milestone:
 
 Next executable items:
 
-- Define a shared repair-mode input schema for daily workflow repair steps.
+- Implement price/history repair modes using the shared repair-mode input schema.
 - Add degraded publication tiers: `decision_grade`, `reduced_confidence`, `fallback_preview`, and `blocked`.
 - Add a Step Functions daily workflow in shadow/manual mode before retiring independent schedules.
 

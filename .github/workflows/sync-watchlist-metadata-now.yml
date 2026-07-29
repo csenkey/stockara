@@ -60,7 +60,7 @@ jobs:
           set -euo pipefail
           aws lambda invoke \
             --function-name "$WATCHLIST_SEED_FN" \
-            --payload '{"mode":"sync_static_metadata"}' \
+            --payload '{"mode":"sync_static_metadata","tickers":[],"provider_budget":{},"dry_run":false}' \
             --log-type Tail \
             --cli-read-timeout 900 \
             --cli-binary-format raw-in-base64-out \

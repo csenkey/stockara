@@ -13,7 +13,7 @@
 
 ## Milestone 2: Repair Missing Data
 
-- [ ] Define a shared repair-mode input schema with `mode`, `run_date`, `tickers`, `max_tickers`, `provider_budget`, and `dry_run`.
+- [x] Define a shared repair-mode input schema with `mode`, `run_date`, `tickers`, `max_tickers`, `provider_budget`, and `dry_run`.
 - [x] Implement `sync_static_metadata` as an operator-safe repair mode with no live collection field clobbering.
 - [ ] Implement `repair_price_gaps` and `repair_history` modes using existing price gap scanner and date-bounded manifest tasks.
 - [ ] Implement `repair_news` mode that respects NewsAPI/Finnhub/Alpha Vantage quota budgets and can target only shortlisted or missing-news tickers.
@@ -21,6 +21,7 @@
 - [ ] Implement `repair_evidence` mode for SEC filing and analyst-action gaps.
 - [ ] Implement `retry_ai_analysis` and `retry_ai_review` modes that reuse stored candidate scores/evidence and publish clear model/error provenance.
 - [ ] Update GitHub Actions manual workflows to call repair modes instead of bespoke one-off Lambda payloads where practical.
+  - [x] Update `Sync Watchlist Metadata Now` to use the shared repair-mode payload shape.
 
 ## Milestone 3: Publish Useful Degraded Suggestions
 

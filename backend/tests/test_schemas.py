@@ -19,6 +19,8 @@ from src.models.schemas import (
     CollectionTickerHealth,
     CompanySize,
     Recommendation,
+    RepairMode,
+    RepairModeRequest,
     RiskLevel,
     SignalDirection,
     SignalSource,
@@ -145,6 +147,34 @@ def test_collection_manifest_s3_key_uses_daily_partition():
         collection_manifest_s3_key(date(2026, 6, 20))
         == "collection_manifest/2026-06-20.json"
     )
+
+
+def test_repair_mode_request_normalizes_shared_operator_payload():
+    request = RepairModeRequest(
+        mode=RepairMode.REPAIR_NEWS,
+        run_date="2026-07-29",
+        tickers=["aapl", "msft"],
+        max_tickers=25,
+        provider_budget={"NewsAPI": 20, "FINNHUB": "5"},
+        dry_run=True,
+    )
+
+    assert request.mode == RepairMode.REPAIR_NEWS
+    assert request.run_date == date(2026, 7, 29)
+    assert request.tickers == ["AAPL", "MSFT"]
+    assert request.provider_budget == {"newsapi": 20, "finnhub": 5}
+    assert request.dry_run is True
+
+
+def test_repair_mode_request_rejects_invalid_budget_and_ticker():
+    with pytest.raises(ValueError, match="Ticker must contain only"):
+        RepairModeRequest(mode="repair_news", tickers=["BAD!"])
+
+    with pytest.raises(ValueError, match="Provider budget values must be non-negative"):
+        RepairModeRequest(
+            mode="repair_news",
+            provider_budget={"newsapi": -1},
+        )
 
 
 def test_collection_task_normalizes_tickers_and_tracks_attempt_output():

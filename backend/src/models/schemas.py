@@ -80,6 +80,17 @@ class CollectionTickerHealth(str, Enum):
     INACTIVE_OR_DELISTED = "inactive_or_delisted"
 
 
+class RepairMode(str, Enum):
+    SYNC_STATIC_METADATA = "sync_static_metadata"
+    REPAIR_PRICE_GAPS = "repair_price_gaps"
+    REPAIR_HISTORY = "repair_history"
+    REPAIR_NEWS = "repair_news"
+    REPAIR_CALENDARS = "repair_calendars"
+    REPAIR_EVIDENCE = "repair_evidence"
+    RETRY_AI_ANALYSIS = "retry_ai_analysis"
+    RETRY_AI_REVIEW = "retry_ai_review"
+
+
 VALID_SECTORS = [
     "Technology",
     "Healthcare",
@@ -110,6 +121,33 @@ def validate_ticker(value: str) -> str:
 def collection_manifest_s3_key(manifest_date: date) -> str:
     """Return the canonical S3 key for a daily collection manifest."""
     return f"collection_manifest/{manifest_date.isoformat()}.json"
+
+
+class RepairModeRequest(BaseModel):
+    mode: RepairMode
+    run_date: Optional[date] = None
+    tickers: list[str] = Field(default_factory=list)
+    max_tickers: Optional[int] = Field(default=None, ge=1)
+    provider_budget: dict[str, int] = Field(default_factory=dict)
+    dry_run: bool = False
+
+    @field_validator("tickers")
+    @classmethod
+    def validate_tickers(cls, value: list[str]) -> list[str]:
+        return [validate_ticker(ticker) for ticker in value]
+
+    @field_validator("provider_budget")
+    @classmethod
+    def validate_provider_budget(cls, value: dict[str, int]) -> dict[str, int]:
+        normalized: dict[str, int] = {}
+        for provider, budget in value.items():
+            provider_name = str(provider).strip().lower()
+            if not provider_name:
+                raise ValueError("Provider budget keys must not be empty")
+            if int(budget) < 0:
+                raise ValueError("Provider budget values must be non-negative")
+            normalized[provider_name] = int(budget)
+        return normalized
 
 
 class Stock(BaseModel):

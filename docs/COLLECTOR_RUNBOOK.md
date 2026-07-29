@@ -55,8 +55,17 @@ Supported JSON secret fields are provider-specific names such as
 Use the `Sync Watchlist Metadata Now` GitHub Actions workflow when
 `data-readiness/latest.json` reports `metadata_drift:*` rows. The workflow
 invokes only the deployed `stockara-watchlist-seed` Lambda with
-`{"mode":"sync_static_metadata"}` and validates the repair summary before it
+the shared repair-mode payload shape and validates the repair summary before it
 marks the run green.
+
+Shared repair-mode payload fields:
+
+- `mode`: repair command, such as `sync_static_metadata`.
+- `run_date`: optional collection or publication date to repair.
+- `tickers`: optional target ticker list.
+- `max_tickers`: optional upper bound for broad scans.
+- `provider_budget`: optional provider-to-call-budget map for quota-aware modes.
+- `dry_run`: whether the mode should report planned work without writing changes.
 
 Expected summary fields:
 

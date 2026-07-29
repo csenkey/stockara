@@ -10,6 +10,9 @@ import boto3
 from boto3.dynamodb.conditions import Attr
 from boto3.dynamodb.conditions import Key
 
+from ..models.schemas import RepairMode
+from ..models.schemas import RepairModeRequest
+
 
 logger = logging.getLogger(__name__)
 
@@ -264,7 +267,11 @@ def _classify_unseeded_production_rows(
 
 
 def sync_static_metadata(
-    table: Any, sell_alert_tickers: set[str], *, strict: bool = True
+    table: Any,
+    sell_alert_tickers: set[str],
+    *,
+    strict: bool = True,
+    dry_run: bool = False,
 ) -> dict[str, int]:
     summary = {
         "created": 0,
@@ -290,15 +297,17 @@ def sync_static_metadata(
                 Key={"PK": item["PK"], "SK": item["SK"]}
             ).get("Item")
             if not existing:
-                batch.put_item(Item=item)
+                if not dry_run:
+                    batch.put_item(Item=item)
                 summary["created"] += 1
                 summary["missing"] += 1
             elif _metadata_changed(existing, item):
-                _update_stock_metadata(table, item)
+                if not dry_run:
+                    _update_stock_metadata(table, item)
                 summary["changed"] += 1
             else:
                 summary["unchanged"] += 1
-        if sell_alert_tickers:
+        if sell_alert_tickers and not dry_run:
             batch.put_item(
                 Item={
                     "PK": "CONFIG#sell_alert_watchlist",
@@ -311,6 +320,12 @@ def sync_static_metadata(
     summary.update(_classify_unseeded_production_rows(table, seed_tickers))
     logger.info("watchlist_static_metadata_sync_complete", extra={"summary": summary})
     return summary
+
+
+def _repair_request_from_event(event: dict[str, Any]) -> RepairModeRequest | None:
+    if "mode" not in event:
+        return None
+    return RepairModeRequest.model_validate(event)
 
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -334,10 +349,19 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return {"PhysicalResourceId": f"{table_name}-watchlist-seed"}
 
     table = boto3.resource("dynamodb").Table(table_name)
-    if event.get("mode") == "sync_static_metadata":
-        summary = sync_static_metadata(table, sell_alert_tickers)
+    repair_request = _repair_request_from_event(event)
+    if repair_request and repair_request.mode == RepairMode.SYNC_STATIC_METADATA:
+        summary = sync_static_metadata(
+            table,
+            sell_alert_tickers,
+            dry_run=repair_request.dry_run,
+        )
         logger.info(
-            "watchlist_static_metadata_manual_sync", extra={"summary": summary}
+            "watchlist_static_metadata_manual_sync",
+            extra={
+                "summary": summary,
+                "repair_request": repair_request.model_dump(mode="json"),
+            },
         )
         return {"statusCode": 200, "body": summary}
 
