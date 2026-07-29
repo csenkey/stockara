@@ -185,15 +185,15 @@ The items below are must-have gaps to close before treating Phase 1 recommendati
 
 ### 8. News Timeliness and Ticker Classification
 
-**Status:** Done for the current P1 scope. The direct EventBridge news collection schedule now runs every 15 minutes to match the collector contract and Phase 1 freshness expectation. News ticker classification now filters to the active ticker universe when available, uses word-boundary fallback extraction, suppresses common-word short tickers unless provider-tagged or strongly disambiguated, and stores classification confidence/provenance metadata. News source availability reporting now separates provider request health from article count, records failed/skipped/zero-article sources, redacts provider secrets from error reasons, and makes CI warnings name failed configured sources.
+**Status:** Done for the old near-real-time P1 scope, then revised for quota-conscious development. As of 2026-07-28, the direct EventBridge news collection schedule runs three times per day instead of every 15 minutes so NewsAPI free development/test quota is not exhausted. News ticker classification still filters to the active ticker universe when available, uses word-boundary fallback extraction, suppresses common-word short tickers unless provider-tagged or strongly disambiguated, and stores classification confidence/provenance metadata. News source availability reporting separates provider request health from article count, records failed/skipped/zero-article sources, redacts provider secrets from error reasons, and makes CI warnings name failed configured sources.
 
-**Gap:** Completed. Continue watching production runs for provider-specific failures or rate limits.
+**Gap:** Completed for low-frequency prefetching. The new Daily Pipeline Stability plan should make the daily orchestrator responsible for final pre-analysis news readiness, repair, and degraded-publication decisions.
 
 **Why it matters:** Timely and correctly classified news is central to catalyst analysis.
 
 **Required outcome:**
 
-- Align the deployed news schedule with the Phase 1 news freshness requirement.
+- Align the deployed news schedule with the once-daily analysis requirement and provider quota budgets.
 - Use safer ticker extraction with word boundaries, known ticker universe checks, and false-positive handling for short/common tickers.
 - Record source availability and classification confidence.
 - Tests cover short ticker false positives and source outage behavior.

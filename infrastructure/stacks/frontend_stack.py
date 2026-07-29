@@ -89,6 +89,7 @@ class FrontendStack(Stack):
                     "top-picks/*",
                     "sell-alerts/*",
                     "data-health/*",
+                    "data-readiness/*",
                     "news/*",
                     "price-gaps/*",
                 ],

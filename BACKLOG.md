@@ -25,7 +25,7 @@ Scope notes:
 
 ## Immediate Priority: Rock-Solid Data Collection
 
-Status: Proposed
+Status: Mostly implemented as the current manifest-based collector foundation. Superseded target operating model as of 2026-07-29: daily publication stability now moves to `docs/steering/features/daily-pipeline-stability/`, with Step Functions proposed as the organizer for collection, repair, analysis, review, and publication.
 
 Requirement: Make Stockara's data collection reliable enough that the daily analysis pipeline can trust the input coverage, freshness, and provider provenance before publishing any recommendations.
 
@@ -39,11 +39,12 @@ Rationale:
 
 Target operating model:
 
-- Data collection runs continuously or frequently throughout the day.
-- A distributor Lambda owns a daily collection manifest stored in S3, split by task type and ticker chunks.
-- Worker Lambdas claim bounded chunks for price, news, earnings, dividend, and future signal sources.
-- Every task records status, attempt count, provider used, failure reason, next retry time, and output coverage.
-- The analyzer starts only when the manifest meets minimum coverage gates or publishes with explicit partial-coverage warnings.
+- Historical/current foundation: a distributor Lambda owns a daily collection manifest stored in S3, split by task type and ticker chunks.
+- Historical/current foundation: worker Lambdas claim bounded chunks for price, news, earnings, dividend, and future signal sources.
+- Historical/current foundation: every task records status, attempt count, provider used, failure reason, next retry time, and output coverage.
+- Superseded scheduling target: frequent independent distributor/analyzer schedules should not remain the long-term coordinator.
+- New target: one daily Step Functions workflow should orchestrate metadata sync, manifest creation, bounded collection, repair loops, readiness reporting, AI analysis, review, degraded-publication decisions, and final artifact publication.
+- New target: low-frequency news collection may remain as quota-conscious prefetching, but the daily workflow should own the final pre-analysis collection/readiness decision.
 
 Execution tasks:
 
@@ -70,6 +71,16 @@ Execution tasks:
 - [x] Add tests for gap detection, manifest task creation, collector gap-backfill execution, and CDK wiring.
 - [x] Add a collector runbook covering secret setup, first daily run, manual retry, provider outage triage, and how to quarantine bad tickers.
 - [x] Add integration tests with mocked providers for manifest creation, task claiming, retry behavior, partial provider failure, and analysis gating.
+
+Stability follow-up replacing the old scheduler-centric target:
+
+- [ ] Implement the Daily Pipeline Stability feature backlog under `docs/steering/features/daily-pipeline-stability/backlog.md`.
+- [ ] Publish a daily data-readiness artifact that identifies missing/degraded data by ticker, data type, provider, and repair mode.
+- [ ] Add production metadata drift detection because the repository metadata audit is clean while the deployed dashboard can still report unresolved active metadata rows.
+- [ ] Add idempotent repair modes for metadata sync, price gaps, history repair, news repair, calendar repair, evidence repair, AI analysis retry, and AI review retry.
+- [ ] Add recommendation publication tiers: `decision_grade`, `reduced_confidence`, `fallback_preview`, and `blocked`.
+- [ ] Add a Step Functions Standard Workflow that runs in shadow/manual mode before disabling the independent 5-minute analyzer and distributor schedules.
+- [ ] Retire or narrow superseded EventBridge schedules after the workflow is production owner for daily publication.
 
 Critical calendar follow-up:
 

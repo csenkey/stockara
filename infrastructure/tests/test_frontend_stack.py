@@ -98,6 +98,7 @@ def test_frontend_deployment_does_not_prune_bucket_data():
                 "top-picks/*",
                 "sell-alerts/*",
                 "data-health/*",
+                "data-readiness/*",
                 "news/*",
                 "price-gaps/*",
             ],

@@ -19,8 +19,10 @@ from src.analysis.phase1_pipeline import (
     _price_volume_signals,
     _sector_relative_signals,
     analyze_shortlist,
+    build_data_readiness_payload,
     build_publication_payload,
     evaluate_data_freshness,
+    publish_data_readiness_report,
     publish_collection_status_payload,
     publish_payload,
     run_phase1_pipeline,
@@ -361,6 +363,99 @@ def test_build_publication_payload_includes_partial_coverage_quality():
     assert payload["data_quality"]["coverage_status"] == "partial"
     assert payload["data_quality"]["exclusion_reason_counts"]["missing_stock_data"] == 1
     assert "excluded by data freshness gates" in payload["data_warnings"][-1]
+
+
+def test_build_data_readiness_payload_summarizes_missing_data_and_ai_fallbacks():
+    run_date = date(2026, 7, 29)
+    freshness = {
+        "run_date": run_date.isoformat(),
+        "coverage_status": "partial",
+        "active_ticker_count": 3,
+        "eligible_ticker_count": 1,
+        "excluded_ticker_count": 2,
+        "excluded_tickers": [
+            {
+                "ticker": "METALESS",
+                "reasons": ["unresolved_watchlist_metadata"],
+                "missing_metadata_fields": ["industry", "metadata_source"],
+                "latest_stock_data_date": None,
+                "history_start_date": None,
+                "history_row_count": 0,
+            },
+            {
+                "ticker": "STALE",
+                "reasons": ["stale_stock_data", "insufficient_stock_history_rows"],
+                "latest_stock_data_date": "2026-07-20",
+                "history_start_date": "2026-07-10",
+                "history_row_count": 4,
+            },
+        ],
+        "last_news_collection": None,
+        "news_stale": True,
+        "warnings": ["News freshness is unknown; no collection timestamp is available."],
+    }
+    analyses = [
+        {
+            "ticker": "NVDA",
+            "analysis_method": "fallback_heuristic",
+            "fallback_reason": "openai_error",
+            "recommendation": "BUY",
+            "publication_allowed": False,
+            "confidence_score": 55,
+            "created_at": "2026-07-29T22:01:00",
+        }
+    ]
+
+    payload = build_data_readiness_payload(
+        run_date,
+        freshness,
+        analyses=analyses,
+        scores=[{"ticker": "NVDA"}],
+        publication_status="published",
+    )
+
+    assert payload["artifact_type"] == "data_readiness"
+    assert payload["overall_status"] == "blocked"
+    assert payload["summary"]["candidate_count"] == 1
+    assert payload["summary"]["analyzed_count"] == 1
+    assert payload["summary"]["data_type_counts"]["metadata"] == 1
+    assert payload["summary"]["data_type_counts"]["price"] == 1
+    assert payload["summary"]["data_type_counts"]["history"] == 1
+    assert payload["summary"]["data_type_counts"]["news"] == 1
+    assert payload["summary"]["data_type_counts"]["ai_analysis"] == 1
+    assert payload["summary"]["repair_mode_counts"]["sync_static_metadata"] == 1
+    assert payload["summary"]["repair_mode_counts"]["repair_price_gaps"] == 1
+    assert payload["summary"]["repair_mode_counts"]["retry_ai_analysis"] == 1
+    assert any(
+        item["ticker"] == "METALESS"
+        and item["reason"] == "unresolved_watchlist_metadata"
+        and item["repair_mode"] == "sync_static_metadata"
+        for item in payload["items"]
+    )
+
+
+def test_publish_data_readiness_report_writes_latest_and_history_artifacts():
+    payload = {
+        "artifact_type": "data_readiness",
+        "run_date": "2026-07-29",
+        "generated_at": "2026-07-29T22:00:00",
+        "overall_status": "ready",
+        "summary": {},
+        "items": [],
+    }
+
+    with (
+        patch.object(phase1_pipeline, "ARTIFACT_BUCKET", "stockara-artifacts"),
+        patch("src.analysis.phase1_pipeline.boto3.client") as boto_client,
+    ):
+        publish_data_readiness_report(payload)
+
+    s3 = boto_client.return_value
+    keys = [call.kwargs["Key"] for call in s3.put_object.call_args_list]
+    assert keys == [
+        "data-readiness/latest.json",
+        "data-readiness/history/2026-07-29.json",
+    ]
 
 
 def test_price_volume_signals_prefer_stored_market_signals():
@@ -1852,6 +1947,7 @@ def test_run_phase1_pipeline_suppresses_publication_when_no_ticker_is_eligible()
             "src.analysis.phase1_pipeline._with_collection_manifest_quality",
             side_effect=lambda quality, run_date: quality,
         ),
+        patch("src.analysis.phase1_pipeline.publish_data_readiness_report"),
         patch("src.analysis.phase1_pipeline.publish_payload") as publish_payload,
         patch("src.analysis.phase1_pipeline.score_candidates") as score_candidates,
         patch("src.analysis.phase1_pipeline.select_shortlist"),
@@ -1867,6 +1963,7 @@ def test_run_phase1_pipeline_suppresses_publication_when_no_ticker_is_eligible()
     assert payload["suppression_reason"] == "no_eligible_tickers"
     assert payload["publication_date"] == "2026-06-17"
     assert payload["top_picks"] == []
+    assert payload["data_readiness_summary"]["blocked_item_count"] >= 1
     score_candidates.assert_not_called()
 
 
@@ -1899,6 +1996,7 @@ def test_publish_from_stored_state_suppresses_when_analysis_is_missing():
             side_effect=lambda quality, run_date: quality,
         ),
         patch("src.analysis.phase1_pipeline.store.sell_alert_tickers", return_value=[]),
+        patch("src.analysis.phase1_pipeline.publish_data_readiness_report"),
         patch("src.analysis.phase1_pipeline.publish_payload") as publish_payload,
         patch("src.analysis.phase1_pipeline._emit_metric") as emit_metric,
     ):
@@ -1916,6 +2014,7 @@ def test_publish_from_stored_state_suppresses_when_analysis_is_missing():
     assert payload["suppression_reason"] == "no_candidate_analyses"
     assert payload["candidate_count"] == 1
     assert payload["analyzed_count"] == 0
+    assert payload["data_readiness_summary"]["candidate_count"] == 1
     assert payload["top_picks"] == []
     assert payload["data_warnings"] == [
         "Publication suppressed: no candidate analyses available."

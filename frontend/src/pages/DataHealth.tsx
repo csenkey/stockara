@@ -98,8 +98,44 @@ interface PriceGap {
   status: string;
 }
 
+interface ReadinessPayload {
+  generated_at: string;
+  run_date: string;
+  publication_status: string;
+  overall_status: string;
+  summary: {
+    active_ticker_count?: number;
+    eligible_ticker_count?: number;
+    excluded_ticker_count?: number;
+    candidate_count?: number;
+    analyzed_count?: number;
+    readiness_item_count?: number;
+    blocked_item_count?: number;
+    degraded_item_count?: number;
+    data_type_counts?: Record<string, number>;
+    reason_counts?: Record<string, number>;
+    repair_mode_counts?: Record<string, number>;
+  };
+  warnings: string[];
+  items: ReadinessItem[];
+}
+
+interface ReadinessItem {
+  ticker?: string | null;
+  data_type: string;
+  status: string;
+  reason: string;
+  repair_mode: string;
+  required_for: string;
+  provider?: string | null;
+  latest_observed_at?: string | null;
+  last_attempted_at?: string | null;
+}
+
 const DATA_HEALTH_URL =
   import.meta.env.VITE_DATA_HEALTH_URL || "/data-health/latest.json";
+const DATA_READINESS_URL =
+  import.meta.env.VITE_DATA_READINESS_URL || "/data-readiness/latest.json";
 const NEWS_HEALTH_URL = import.meta.env.VITE_NEWS_HEALTH_URL || "/news/latest.json";
 const PRICE_GAPS_URL =
   import.meta.env.VITE_PRICE_GAPS_URL || "/price-gaps/latest.json";
@@ -110,6 +146,11 @@ interface DataHealthProps {
 
 export default function DataHealth({ onNavigate }: DataHealthProps) {
   const [health, setHealth] = useState<LoadState<DataHealthPayload>>({
+    data: null,
+    error: "",
+    loading: true,
+  });
+  const [readiness, setReadiness] = useState<LoadState<ReadinessPayload>>({
     data: null,
     error: "",
     loading: true,
@@ -128,6 +169,7 @@ export default function DataHealth({ onNavigate }: DataHealthProps) {
   async function loadAll() {
     await Promise.all([
       loadJson(DATA_HEALTH_URL, setHealth),
+      loadJson(DATA_READINESS_URL, setReadiness),
       loadJson(NEWS_HEALTH_URL, setNews),
       loadJson(PRICE_GAPS_URL, setGaps),
     ]);
@@ -189,14 +231,17 @@ export default function DataHealth({ onNavigate }: DataHealthProps) {
             value={String(health.data?.active_ticker_count ?? "-")}
           />
           <Metric
+            label="Readiness issues"
+            value={String(readiness.data?.summary.readiness_item_count ?? "-")}
+          />
+          <Metric
             label="News articles"
             value={String(news.data?.recent_article_count ?? "-")}
           />
-          <Metric
-            label="Price gap tickers"
-            value={String(gaps.data?.gap_ticker_count ?? "-")}
-          />
         </section>
+
+        <ArtifactState label="Data readiness" state={readiness} />
+        {readiness.data && <ReadinessSection payload={readiness.data} />}
 
         <ArtifactState label="Data health" state={health} />
         {health.data && (
@@ -354,6 +399,103 @@ function TaskTable({ rows }: { rows: TaskRow[] }) {
   );
 }
 
+function ReadinessSection({ payload }: { payload: ReadinessPayload }) {
+  const issueRows = payload.items.slice(0, 80);
+  const repairModes = Object.entries(payload.summary.repair_mode_counts ?? {});
+  return (
+    <section className="border border-slate-800 bg-slate-900 p-5">
+      <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+        <div>
+          <h2 className="text-lg font-semibold">Daily Readiness</h2>
+          <p className="mt-1 text-sm text-slate-400">
+            {payload.run_date}, updated {formatDate(payload.generated_at)}
+          </p>
+        </div>
+        <span
+          className={`border px-2 py-1 text-xs font-semibold ${readinessTone(
+            payload.overall_status,
+          )}`}
+        >
+          {payload.overall_status}
+        </span>
+      </div>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-4">
+        <Metric
+          label="Eligible"
+          value={`${payload.summary.eligible_ticker_count ?? 0}/${payload.summary.active_ticker_count ?? 0}`}
+        />
+        <Metric
+          label="Blocked"
+          value={String(payload.summary.blocked_item_count ?? 0)}
+        />
+        <Metric
+          label="Degraded"
+          value={String(payload.summary.degraded_item_count ?? 0)}
+        />
+        <Metric
+          label="AI analyzed"
+          value={String(payload.summary.analyzed_count ?? 0)}
+        />
+      </div>
+
+      {repairModes.length > 0 && (
+        <div className="mt-4 flex flex-wrap gap-2">
+          {repairModes.map(([mode, count]) => (
+            <span
+              key={mode}
+              className="border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-300"
+            >
+              {mode}: {count}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {issueRows.length === 0 ? (
+        <div className="mt-4 border border-slate-800 bg-slate-950 p-4 text-sm text-slate-300">
+          No readiness issues were reported in the latest daily artifact.
+        </div>
+      ) : (
+        <div className="mt-5 overflow-x-auto">
+          <table className="min-w-full text-left text-sm">
+            <thead className="border-b border-slate-800 text-xs uppercase text-slate-500">
+              <tr>
+                <th className="py-2 pr-4">Ticker</th>
+                <th className="py-2 pr-4">Data</th>
+                <th className="py-2 pr-4">Status</th>
+                <th className="py-2 pr-4">Reason</th>
+                <th className="py-2 pr-4">Repair</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800 text-slate-300">
+              {issueRows.map((row, index) => (
+                <tr key={`${row.ticker ?? "global"}-${row.reason}-${index}`}>
+                  <td className="py-2 pr-4 font-semibold text-slate-100">
+                    {row.ticker ?? "Global"}
+                  </td>
+                  <td className="py-2 pr-4">{row.data_type}</td>
+                  <td className="py-2 pr-4">
+                    <span
+                      className={`border px-2 py-1 text-xs ${readinessTone(
+                        row.status,
+                      )}`}
+                    >
+                      {row.status}
+                    </span>
+                  </td>
+                  <td className="py-2 pr-4">{row.reason}</td>
+                  <td className="py-2 pr-4 font-mono text-xs">{row.repair_mode}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function NewsSection({ payload }: { payload: NewsPayload }) {
   return (
     <section className="border border-slate-800 bg-slate-900 p-5">
@@ -482,4 +624,10 @@ function formatNumber(value: number | string) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return String(value);
   return numeric.toLocaleString(undefined, { maximumFractionDigits: 4 });
+}
+
+function readinessTone(status: string) {
+  if (status === "ready") return "border-emerald-700 bg-emerald-950 text-emerald-100";
+  if (status === "degraded") return "border-amber-700 bg-amber-950 text-amber-100";
+  return "border-red-800 bg-red-950 text-red-100";
 }

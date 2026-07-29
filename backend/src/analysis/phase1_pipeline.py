@@ -167,6 +167,14 @@ def _run_full_phase(run_date: date) -> dict[str, Any]:
         upcoming_earnings=upcoming_earnings_summary(run_date),
         upcoming_dividends=upcoming_dividends_summary(run_date),
     )
+    _publish_and_attach_data_readiness(
+        payload,
+        run_date,
+        freshness,
+        analyses=analyses,
+        scores=scores,
+        publication_status="published",
+    )
     publish_payload(payload, run_date)
 
     _emit_metric("candidates_scored", len(scores))
@@ -374,15 +382,26 @@ def _publish_from_stored_state(
     if not analyses:
         logger.warning("phase1_publication_suppressed_no_candidate_analyses")
         _emit_metric("publication_suppressed", 1)
+        data_quality = _with_collection_manifest_quality(
+            publication_data_quality(context["freshness"]),
+            run_date,
+        )
+        readiness_summary = _publish_data_readiness(
+            run_date,
+            context["freshness"],
+            data_quality=data_quality,
+            analyses=[],
+            scores=scores,
+            publication_status="suppressed",
+            suppression_reason="no_candidate_analyses",
+        )
         _publish_suppressed_publication(
             run_date,
             reason="no_candidate_analyses",
             warnings=["Publication suppressed: no candidate analyses available."],
-            data_quality=_with_collection_manifest_quality(
-                publication_data_quality(context["freshness"]),
-                run_date,
-            ),
+            data_quality=data_quality,
             candidate_count=len(scores),
+            data_readiness_summary=readiness_summary,
         )
         return {
             "statusCode": 200,
@@ -401,6 +420,14 @@ def _publish_from_stored_state(
         ),
         upcoming_earnings=upcoming_earnings_summary(run_date),
         upcoming_dividends=upcoming_dividends_summary(run_date),
+    )
+    _publish_and_attach_data_readiness(
+        payload,
+        run_date,
+        freshness,
+        analyses=analyses,
+        scores=scores,
+        publication_status="published",
     )
     publish_payload(payload, run_date)
     _emit_metric("top_picks_published", len(payload["top_picks"]))
@@ -681,6 +708,19 @@ def _publish_suppressed_context_if_possible(
     freshness = context.get("freshness")
     if not freshness:
         return
+    data_quality = _with_collection_manifest_quality(
+        publication_data_quality(freshness),
+        run_date,
+    )
+    readiness_summary = _publish_data_readiness(
+        run_date,
+        freshness,
+        data_quality=data_quality,
+        analyses=[],
+        scores=[],
+        publication_status="suppressed",
+        suppression_reason="no_eligible_tickers",
+    )
     _publish_suppressed_publication(
         run_date,
         reason="no_eligible_tickers",
@@ -688,11 +728,53 @@ def _publish_suppressed_context_if_possible(
             "Publication suppressed: no eligible tickers passed data freshness gates.",
             *freshness.get("warnings", []),
         ],
-        data_quality=_with_collection_manifest_quality(
-            publication_data_quality(freshness),
-            run_date,
-        ),
+        data_quality=data_quality,
+        data_readiness_summary=readiness_summary,
     )
+
+
+def _publish_and_attach_data_readiness(
+    payload: dict[str, Any],
+    run_date: date,
+    freshness: dict[str, Any],
+    *,
+    analyses: list[dict[str, Any]],
+    scores: list[dict[str, Any]],
+    publication_status: str,
+    suppression_reason: str | None = None,
+) -> None:
+    payload["data_readiness_summary"] = _publish_data_readiness(
+        run_date,
+        freshness,
+        data_quality=payload.get("data_quality") or {},
+        analyses=analyses,
+        scores=scores,
+        publication_status=publication_status,
+        suppression_reason=suppression_reason,
+    )
+
+
+def _publish_data_readiness(
+    run_date: date,
+    freshness: dict[str, Any],
+    *,
+    data_quality: dict[str, Any],
+    analyses: list[dict[str, Any]],
+    scores: list[dict[str, Any]],
+    publication_status: str,
+    suppression_reason: str | None = None,
+) -> dict[str, Any]:
+    readiness_payload = build_data_readiness_payload(
+        run_date,
+        freshness,
+        data_quality=data_quality,
+        analyses=analyses,
+        scores=scores,
+        publication_status=publication_status,
+        suppression_reason=suppression_reason,
+    )
+    publish_data_readiness_report(readiness_payload)
+    return readiness_payload["summary"]
 
 
 def _publish_suppressed_publication(
@@ -701,6 +783,7 @@ def _publish_suppressed_publication(
     warnings: list[str],
     data_quality: dict[str, Any] | None = None,
     candidate_count: int = 0,
+    data_readiness_summary: dict[str, Any] | None = None,
 ) -> None:
     if not ARTIFACT_BUCKET:
         return
@@ -720,6 +803,7 @@ def _publish_suppressed_publication(
         "candidate_count": candidate_count,
         "analyzed_count": 0,
         "data_quality": data_quality or {},
+        "data_readiness_summary": data_readiness_summary or {},
         "data_warnings": warnings,
     }
     publish_payload(payload, run_date)
@@ -951,6 +1035,294 @@ def publication_data_quality(freshness: dict[str, Any]) -> dict[str, Any]:
         "news_stale": freshness["news_stale"],
         "warnings": freshness["warnings"],
     }
+
+
+READINESS_REASON_DETAILS = {
+    "unresolved_watchlist_metadata": {
+        "data_type": "metadata",
+        "status": "blocked",
+        "required_for": "decision_grade",
+        "repair_mode": "sync_static_metadata",
+    },
+    "missing_stock_data": {
+        "data_type": "price",
+        "status": "blocked",
+        "required_for": "decision_grade",
+        "repair_mode": "repair_price_gaps",
+    },
+    "stale_stock_data": {
+        "data_type": "price",
+        "status": "blocked",
+        "required_for": "decision_grade",
+        "repair_mode": "repair_price_gaps",
+    },
+    "stock_data_lookup_failed": {
+        "data_type": "price",
+        "status": "blocked",
+        "required_for": "decision_grade",
+        "repair_mode": "repair_price_gaps",
+    },
+    "missing_stock_history": {
+        "data_type": "history",
+        "status": "blocked",
+        "required_for": "decision_grade",
+        "repair_mode": "repair_history",
+    },
+    "insufficient_stock_history_rows": {
+        "data_type": "history",
+        "status": "blocked",
+        "required_for": "decision_grade",
+        "repair_mode": "repair_history",
+    },
+    "insufficient_stock_history_span": {
+        "data_type": "history",
+        "status": "blocked",
+        "required_for": "decision_grade",
+        "repair_mode": "repair_history",
+    },
+    "missing_market_data_provenance": {
+        "data_type": "history",
+        "status": "blocked",
+        "required_for": "decision_grade",
+        "repair_mode": "repair_history",
+    },
+}
+
+
+def build_data_readiness_payload(
+    run_date: date,
+    freshness: dict[str, Any],
+    *,
+    data_quality: dict[str, Any] | None = None,
+    analyses: list[dict[str, Any]] | None = None,
+    scores: list[dict[str, Any]] | None = None,
+    publication_status: str = "unknown",
+    suppression_reason: str | None = None,
+) -> dict[str, Any]:
+    """Build a detailed readiness artifact explaining degraded daily output."""
+    items: list[dict[str, Any]] = []
+    generated_at = datetime.utcnow().isoformat()
+
+    for excluded in freshness.get("excluded_tickers", []):
+        for reason in excluded.get("reasons", []):
+            details = READINESS_REASON_DETAILS.get(
+                reason,
+                {
+                    "data_type": "unknown",
+                    "status": "blocked",
+                    "required_for": "decision_grade",
+                    "repair_mode": "manual_research",
+                },
+            )
+            items.append(
+                {
+                    "ticker": excluded.get("ticker"),
+                    "data_type": details["data_type"],
+                    "status": details["status"],
+                    "required_for": details["required_for"],
+                    "provider": None,
+                    "provider_symbol": excluded.get("ticker"),
+                    "reason": reason,
+                    "latest_observed_at": excluded.get("latest_stock_data_date"),
+                    "last_attempted_at": None,
+                    "next_retry_at": None,
+                    "repair_mode": details["repair_mode"],
+                    "terminal": False,
+                    "details": {
+                        key: value
+                        for key, value in excluded.items()
+                        if key not in {"ticker", "reasons"}
+                    },
+                }
+            )
+
+    if freshness.get("news_stale"):
+        items.append(
+            {
+                "ticker": None,
+                "data_type": "news",
+                "status": "degraded",
+                "required_for": "reduced_confidence",
+                "provider": None,
+                "provider_symbol": None,
+                "reason": "news_stale_or_unknown",
+                "latest_observed_at": freshness.get("last_news_collection"),
+                "last_attempted_at": freshness.get("last_news_collection"),
+                "next_retry_at": None,
+                "repair_mode": "repair_news",
+                "terminal": False,
+                "details": {
+                    "max_age_hours": NEWS_FRESHNESS_MAX_HOURS,
+                    "warnings": freshness.get("warnings", []),
+                },
+            }
+        )
+
+    data_quality = data_quality or {}
+    manifest_summary = (
+        data_quality.get("collection_manifest", {}).get("summary")
+        if isinstance(data_quality.get("collection_manifest"), dict)
+        else None
+    )
+    if isinstance(manifest_summary, dict):
+        for gate in manifest_summary.get("coverage_gates", []):
+            if gate.get("passed", False):
+                continue
+            items.append(
+                {
+                    "ticker": None,
+                    "data_type": _readiness_data_type_for_gate(str(gate.get("name"))),
+                    "status": "degraded"
+                    if str(gate.get("name")) in ADVISORY_COLLECTION_GATES
+                    else "blocked",
+                    "required_for": "decision_grade",
+                    "provider": None,
+                    "provider_symbol": None,
+                    "reason": f"collection_gate_failed:{gate.get('name')}",
+                    "latest_observed_at": data_quality.get("collection_manifest", {}).get(
+                        "updated_at"
+                    ),
+                    "last_attempted_at": data_quality.get("collection_manifest", {}).get(
+                        "updated_at"
+                    ),
+                    "next_retry_at": None,
+                    "repair_mode": _repair_mode_for_gate(str(gate.get("name"))),
+                    "terminal": False,
+                    "details": gate,
+                }
+            )
+
+    for analysis in analyses or []:
+        if analysis.get("analysis_method") == "fallback_heuristic":
+            items.append(
+                {
+                    "ticker": analysis.get("ticker"),
+                    "data_type": "ai_analysis",
+                    "status": "degraded",
+                    "required_for": "decision_grade",
+                    "provider": "openai",
+                    "provider_symbol": analysis.get("ticker"),
+                    "reason": str(analysis.get("fallback_reason") or "fallback_heuristic"),
+                    "latest_observed_at": analysis.get("created_at"),
+                    "last_attempted_at": analysis.get("created_at"),
+                    "next_retry_at": None,
+                    "repair_mode": "retry_ai_analysis",
+                    "terminal": False,
+                    "details": {
+                        "analysis_method": analysis.get("analysis_method"),
+                        "recommendation": analysis.get("recommendation"),
+                        "publication_allowed": analysis.get("publication_allowed"),
+                        "confidence_score": analysis.get("confidence_score"),
+                    },
+                }
+            )
+        review = analysis.get("ai_review") or {}
+        if review and not review.get("approved", False):
+            items.append(
+                {
+                    "ticker": analysis.get("ticker"),
+                    "data_type": "ai_review",
+                    "status": "blocked"
+                    if review.get("status") == "rejected"
+                    else "degraded",
+                    "required_for": "decision_grade",
+                    "provider": "openai",
+                    "provider_symbol": analysis.get("ticker"),
+                    "reason": str(review.get("status") or "review_not_approved"),
+                    "latest_observed_at": analysis.get("created_at"),
+                    "last_attempted_at": analysis.get("created_at"),
+                    "next_retry_at": None,
+                    "repair_mode": "retry_ai_review",
+                    "terminal": review.get("status") == "rejected",
+                    "details": review,
+                }
+            )
+
+    status_counts = _readiness_counts(items, "status")
+    reason_counts = _readiness_counts(items, "reason")
+    data_type_counts = _readiness_counts(items, "data_type")
+    repair_mode_counts = _readiness_counts(items, "repair_mode")
+    blocked_count = int(status_counts.get("blocked", 0))
+    degraded_count = int(status_counts.get("degraded", 0))
+    overall_status = "ready"
+    if blocked_count:
+        overall_status = "blocked"
+    elif degraded_count:
+        overall_status = "degraded"
+
+    return {
+        "artifact_type": "data_readiness",
+        "run_date": run_date.isoformat(),
+        "generated_at": generated_at,
+        "publication_status": publication_status,
+        "suppression_reason": suppression_reason,
+        "overall_status": overall_status,
+        "summary": {
+            "active_ticker_count": freshness.get("active_ticker_count", 0),
+            "eligible_ticker_count": freshness.get("eligible_ticker_count", 0),
+            "excluded_ticker_count": freshness.get("excluded_ticker_count", 0),
+            "candidate_count": len(scores or []),
+            "analyzed_count": len(analyses or []),
+            "readiness_item_count": len(items),
+            "blocked_item_count": blocked_count,
+            "degraded_item_count": degraded_count,
+            "status_counts": status_counts,
+            "data_type_counts": data_type_counts,
+            "reason_counts": reason_counts,
+            "repair_mode_counts": repair_mode_counts,
+        },
+        "data_quality": data_quality,
+        "warnings": freshness.get("warnings", []),
+        "items": items,
+    }
+
+
+def publish_data_readiness_report(payload: dict[str, Any]) -> None:
+    """Publish latest and dated readiness artifacts for data-health surfaces."""
+    if not ARTIFACT_BUCKET:
+        return
+    s3 = boto3.client("s3")
+    run_date = str(payload["run_date"])
+    body = json.dumps(payload, indent=2, default=str).encode("utf-8")
+    for key in [
+        "data-readiness/latest.json",
+        f"data-readiness/history/{run_date}.json",
+    ]:
+        s3.put_object(
+            Bucket=ARTIFACT_BUCKET,
+            Key=key,
+            Body=body,
+            ContentType="application/json",
+            CacheControl="public, max-age=300",
+        )
+
+
+def _readiness_counts(items: list[dict[str, Any]], field: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        value = str(item.get(field) or "unknown")
+        counts[value] = counts.get(value, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _readiness_data_type_for_gate(gate_name: str) -> str:
+    if "price" in gate_name:
+        return "price"
+    if "news" in gate_name:
+        return "news"
+    if "calendar" in gate_name:
+        return "calendar"
+    return "collection"
+
+
+def _repair_mode_for_gate(gate_name: str) -> str:
+    if "price" in gate_name:
+        return "repair_price_gaps"
+    if "news" in gate_name:
+        return "repair_news"
+    if "calendar" in gate_name:
+        return "repair_calendars"
+    return "repair_collection_manifest"
 
 
 def select_shortlist(scores: list[dict[str, Any]]) -> list[dict[str, Any]]:

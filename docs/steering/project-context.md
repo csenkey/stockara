@@ -68,11 +68,10 @@ The project also includes a public demo-trading feature: 100 superhero-named sim
 
 ## Scheduling And Deployment Expectations
 
-- Stock collector: EventBridge daily at 21:00 UTC.
-- News collector: EventBridge every 15 minutes by default.
+- Stock collector: bounded EventBridge collection during the day in the current manifest foundation; the daily workflow should own final pre-analysis price readiness.
+- News collector: EventBridge three times per day during development/testing, with the daily workflow expected to own final pre-analysis news readiness.
 - AI analyzer: EventBridge daily at 22:00 UTC.
 - Demo trade executor: EventBridge daily at 22:30 UTC, after AI analysis.
 - Backend Lambdas should emit structured JSON logs and useful custom metrics.
 - The health endpoint should report component status and last successful batch timestamps.
 - Infrastructure should stay serverless-first and cost-conscious for roughly 10-100 users.
-

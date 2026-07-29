@@ -145,6 +145,7 @@ This section is designed for transparency. It lets expert reviewers inspect wher
 The Data Freshness page loads three artifacts:
 
 - `/data-health/latest.json`, unless `VITE_DATA_HEALTH_URL` overrides it.
+- `/data-readiness/latest.json`, unless `VITE_DATA_READINESS_URL` overrides it.
 - `/news/latest.json`, unless `VITE_NEWS_HEALTH_URL` overrides it.
 - `/price-gaps/latest.json`, unless `VITE_PRICE_GAPS_URL` overrides it.
 
@@ -244,4 +245,3 @@ When reviewing a daily publication:
 - Check News Coverage for source availability and ticker coverage.
 - Check Price Gaps for missing data in tickers being discussed.
 - Inspect Withheld AI Recommendations to understand rejected borderline ideas.
-

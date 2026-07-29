@@ -171,6 +171,7 @@ Important prefixes:
 | `sell-alerts/latest.json` | Analyzer/publisher | Dashboard/consumers | Latest sell-alert subset |
 | `sell-alerts/history/YYYY-MM-DD.json` | Analyzer/publisher | Operators/audits | Dated sell-alert archive |
 | `data-health/latest.json` | Collection health publishing code | Data Freshness view | Collection manifest status |
+| `data-readiness/latest.json` | Phase 1 analyzer/publisher | Data Freshness view | Daily readiness issues and repair modes |
 | `news/latest.json` | News collector | Data Freshness view | Recent news coverage summary |
 | `price-gaps/latest.json` | Stock gap scanner | Data Freshness view | Missing OHLCV ranges |
 | `stock-history/*` | Stock collector/backfill | Operators/collectors | Historical price artifacts and backfill support |

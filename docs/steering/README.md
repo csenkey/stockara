@@ -27,6 +27,9 @@ These files are the canonical, tool-neutral steering layer for Stockara. Codex a
 ## Current Feature Steering
 
 - `work-queue.md`
+- `features/daily-pipeline-stability/requirements.md`
+- `features/daily-pipeline-stability/design.md`
+- `features/daily-pipeline-stability/backlog.md`
 - `features/backtest-support-with-shadowed-portfolios/requirements.md`
 - `features/backtest-support-with-shadowed-portfolios/design.md`
 - `features/backtest-support-with-shadowed-portfolios/backlog.md`

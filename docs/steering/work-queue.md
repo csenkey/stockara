@@ -14,23 +14,46 @@ Other backlog-like files are reference material unless this file links to them a
 
 ## Current Priority Order
 
-### 1. Backtest Support With Shadowed Portfolios
+### 1. Daily Pipeline Stability
 
-Status: Active implementation. Offline framework foundation implemented; decision-grade data ingestion and historical recommendation replay remain open.
+Status: Active planning/next implementation priority as of 2026-07-29.
+
+Goal: Make the once-daily Stockara publication stable, explainable, and useful even when optional data is degraded, by replacing independent schedule timing assumptions with one observable daily workflow.
+
+Canonical feature docs:
+
+- `docs/steering/features/daily-pipeline-stability/requirements.md`
+- `docs/steering/features/daily-pipeline-stability/design.md`
+- `docs/steering/features/daily-pipeline-stability/backlog.md`
+
+First milestone:
+
+- Publish a daily data-readiness artifact that identifies exactly which tickers/data types are missing or degraded and why.
+- Detect production metadata drift, especially when DynamoDB active metadata disagrees with the clean repository seed/audit.
+- Keep empty daily publications explainable from the public dashboard without needing CloudWatch access.
+
+Next executable items:
+
+- Implement `data-readiness/latest.json` and `data-readiness/history/{date}.json`.
+- Add production metadata drift checks and operator-safe metadata sync verification.
+- Add degraded publication tiers: `decision_grade`, `reduced_confidence`, `fallback_preview`, and `blocked`.
+- Add a Step Functions daily workflow in shadow/manual mode before retiring independent schedules.
+
+Why this matters:
+
+- The current dashboard can show zero picks even when the pipeline ran, because fallback or review-gated actionable recommendations are withheld.
+- Today’s production artifact reports unresolved metadata rows even though the repository metadata audit is clean, so the system needs drift detection and repair visibility.
+- We analyze once per day; a single organizer is easier to reason about and cheaper than near-real-time polling plus repeated gated analyzer attempts.
+
+### 2. Backtest Support With Shadowed Portfolios
+
+Status: Paused behind daily pipeline stability. Offline framework foundation implemented; decision-grade data ingestion and historical recommendation replay remain open.
 
 Goal: Compare versioned `AnalysisStrategy` snapshots using deterministic historical simulations, shadow portfolios, ETF baselines, and S3 artifacts.
 
 Canonical feature backlog:
 
 - `docs/steering/features/backtest-support-with-shadowed-portfolios/backlog.md`
-
-First milestone:
-
-- One bounded 365-day benchmark window, initially 2022 for a stress/bearish year.
-- 20 deterministic portfolios starting with USD 10,000.00 for budget-controlled comparison runs.
-- Freeze current hardcoded analyzer behavior as `analysis_strategy_current`.
-- Compare one candidate `AnalysisStrategy` against the current baseline.
-- Store all artifacts in S3.
 
 Completed setup tasks:
 
@@ -46,7 +69,7 @@ Next executable items:
 - Add S3-backed historical OHLCV/ETF loader and artifact writer.
 - Add cached recommendation artifact loading keyed by analysis strategy, ticker, date, model, prompt version, evidence hash, and schema version.
 
-### 2. Calendar and Historical Evidence Foundation
+### 3. Calendar and Historical Evidence Foundation
 
 Status: Active supporting priority.
 
@@ -69,7 +92,7 @@ Why this matters:
 - Backtest promotion should not rely on reduced-evidence runs.
 - Earnings/dividend context is required by the S3-backed backtest evidence snapshot.
 
-### 3. Phase 1 UI and Static Artifact Refinement
+### 4. Phase 1 UI and Static Artifact Refinement
 
 Status: Proposed/secondary.
 
