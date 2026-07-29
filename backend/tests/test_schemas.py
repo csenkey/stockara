@@ -176,6 +176,9 @@ def test_repair_mode_request_rejects_invalid_budget_and_ticker():
             provider_budget={"newsapi": -1},
         )
 
+    with pytest.raises(ValueError, match="repair_price_gaps requires run_date"):
+        RepairModeRequest(mode="repair_price_gaps", tickers=["AAPL"])
+
 
 def test_collection_task_normalizes_tickers_and_tracks_attempt_output():
     now = datetime(2026, 6, 20, 8, 0, 0)

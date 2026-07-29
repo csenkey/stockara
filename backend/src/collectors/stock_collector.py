@@ -20,7 +20,7 @@ import structlog
 import yfinance as yf
 
 from src.db.connection import DatabasePool, store
-from src.models.schemas import CollectionTaskType
+from src.models.schemas import CollectionTaskType, RepairMode, RepairModeRequest
 from src.services.collection_manifest import (
     complete_task,
     find_task,
@@ -160,6 +160,14 @@ def handler(event: dict, context: Any) -> dict:
                 )
             )
             return {"statusCode": 200, "body": "No active tickers to collect"}
+
+        repair_request = _stock_repair_request_from_event(event)
+        if repair_request:
+            repair_event = _stock_repair_event(event, repair_request)
+            if repair_request.mode == RepairMode.REPAIR_HISTORY:
+                return _run_historical_backfill(stocks, repair_event, context)
+            if repair_request.mode == RepairMode.REPAIR_PRICE_GAPS:
+                return _run_price_gap_backfill(stocks, repair_event, context)
 
         if (event or {}).get("mode") == "historical_backfill":
             return _run_historical_backfill(stocks, event or {}, context)
@@ -359,6 +367,41 @@ def handler(event: dict, context: Any) -> dict:
         DatabasePool.close()
 
 
+def _stock_repair_request_from_event(event: dict[str, Any]) -> RepairModeRequest | None:
+    mode = str(event.get("mode") or "")
+    if mode not in {
+        RepairMode.REPAIR_HISTORY.value,
+        RepairMode.REPAIR_PRICE_GAPS.value,
+    }:
+        return None
+    return RepairModeRequest.model_validate(event)
+
+
+def _stock_repair_event(
+    event: dict[str, Any], repair_request: RepairModeRequest
+) -> dict[str, Any]:
+    normalized = dict(event)
+    normalized["repair_mode"] = repair_request.mode.value
+    normalized["tickers"] = repair_request.tickers
+    normalized["dry_run"] = repair_request.dry_run
+    if repair_request.max_tickers is not None:
+        normalized["max_tickers"] = repair_request.max_tickers
+
+    if repair_request.mode == RepairMode.REPAIR_HISTORY:
+        normalized["mode"] = "historical_backfill"
+        return normalized
+
+    normalized["mode"] = "price_gap_backfill"
+    if repair_request.run_date and not (
+        normalized.get("price_backfill_start_date")
+        and normalized.get("price_backfill_end_date")
+    ):
+        run_date = repair_request.run_date.isoformat()
+        normalized["price_backfill_start_date"] = run_date
+        normalized["price_backfill_end_date"] = run_date
+    return normalized
+
+
 def _fetch_watchlist() -> list[dict[str, Any]]:
     """Fetch active stock metadata from the stocks watchlist table."""
     return store.active_stock_metadata()
@@ -455,6 +498,7 @@ def _alpha_vantage_api_key() -> str | None:
 def _run_historical_backfill(
     stocks: list[dict[str, Any]], event: dict[str, Any], context: Any
 ) -> dict[str, Any]:
+    result_mode = str(event.get("repair_mode") or "historical_backfill")
     max_tickers = int(event.get("max_tickers", HISTORICAL_BACKFILL_TICKERS_PER_RUN))
     selected = _select_historical_backfill_stocks(stocks, event, max_tickers)
     run_id = str(
@@ -470,10 +514,21 @@ def _run_historical_backfill(
         return {
             "statusCode": 200,
             "body": {
-                "mode": "historical_backfill",
+                "mode": result_mode,
                 "status": "complete",
                 "processed_count": 0,
                 "message": "No tickers need historical backfill",
+            },
+        }
+    if bool(event.get("dry_run", False)):
+        return {
+            "statusCode": 200,
+            "body": {
+                "mode": result_mode,
+                "status": "dry_run",
+                "selected_tickers": [stock["ticker"] for stock in selected],
+                "selected_ticker_count": len(selected),
+                "active_ticker_count": len(stocks),
             },
         }
 
@@ -562,7 +617,7 @@ def _run_historical_backfill(
         no_data_tickers=no_data,
         recovered_tickers=sorted(collected_tickers),
     )
-    summary["mode"] = "historical_backfill"
+    summary["mode"] = result_mode
     summary["s3_archives_written"] = archived
     summary["s3_archives_restored"] = restored
     summary["provider_fetches"] = fetched
@@ -612,7 +667,7 @@ def _run_historical_backfill(
     return {
         "statusCode": 200,
         "body": {
-            "mode": "historical_backfill",
+            "mode": result_mode,
             "backfill_run_id": run_id,
             "processed_tickers": [stock["ticker"] for stock in selected],
             "processed_total": len(processed_tickers),
@@ -1088,6 +1143,7 @@ def _run_price_gap_backfill(
     context: Any,
     manifest_task_run: ManifestTaskRun | None = None,
 ) -> dict[str, Any]:
+    result_mode = str(event.get("repair_mode") or "price_gap_backfill")
     start_date = date.fromisoformat(str(event["price_backfill_start_date"]))
     end_date = date.fromisoformat(str(event["price_backfill_end_date"]))
     requested = {
@@ -1097,6 +1153,20 @@ def _run_price_gap_backfill(
     }
     stock_by_ticker = {str(stock["ticker"]).upper(): stock for stock in stocks}
     tickers = sorted(requested & set(stock_by_ticker))
+
+    if bool(event.get("dry_run", False)):
+        return {
+            "statusCode": 200,
+            "body": {
+                "mode": result_mode,
+                "status": "dry_run",
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "tickers": tickers,
+                "selected_ticker_count": len(tickers),
+                "active_ticker_count": len(stocks),
+            },
+        }
 
     inserted_records = 0
     duplicate_records = 0
@@ -1137,7 +1207,7 @@ def _run_price_gap_backfill(
         no_data_tickers=no_data_tickers,
         recovered_tickers=sorted(collected_tickers),
     )
-    summary["mode"] = "price_gap_backfill"
+    summary["mode"] = result_mode
     summary["backfill_start_date"] = start_date.isoformat()
     summary["backfill_end_date"] = end_date.isoformat()
     summary["failed_record_count"] = failed_records
@@ -1165,7 +1235,7 @@ def _run_price_gap_backfill(
     return {
         "statusCode": 200,
         "body": {
-            "mode": "price_gap_backfill",
+            "mode": result_mode,
             "start_date": start_date.isoformat(),
             "end_date": end_date.isoformat(),
             "tickers": tickers,

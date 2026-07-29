@@ -67,6 +67,13 @@ Shared repair-mode payload fields:
 - `provider_budget`: optional provider-to-call-budget map for quota-aware modes.
 - `dry_run`: whether the mode should report planned work without writing changes.
 
+Stock collector repair modes currently supported:
+
+- `repair_history`: restores or backfills historical OHLCV rows for selected or
+  due tickers.
+- `repair_price_gaps`: backfills a specific missing price date for selected
+  tickers. When only `run_date` is provided, it repairs that single date.
+
 Expected summary fields:
 
 - `created`: active seed rows that were missing in DynamoDB and were inserted.

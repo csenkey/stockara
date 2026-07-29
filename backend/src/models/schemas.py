@@ -5,7 +5,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class CompanySize(str, Enum):
@@ -130,6 +130,12 @@ class RepairModeRequest(BaseModel):
     max_tickers: Optional[int] = Field(default=None, ge=1)
     provider_budget: dict[str, int] = Field(default_factory=dict)
     dry_run: bool = False
+
+    @model_validator(mode="after")
+    def validate_mode_requirements(self) -> "RepairModeRequest":
+        if self.mode == RepairMode.REPAIR_PRICE_GAPS and self.run_date is None:
+            raise ValueError("repair_price_gaps requires run_date")
+        return self
 
     @field_validator("tickers")
     @classmethod

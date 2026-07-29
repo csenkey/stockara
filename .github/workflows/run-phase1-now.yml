@@ -134,7 +134,7 @@ jobs:
           set -euo pipefail
           aws lambda invoke \
             --function-name "$WATCHLIST_SEED_FN" \
-            --payload '{"mode":"sync_static_metadata"}' \
+            --payload '{"mode":"sync_static_metadata","tickers":[],"provider_budget":{},"dry_run":false}' \
             --log-type Tail \
             --cli-read-timeout 900 \
             --cli-binary-format raw-in-base64-out \
@@ -149,7 +149,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          payload="$(printf '{"mode":"historical_backfill","max_tickers":%s,"continue_backfill":%s,"scan_all":true}' "${{ inputs.historical_backfill_max_tickers }}" "${{ inputs.historical_backfill_continue }}")"
+          payload="$(printf '{"mode":"repair_history","max_tickers":%s,"continue_backfill":%s,"scan_all":true,"provider_budget":{},"dry_run":false}' "${{ inputs.historical_backfill_max_tickers }}" "${{ inputs.historical_backfill_continue }}")"
           aws lambda invoke \
             --function-name "$STOCK_COLLECTOR_FN" \
             --payload "$payload" \

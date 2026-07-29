@@ -1960,6 +1960,65 @@ class TestHandler:
         mock_metric.assert_not_called()
         mock_summary.assert_called_once()
 
+    @patch("backend.src.collectors.stock_collector._fetch_historical_records")
+    @patch("backend.src.collectors.stock_collector._fetch_watchlist")
+    @patch("backend.src.collectors.stock_collector.DatabasePool")
+    def test_handler_accepts_repair_history_mode(
+        self,
+        mock_pool,
+        mock_watchlist,
+        mock_fetch_history,
+    ):
+        mock_watchlist.return_value = [{"ticker": "AAPL"}]
+
+        result = handler(
+            {
+                "mode": "repair_history",
+                "tickers": ["aapl"],
+                "max_tickers": 1,
+                "dry_run": True,
+            },
+            None,
+        )
+
+        assert result["statusCode"] == 200
+        assert result["body"]["mode"] == "repair_history"
+        assert result["body"]["status"] == "dry_run"
+        assert result["body"]["selected_tickers"] == ["AAPL"]
+        mock_fetch_history.assert_not_called()
+
+    @patch("backend.src.collectors.stock_collector._store_records")
+    @patch("backend.src.collectors.stock_collector._fetch_price_backfill_records")
+    @patch("backend.src.collectors.stock_collector._fetch_watchlist")
+    @patch("backend.src.collectors.stock_collector.DatabasePool")
+    def test_handler_accepts_repair_price_gaps_mode(
+        self,
+        mock_pool,
+        mock_watchlist,
+        mock_fetch_backfill,
+        mock_store_records,
+    ):
+        mock_watchlist.return_value = [{"ticker": "AAPL"}]
+
+        result = handler(
+            {
+                "mode": "repair_price_gaps",
+                "run_date": "2026-06-17",
+                "tickers": ["aapl"],
+                "dry_run": True,
+            },
+            None,
+        )
+
+        assert result["statusCode"] == 200
+        assert result["body"]["mode"] == "repair_price_gaps"
+        assert result["body"]["status"] == "dry_run"
+        assert result["body"]["start_date"] == "2026-06-17"
+        assert result["body"]["end_date"] == "2026-06-17"
+        assert result["body"]["tickers"] == ["AAPL"]
+        mock_fetch_backfill.assert_not_called()
+        mock_store_records.assert_not_called()
+
     @patch("backend.src.collectors.stock_collector._emit_metric")
     @patch("backend.src.collectors.stock_collector._compute_and_store_movement_signals")
     @patch("backend.src.collectors.stock_collector._record_failed_ticker_state")
