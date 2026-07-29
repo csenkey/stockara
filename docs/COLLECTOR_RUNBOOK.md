@@ -65,6 +65,10 @@ Expected summary fields:
 - `changed`: existing metadata rows updated from `data/watchlist_seed.csv`.
 - `unchanged`: existing metadata rows that already matched the packaged seed.
 - `invalid`: malformed seed rows. The workflow fails when this is non-zero.
+- `inactive`: production stock rows absent from the seed and already marked
+  inactive.
+- `out_of_scope`: active production stock rows absent from the seed. These rows
+  should be reviewed because the analyzer can still treat them as eligible.
 
 After a successful sync, run `Analyze Phase 1 Now` to republish
 `data-readiness/latest.json` and confirm the metadata drift warning cleared.

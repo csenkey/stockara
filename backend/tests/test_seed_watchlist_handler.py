@@ -117,6 +117,8 @@ def test_sync_static_metadata_updates_context_without_clobbering_live_fields(mon
         "changed": 1,
         "unchanged": 0,
         "invalid": 0,
+        "inactive": 0,
+        "out_of_scope": 0,
     }
     assert stored["business_description"] == (
         "Designs and sells consumer electronics and services."
@@ -168,6 +170,8 @@ def test_sync_static_metadata_creates_missing_stock(monkeypatch):
         "changed": 0,
         "unchanged": 0,
         "invalid": 0,
+        "inactive": 0,
+        "out_of_scope": 0,
     }
     assert table.items[("STOCK#AAPL", "META")]["company_name"] == "Apple Inc."
 
@@ -192,8 +196,27 @@ def test_sync_static_metadata_can_skip_invalid_rows(monkeypatch):
         "changed": 1,
         "unchanged": 0,
         "invalid": 1,
+        "inactive": 0,
+        "out_of_scope": 0,
     }
     assert stored["sector"] == "Consumer Discretionary"
+
+
+def test_sync_static_metadata_reports_inactive_and_out_of_scope_rows(monkeypatch):
+    inactive = _build_stock_item(_complete_row(ticker="OLD"), set())
+    inactive["is_active"] = False
+    out_of_scope = _build_stock_item(_complete_row(ticker="DRIFT"), set())
+    table = _FakeTable([inactive, out_of_scope])
+    monkeypatch.setattr(
+        "backend.src.scripts.seed_watchlist_handler._load_seed_rows",
+        lambda: [_complete_row(ticker="AAPL")],
+    )
+
+    summary = sync_static_metadata(table, set())
+
+    assert summary["created"] == 1
+    assert summary["inactive"] == 1
+    assert summary["out_of_scope"] == 1
 
 
 def test_handler_syncs_existing_metadata_on_custom_resource_update(monkeypatch):
@@ -224,6 +247,8 @@ def test_handler_syncs_existing_metadata_on_custom_resource_update(monkeypatch):
     assert result["Data"]["Skipped"] is True
     assert result["Data"]["MetadataChanged"] == 1
     assert result["Data"]["MetadataMissing"] == 0
+    assert result["Data"]["MetadataInactive"] == 0
+    assert result["Data"]["MetadataOutOfScope"] == 0
     assert stored["sector"] == "Consumer Discretionary"
 
 
@@ -252,8 +277,15 @@ class _FakeTable:
         item = self.items.get((Key["PK"], Key["SK"]))
         return {"Item": dict(item)} if item else {}
 
-    def query(self, **_kwargs):
-        return {"Count": len(self.items)}
+    def query(self, **kwargs):
+        stocks = [
+            dict(item)
+            for item in self.items.values()
+            if item.get("GSI1PK") == "STOCK"
+        ]
+        if kwargs.get("Select") == "COUNT":
+            return {"Count": len(stocks)}
+        return {"Items": stocks}
 
     def update_item(
         self,

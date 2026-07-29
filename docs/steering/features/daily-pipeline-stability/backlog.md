@@ -5,9 +5,9 @@
 - [x] Publish a daily data-readiness artifact with ticker-level details for metadata, price, history, news, AI analysis, and AI review.
 - [x] Add readiness summary counters to `top-picks/latest.json` so the dashboard can explain empty results without requiring CloudWatch access.
 - [x] Add a production metadata drift check that compares active DynamoDB metadata quality with `data/watchlist_seed.csv` expectations and reports rows missing required fields.
-- [ ] Add a manual metadata sync verification path that reports changed, unchanged, missing, invalid, and inactive/out-of-scope production rows.
-  - [x] Add a sync-only GitHub Actions workflow that validates the deployed repair summary for changed, unchanged, missing, and invalid rows.
-  - [ ] Extend the repair summary or a companion audit to report inactive/out-of-scope production rows.
+- [x] Add a manual metadata sync verification path that reports changed, unchanged, missing, invalid, and inactive/out-of-scope production rows.
+  - [x] Add a sync-only GitHub Actions workflow that validates the deployed repair summary for changed, unchanged, missing, invalid, inactive, and out-of-scope rows.
+  - [x] Extend the repair summary or a companion audit to report inactive/out-of-scope production rows.
 - [x] Add frontend data-health rendering for readiness rows grouped by reason and repair mode.
 - [x] Add tests proving readiness summary counters match detailed rows.
 

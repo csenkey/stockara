@@ -35,7 +35,6 @@ First milestone:
 
 Next executable items:
 
-- Extend metadata sync verification to report inactive/out-of-scope production rows.
 - Define a shared repair-mode input schema for daily workflow repair steps.
 - Add degraded publication tiers: `decision_grade`, `reduced_confidence`, `fallback_preview`, and `blocked`.
 - Add a Step Functions daily workflow in shadow/manual mode before retiring independent schedules.

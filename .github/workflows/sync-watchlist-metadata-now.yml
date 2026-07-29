@@ -94,14 +94,30 @@ jobs:
               print(f"Watchlist metadata sync returned an unexpected body: {summary}")
               sys.exit(1)
 
-          expected_keys = {"created", "missing", "changed", "unchanged", "invalid"}
+          expected_keys = {
+              "created",
+              "missing",
+              "changed",
+              "unchanged",
+              "invalid",
+              "inactive",
+              "out_of_scope",
+          }
           missing_keys = sorted(expected_keys - set(summary))
           if missing_keys:
               print(f"Missing expected sync summary keys: {missing_keys}")
               sys.exit(1)
 
           counts = {}
-          for key in ("created", "missing", "changed", "unchanged", "invalid"):
+          for key in (
+              "created",
+              "missing",
+              "changed",
+              "unchanged",
+              "invalid",
+              "inactive",
+              "out_of_scope",
+          ):
               try:
                   counts[key] = int(summary[key])
               except (TypeError, ValueError):

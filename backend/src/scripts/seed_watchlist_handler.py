@@ -233,6 +233,36 @@ def _update_stock_metadata(table: Any, item: dict[str, Any]) -> None:
     )
 
 
+def _query_stock_metadata(table: Any) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    kwargs: dict[str, Any] = {
+        "IndexName": "GSI1",
+        "KeyConditionExpression": Key("GSI1PK").eq("STOCK"),
+    }
+    while True:
+        response = table.query(**kwargs)
+        items.extend(response.get("Items", []))
+        last_key = response.get("LastEvaluatedKey")
+        if not last_key:
+            return items
+        kwargs["ExclusiveStartKey"] = last_key
+
+
+def _classify_unseeded_production_rows(
+    table: Any, seed_tickers: set[str]
+) -> dict[str, int]:
+    summary = {"inactive": 0, "out_of_scope": 0}
+    for item in _query_stock_metadata(table):
+        ticker = (item.get("ticker") or item.get("GSI1SK") or "").strip().upper()
+        if not ticker or ticker in seed_tickers:
+            continue
+        if item.get("is_active", True):
+            summary["out_of_scope"] += 1
+        else:
+            summary["inactive"] += 1
+    return summary
+
+
 def sync_static_metadata(
     table: Any, sell_alert_tickers: set[str], *, strict: bool = True
 ) -> dict[str, int]:
@@ -242,7 +272,10 @@ def sync_static_metadata(
         "changed": 0,
         "unchanged": 0,
         "invalid": 0,
+        "inactive": 0,
+        "out_of_scope": 0,
     }
+    seed_tickers: set[str] = set()
     with table.batch_writer() as batch:
         for row in _load_seed_rows():
             try:
@@ -252,6 +285,7 @@ def sync_static_metadata(
                 if strict:
                     raise
                 continue
+            seed_tickers.add(item["ticker"])
             existing = table.get_item(
                 Key={"PK": item["PK"], "SK": item["SK"]}
             ).get("Item")
@@ -274,6 +308,7 @@ def sync_static_metadata(
                     "values": sorted(sell_alert_tickers),
                 }
             )
+    summary.update(_classify_unseeded_production_rows(table, seed_tickers))
     logger.info("watchlist_static_metadata_sync_complete", extra={"summary": summary})
     return summary
 
@@ -324,6 +359,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 "MetadataChanged": summary["changed"],
                 "MetadataUnchanged": summary["unchanged"],
                 "MetadataInvalid": summary["invalid"],
+                "MetadataInactive": summary["inactive"],
+                "MetadataOutOfScope": summary["out_of_scope"],
             },
         }
 
