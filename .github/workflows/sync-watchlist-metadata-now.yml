@@ -1,0 +1,118 @@
+name: Sync Watchlist Metadata Now
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_stage:
+        description: "Deployment stage to run"
+        required: true
+        default: "prod"
+        type: choice
+        options:
+          - prod
+
+concurrency:
+  group: sync-watchlist-metadata-now-${{ inputs.deployment_stage }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+jobs:
+  sync:
+    name: Invoke watchlist metadata sync
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check AWS OIDC role configuration
+        run: |
+          if [[ -z "${{ secrets.AWS_ROLE_TO_ASSUME }}" ]]; then
+            echo "Missing GitHub secret AWS_ROLE_TO_ASSUME."
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: stockara-sync-watchlist-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve function name
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="${{ inputs.deployment_stage }}"
+          if [[ "$stage" == "prod" ]]; then
+            echo "WATCHLIST_SEED_FN=stockara-watchlist-seed" >> "$GITHUB_ENV"
+          else
+            echo "Unsupported deployment stage: $stage"
+            exit 1
+          fi
+
+      - name: Sync watchlist static metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws lambda invoke \
+            --function-name "$WATCHLIST_SEED_FN" \
+            --payload '{"mode":"sync_static_metadata"}' \
+            --log-type Tail \
+            --cli-read-timeout 900 \
+            --cli-binary-format raw-in-base64-out \
+            watchlist-sync-response.json > watchlist-sync-invoke.json
+          python - <<'PY'
+          import base64
+          import json
+          import sys
+
+          meta = json.load(open("watchlist-sync-invoke.json"))
+          if meta.get("LogResult"):
+              print(base64.b64decode(meta["LogResult"]).decode())
+          if meta.get("FunctionError"):
+              print(json.dumps(meta, indent=2))
+              sys.exit(1)
+
+          payload = json.load(open("watchlist-sync-response.json"))
+          print(json.dumps(payload, indent=2))
+          if payload.get("statusCode") != 200:
+              print(f"Watchlist metadata sync failed with statusCode={payload.get('statusCode')}")
+              sys.exit(1)
+
+          summary = payload.get("body", payload)
+          if isinstance(summary, str):
+              try:
+                  summary = json.loads(summary)
+              except json.JSONDecodeError:
+                  print(f"Watchlist metadata sync returned a non-JSON body: {summary}")
+                  sys.exit(1)
+          if not isinstance(summary, dict):
+              print(f"Watchlist metadata sync returned an unexpected body: {summary}")
+              sys.exit(1)
+
+          expected_keys = {"created", "missing", "changed", "unchanged", "invalid"}
+          missing_keys = sorted(expected_keys - set(summary))
+          if missing_keys:
+              print(f"Missing expected sync summary keys: {missing_keys}")
+              sys.exit(1)
+
+          counts = {}
+          for key in ("created", "missing", "changed", "unchanged", "invalid"):
+              try:
+                  counts[key] = int(summary[key])
+              except (TypeError, ValueError):
+                  print(f"Sync summary field {key!r} is not an integer: {summary[key]!r}")
+                  sys.exit(1)
+
+          if counts["invalid"] > 0:
+              print("Watchlist metadata sync reported invalid seed rows.")
+              sys.exit(1)
+
+          print("Watchlist metadata sync summary:")
+          for key, value in counts.items():
+              print(f"{key}: {value}")
+          PY

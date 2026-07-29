@@ -50,6 +50,25 @@ Supported JSON secret fields are provider-specific names such as
 6. Run the analyzer only after failed gates are resolved or intentionally
    accepted as partial coverage.
 
+## Manual Watchlist Metadata Sync
+
+Use the `Sync Watchlist Metadata Now` GitHub Actions workflow when
+`data-readiness/latest.json` reports `metadata_drift:*` rows. The workflow
+invokes only the deployed `stockara-watchlist-seed` Lambda with
+`{"mode":"sync_static_metadata"}` and validates the repair summary before it
+marks the run green.
+
+Expected summary fields:
+
+- `created`: active seed rows that were missing in DynamoDB and were inserted.
+- `missing`: the same newly-created count, kept for operator readability.
+- `changed`: existing metadata rows updated from `data/watchlist_seed.csv`.
+- `unchanged`: existing metadata rows that already matched the packaged seed.
+- `invalid`: malformed seed rows. The workflow fails when this is non-zero.
+
+After a successful sync, run `Analyze Phase 1 Now` to republish
+`data-readiness/latest.json` and confirm the metadata drift warning cleared.
+
 ## Manual Retry
 
 Use the task `task_id`, `manifest_bucket`, and `manifest_key` from the manifest.

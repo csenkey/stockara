@@ -28,14 +28,15 @@ Canonical feature docs:
 
 First milestone:
 
-- Publish a daily data-readiness artifact that identifies exactly which tickers/data types are missing or degraded and why.
-- Detect production metadata drift, especially when DynamoDB active metadata disagrees with the clean repository seed/audit.
-- Keep empty daily publications explainable from the public dashboard without needing CloudWatch access.
+- Done: publish a daily data-readiness artifact that identifies exactly which tickers/data types are missing or degraded and why.
+- Done: detect production metadata drift, especially when DynamoDB active metadata disagrees with the clean repository seed/audit.
+- Done: keep empty daily publications explainable from the public dashboard without needing CloudWatch access.
+- In progress: provide operator-safe repair workflows for the detected missing or degraded data.
 
 Next executable items:
 
-- Implement `data-readiness/latest.json` and `data-readiness/history/{date}.json`.
-- Add production metadata drift checks and operator-safe metadata sync verification.
+- Extend metadata sync verification to report inactive/out-of-scope production rows.
+- Define a shared repair-mode input schema for daily workflow repair steps.
 - Add degraded publication tiers: `decision_grade`, `reduced_confidence`, `fallback_preview`, and `blocked`.
 - Add a Step Functions daily workflow in shadow/manual mode before retiring independent schedules.
 

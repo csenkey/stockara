@@ -6,13 +6,15 @@
 - [x] Add readiness summary counters to `top-picks/latest.json` so the dashboard can explain empty results without requiring CloudWatch access.
 - [x] Add a production metadata drift check that compares active DynamoDB metadata quality with `data/watchlist_seed.csv` expectations and reports rows missing required fields.
 - [ ] Add a manual metadata sync verification path that reports changed, unchanged, missing, invalid, and inactive/out-of-scope production rows.
+  - [x] Add a sync-only GitHub Actions workflow that validates the deployed repair summary for changed, unchanged, missing, and invalid rows.
+  - [ ] Extend the repair summary or a companion audit to report inactive/out-of-scope production rows.
 - [x] Add frontend data-health rendering for readiness rows grouped by reason and repair mode.
 - [x] Add tests proving readiness summary counters match detailed rows.
 
 ## Milestone 2: Repair Missing Data
 
 - [ ] Define a shared repair-mode input schema with `mode`, `run_date`, `tickers`, `max_tickers`, `provider_budget`, and `dry_run`.
-- [ ] Implement `sync_static_metadata` as an operator-safe repair mode with no live collection field clobbering.
+- [x] Implement `sync_static_metadata` as an operator-safe repair mode with no live collection field clobbering.
 - [ ] Implement `repair_price_gaps` and `repair_history` modes using existing price gap scanner and date-bounded manifest tasks.
 - [ ] Implement `repair_news` mode that respects NewsAPI/Finnhub/Alpha Vantage quota budgets and can target only shortlisted or missing-news tickers.
 - [ ] Implement `repair_calendars` mode for earnings/dividend retry and fallback providers.
