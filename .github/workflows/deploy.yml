@@ -14,6 +14,8 @@ env:
   PYTHON_VERSION: "3.12"
   NODE_VERSION: "26"
   AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  CUSTOM_DOMAIN_NAME: ${{ vars.CUSTOM_DOMAIN_NAME || '' }}
+  ROUTE53_HOSTED_ZONE_ID: ${{ vars.ROUTE53_HOSTED_ZONE_ID || '' }}
 
 jobs:
   deploy:
@@ -101,7 +103,15 @@ jobs:
         working-directory: infrastructure
 
       - name: CDK synth
-        run: cdk synth -c deploymentStage="$DEPLOYMENT_STAGE" -c region="$AWS_REGION"
+        run: |
+          args=(-c deploymentStage="$DEPLOYMENT_STAGE" -c region="$AWS_REGION")
+          if [[ -n "$CUSTOM_DOMAIN_NAME" && -n "$ROUTE53_HOSTED_ZONE_ID" ]]; then
+            args+=(
+              -c customDomainName="$CUSTOM_DOMAIN_NAME"
+              -c route53HostedZoneId="$ROUTE53_HOSTED_ZONE_ID"
+            )
+          fi
+          cdk synth "${args[@]}"
         working-directory: infrastructure
 
       - name: Check AWS OIDC role configuration
@@ -121,10 +131,16 @@ jobs:
 
       - name: CDK deploy
         run: |
+          args=(-c deploymentStage="$DEPLOYMENT_STAGE" -c region="$AWS_REGION")
+          if [[ -n "$CUSTOM_DOMAIN_NAME" && -n "$ROUTE53_HOSTED_ZONE_ID" ]]; then
+            args+=(
+              -c customDomainName="$CUSTOM_DOMAIN_NAME"
+              -c route53HostedZoneId="$ROUTE53_HOSTED_ZONE_ID"
+            )
+          fi
           cdk deploy --all --require-approval never \
             --outputs-file cdk-outputs.json \
-            -c deploymentStage="$DEPLOYMENT_STAGE" \
-            -c region="$AWS_REGION"
+            "${args[@]}"
         working-directory: infrastructure
 
       - name: Smoke test deployed API

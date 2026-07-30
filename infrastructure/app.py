@@ -39,6 +39,14 @@ frontend_stack = FrontendStack(
     app,
     stack_id("StockMonitoringFrontend", deployment_stage),
     deployment_stage=deployment_stage,
+    custom_domain_name=(
+        app.node.try_get_context("customDomainName")
+        or os.environ.get("CUSTOM_DOMAIN_NAME")
+    ),
+    hosted_zone_id=(
+        app.node.try_get_context("route53HostedZoneId")
+        or os.environ.get("ROUTE53_HOSTED_ZONE_ID")
+    ),
     env=env,
 )
 api_stack = ApiStack(

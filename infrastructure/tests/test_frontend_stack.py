@@ -115,3 +115,54 @@ def test_outputs_exist():
     template.has_output("BucketName", {})
     template.has_output("DistributionDomainName", {})
     template.has_output("DistributionId", {})
+
+
+def test_custom_domain_creates_certificate_cloudfront_aliases_and_dns_records():
+    """Verify optional custom domain wiring points Route 53 at CloudFront."""
+    app = cdk.App()
+    stack = FrontendStack(
+        app,
+        "TestFrontend",
+        custom_domain_name="stockara.org",
+        hosted_zone_id="Z1234567890",
+    )
+    template = assertions.Template.from_stack(stack)
+
+    template.has_resource_properties(
+        "AWS::CertificateManager::Certificate",
+        {
+            "DomainName": "stockara.org",
+            "SubjectAlternativeNames": ["www.stockara.org"],
+            "ValidationMethod": "DNS",
+        },
+    )
+    template.has_resource_properties(
+        "AWS::CloudFront::Distribution",
+        {
+            "DistributionConfig": {
+                "Aliases": ["stockara.org", "www.stockara.org"],
+                "IPV6Enabled": False,
+                "ViewerCertificate": assertions.Match.object_like(
+                    {"SslSupportMethod": "sni-only"}
+                ),
+            },
+        },
+    )
+    template.resource_count_is("AWS::Route53::RecordSet", 2)
+    template.has_resource_properties(
+        "AWS::Route53::RecordSet",
+        {
+            "HostedZoneId": "Z1234567890",
+            "Name": "stockara.org.",
+            "Type": "A",
+        },
+    )
+    template.has_resource_properties(
+        "AWS::Route53::RecordSet",
+        {
+            "HostedZoneId": "Z1234567890",
+            "Name": "www.stockara.org.",
+            "Type": "A",
+        },
+    )
+    template.has_output("CustomDomainName", {"Value": "stockara.org"})
