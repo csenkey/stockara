@@ -511,7 +511,11 @@ class ApiStack(Stack):
                 "stockara-stock-collection",
                 "stock-collection",
             ),
-            description="Triggers bounded stock data collection every 15 minutes",
+            description=(
+                "Disabled legacy bounded stock collector retained as rollback path; "
+                "daily price collection is owned by the Step Functions workflow"
+            ),
+            enabled=False,
             schedule=events.Schedule.rate(Duration.minutes(15)),
             targets=[
                 targets.LambdaFunction(

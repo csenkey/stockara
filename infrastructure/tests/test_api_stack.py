@@ -120,6 +120,14 @@ def test_calendar_collector_lambdas_and_schedules_are_created():
     template.has_resource_properties(
         "AWS::Events::Rule",
         {
+            "Name": "stockara-codex-test-stock-collection",
+            "ScheduleExpression": "rate(15 minutes)",
+            "State": "DISABLED",
+        },
+    )
+    template.has_resource_properties(
+        "AWS::Events::Rule",
+        {
             "Name": "stockara-codex-test-collection-distributor",
             "ScheduleExpression": "rate(5 minutes)",
             "State": "DISABLED",
