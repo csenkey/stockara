@@ -766,6 +766,26 @@ class ApiStack(Stack):
             {"mode": "daily", "workflow": "daily_step_functions"},
             "$.analysis",
         )
+        publish_workflow_status = sfn_tasks.LambdaInvoke(
+            self,
+            "PublishWorkflowStatus",
+            lambda_function=self.ai_analyzer_fn,
+            payload=sfn.TaskInput.from_object(
+                {
+                    "mode": "publish_workflow_status",
+                    "workflow": "daily_step_functions",
+                    "workflow_result": sfn.JsonPath.entire_payload,
+                    "execution_id": sfn.JsonPath.execution_id,
+                    "execution_name": sfn.JsonPath.execution_name,
+                    "execution_started_at": sfn.JsonPath.execution_start_time,
+                }
+            ),
+            result_path="$.workflow_status",
+        )
+        self._add_workflow_retry_and_catch(
+            publish_workflow_status,
+            "PublishWorkflowStatus",
+        )
 
         collect_calendars_and_evidence = sfn.Parallel(
             self,
@@ -787,6 +807,9 @@ class ApiStack(Stack):
             comment="Give collectors time to finish before the 22:00 UTC analysis gate.",
         )
         decide_publication_readiness = self._workflow_readiness_decision()
+        publication_readiness_chain = (
+            decide_publication_readiness.afterwards().next(publish_workflow_status)
+        )
 
         definition = (
             sync_static_metadata
@@ -797,7 +820,7 @@ class ApiStack(Stack):
             .next(collect_calendars_and_evidence)
             .next(wait_for_analysis_window)
             .next(analyze_and_publish)
-            .next(decide_publication_readiness)
+            .next(publication_readiness_chain)
         )
 
         return sfn.StateMachine(
@@ -951,6 +974,14 @@ class ApiStack(Stack):
             payload=sfn.TaskInput.from_object(payload),
             result_path=result_path,
         )
+        self._add_workflow_retry_and_catch(step, construct_id)
+        return step
+
+    def _add_workflow_retry_and_catch(
+        self,
+        step: sfn_tasks.LambdaInvoke,
+        construct_id: str,
+    ) -> None:
         step.add_retry(
             errors=[
                 "Lambda.ServiceException",
@@ -974,7 +1005,6 @@ class ApiStack(Stack):
             errors=["States.ALL"],
             result_path="$.workflow_error",
         )
-        return step
 
     def _workflow_fail_state(self, construct_id: str) -> sfn.Fail:
         return sfn.Fail(

@@ -165,6 +165,8 @@ def run_phase1_pipeline(event: dict | None = None) -> dict[str, Any]:
             return _run_publish_phase(run_date)
         if mode == "daily":
             return _run_daily_orchestration_phase(event, run_date)
+        if mode == "publish_workflow_status":
+            return _run_publish_workflow_status(event, run_date)
         if mode == RepairMode.RETRY_AI_ANALYSIS:
             return _run_retry_ai_analysis_phase(event)
         if mode == RepairMode.RETRY_AI_REVIEW:
@@ -542,6 +544,24 @@ def _run_publish_phase(run_date: date) -> dict[str, Any]:
     scores = store.candidate_scores_for_date(run_date)
     analyses = store.candidate_analysis_for_date(run_date)
     return _publish_from_stored_state(run_date, context, scores, analyses)
+
+
+def _run_publish_workflow_status(
+    event: dict[str, Any],
+    run_date: date,
+) -> dict[str, Any]:
+    payload = build_workflow_status_payload(event, run_date)
+    publish_workflow_status_report(payload)
+    return {
+        "statusCode": 200,
+        "body": {
+            "status": "published",
+            "artifact": "workflow/latest.json",
+            "history_artifact": f"workflow/history/{payload['run_date']}.json",
+            "decision": payload["decision"],
+            "workflow_status": payload["status"],
+        },
+    }
 
 
 def _publish_from_stored_state(
@@ -1648,6 +1668,136 @@ def publish_data_readiness_report(payload: dict[str, Any]) -> None:
             ContentType="application/json",
             CacheControl="public, max-age=300",
         )
+
+
+def build_workflow_status_payload(
+    event: dict[str, Any],
+    fallback_run_date: date,
+) -> dict[str, Any]:
+    """Build the compact daily workflow status artifact payload."""
+    workflow_result = event.get("workflow_result") or {}
+    analysis_payload = (workflow_result.get("analysis") or {}).get("Payload") or {}
+    analysis_body = analysis_payload.get("body") or {}
+    if not isinstance(analysis_body, dict):
+        analysis_body = {"message": str(analysis_body)}
+
+    workflow_decision = workflow_result.get("workflow_decision") or {}
+    decision = str(
+        workflow_decision.get("decision")
+        or analysis_body.get("workflow_decision")
+        or "blocked"
+    )
+    status_by_decision = {
+        "publish": "success",
+        "publish_degraded": "degraded",
+        "wait_or_repair": "waiting",
+        "blocked": "blocked",
+    }
+    run_date = (
+        _parse_date(event.get("run_date"))
+        or _parse_date(analysis_body.get("publication_date"))
+        or fallback_run_date
+    )
+
+    return {
+        "artifact_type": "daily_workflow_status",
+        "run_date": run_date.isoformat(),
+        "generated_at": datetime.utcnow().isoformat(),
+        "workflow": str(event.get("workflow") or "daily_step_functions"),
+        "status": status_by_decision.get(decision, "blocked"),
+        "decision": decision,
+        "execution": {
+            "id": event.get("execution_id"),
+            "name": event.get("execution_name"),
+            "started_at": event.get("execution_started_at"),
+        },
+        "artifacts": {
+            "workflow": {
+                "latest": "workflow/latest.json",
+                "history": f"workflow/history/{run_date.isoformat()}.json",
+            },
+            "top_picks": "top-picks/latest.json",
+            "data_readiness": "data-readiness/latest.json",
+            "sell_alerts": "sell-alerts/latest.json",
+        },
+        "analyzer": {
+            "status_code": analysis_payload.get("statusCode"),
+            "stage": analysis_body.get("stage"),
+            "publication_status": analysis_body.get("publication_status"),
+            "publication_date": analysis_body.get("publication_date"),
+            "suppression_reason": analysis_body.get("suppression_reason"),
+            "top_picks_count": analysis_body.get("top_picks_count"),
+            "sell_alerts_count": analysis_body.get("sell_alerts_count"),
+            "data_readiness_overall_status": analysis_body.get(
+                "data_readiness_overall_status"
+            ),
+            "data_readiness_summary": analysis_body.get("data_readiness_summary") or {},
+            "message": analysis_body.get("message"),
+        },
+        "steps": {
+            "sync_static_metadata": _workflow_step_summary(
+                workflow_result.get("sync_static_metadata")
+            ),
+            "manifest": _workflow_step_summary(workflow_result.get("manifest")),
+            "prices": _workflow_step_summary(workflow_result.get("prices")),
+            "price_gap_repair": _workflow_step_summary(
+                workflow_result.get("price_gap_repair")
+            ),
+            "news": _workflow_step_summary(workflow_result.get("news")),
+            "optional_evidence": [
+                _workflow_step_summary(item)
+                for item in workflow_result.get("optional_evidence") or []
+            ],
+        },
+        "workflow_error": workflow_result.get("workflow_error"),
+    }
+
+
+def publish_workflow_status_report(payload: dict[str, Any]) -> None:
+    """Publish latest and dated Step Functions workflow status artifacts."""
+    if not ARTIFACT_BUCKET:
+        return
+    s3 = boto3.client("s3")
+    run_date = str(payload["run_date"])
+    body = json.dumps(payload, indent=2, default=str).encode("utf-8")
+    for key in [
+        "workflow/latest.json",
+        f"workflow/history/{run_date}.json",
+    ]:
+        s3.put_object(
+            Bucket=ARTIFACT_BUCKET,
+            Key=key,
+            Body=body,
+            ContentType="application/json",
+            CacheControl="public, max-age=300",
+        )
+
+
+def _workflow_step_summary(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {"status": "unknown"}
+    payload = value.get("Payload") if "Payload" in value else value
+    if not isinstance(payload, dict):
+        return {
+            "status_code": value.get("StatusCode"),
+            "status": str(payload) if payload is not None else "unknown",
+        }
+    body = payload.get("body")
+    if not isinstance(body, dict):
+        body = {"message": str(body)} if body is not None else {}
+    summary = {
+        "status_code": payload.get("statusCode") or value.get("StatusCode"),
+        "status": body.get("status"),
+        "stage": body.get("stage"),
+        "message": body.get("message"),
+        "reason": body.get("reason"),
+        "processed_count": body.get("processed_count"),
+        "collected_count": body.get("collected_count"),
+        "failed_count": body.get("failed_count"),
+        "candidate_count": body.get("candidate_count"),
+        "analyzed_count": body.get("analyzed_count"),
+    }
+    return {key: item for key, item in summary.items() if item is not None}
 
 
 def _readiness_counts(items: list[dict[str, Any]], field: str) -> dict[str, int]:

@@ -21,10 +21,12 @@ from src.analysis.phase1_pipeline import (
     analyze_shortlist,
     build_data_readiness_payload,
     build_publication_payload,
+    build_workflow_status_payload,
     evaluate_data_freshness,
     publish_data_readiness_report,
     publish_collection_status_payload,
     publish_payload,
+    publish_workflow_status_report,
     run_phase1_pipeline,
     score_candidates,
     select_shortlist,
@@ -552,6 +554,73 @@ def test_publish_data_readiness_report_writes_latest_and_history_artifacts():
     assert keys == [
         "data-readiness/latest.json",
         "data-readiness/history/2026-07-29.json",
+    ]
+
+
+def test_build_workflow_status_payload_summarizes_daily_execution():
+    payload = build_workflow_status_payload(
+        {
+            "workflow": "daily_step_functions",
+            "execution_id": "arn:aws:states:eu-west-1:123:execution:test",
+            "execution_name": "daily-2026-07-29",
+            "execution_started_at": "2026-07-29T21:05:00Z",
+            "workflow_result": {
+                "workflow_decision": {"decision": "publish_degraded"},
+                "analysis": {
+                    "Payload": {
+                        "statusCode": 200,
+                        "body": {
+                            "stage": "published",
+                            "publication_status": "published",
+                            "publication_date": "2026-07-29",
+                            "top_picks_count": 0,
+                            "sell_alerts_count": 0,
+                            "data_readiness_overall_status": "degraded",
+                            "data_readiness_summary": {"degraded_item_count": 3},
+                        },
+                    }
+                },
+                "news": {
+                    "Payload": {
+                        "statusCode": 200,
+                        "body": {"status": "partial", "collected_count": 5},
+                    }
+                },
+            },
+        },
+        date(2026, 7, 30),
+    )
+
+    assert payload["run_date"] == "2026-07-29"
+    assert payload["status"] == "degraded"
+    assert payload["decision"] == "publish_degraded"
+    assert payload["execution"]["name"] == "daily-2026-07-29"
+    assert payload["analyzer"]["stage"] == "published"
+    assert payload["analyzer"]["data_readiness_summary"] == {"degraded_item_count": 3}
+    assert payload["steps"]["news"]["status"] == "partial"
+    assert payload["steps"]["news"]["collected_count"] == 5
+
+
+def test_publish_workflow_status_report_writes_latest_and_history_artifacts():
+    payload = {
+        "artifact_type": "daily_workflow_status",
+        "run_date": "2026-07-29",
+        "generated_at": "2026-07-29T22:05:00",
+        "status": "degraded",
+        "decision": "publish_degraded",
+    }
+
+    with (
+        patch.object(phase1_pipeline, "ARTIFACT_BUCKET", "stockara-artifacts"),
+        patch("src.analysis.phase1_pipeline.boto3.client") as boto_client,
+    ):
+        publish_workflow_status_report(payload)
+
+    s3 = boto_client.return_value
+    keys = [call.kwargs["Key"] for call in s3.put_object.call_args_list]
+    assert keys == [
+        "workflow/latest.json",
+        "workflow/history/2026-07-29.json",
     ]
 
 
