@@ -136,6 +136,7 @@ def test_calendar_collector_lambdas_and_schedules_are_created():
         {
             "Name": "stockara-codex-test-phase1-publish",
             "ScheduleExpression": "rate(5 minutes)",
+            "State": "DISABLED",
             "Targets": assertions.Match.array_with(
                 [
                     assertions.Match.object_like(

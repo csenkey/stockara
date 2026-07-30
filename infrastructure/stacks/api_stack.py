@@ -636,9 +636,10 @@ class ApiStack(Stack):
                 "phase1-publish",
             ),
             description=(
-                "Advances gated Phase 1 analysis until daily static top picks "
-                "and sell alerts are published"
+                "Disabled legacy publisher schedule retained as rollback path; "
+                "daily publication is owned by the Step Functions workflow"
             ),
+            enabled=False,
             schedule=events.Schedule.rate(Duration.minutes(5)),
             targets=[
                 targets.LambdaFunction(
