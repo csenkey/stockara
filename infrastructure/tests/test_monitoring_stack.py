@@ -105,6 +105,66 @@ def test_publication_artifact_alarms_are_created():
         )
 
 
+def test_daily_workflow_alarms_are_created():
+    app = cdk.App()
+    stack = MonitoringStack(app, "TestDailyWorkflowMonitoring", deployment_stage="codex-test")
+    template = assertions.Template.from_stack(stack)
+
+    state_machine_arn = {
+        "Fn::Join": [
+            "",
+            [
+                "arn:",
+                {"Ref": "AWS::Partition"},
+                ":states:",
+                {"Ref": "AWS::Region"},
+                ":",
+                {"Ref": "AWS::AccountId"},
+                ":stateMachine:stockara-codex-test-daily-pipeline",
+            ],
+        ]
+    }
+
+    template.has_resource_properties(
+        "AWS::CloudWatch::Alarm",
+        {
+            "Namespace": "AWS/States",
+            "MetricName": "ExecutionsFailed",
+            "Statistic": "Sum",
+            "Dimensions": [
+                {
+                    "Name": "StateMachineArn",
+                    "Value": state_machine_arn,
+                }
+            ],
+            "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+            "Threshold": 1,
+        },
+    )
+    template.has_resource_properties(
+        "AWS::CloudWatch::Alarm",
+        {
+            "Namespace": "AWS/States",
+            "MetricName": "ExecutionsStarted",
+            "Statistic": "SampleCount",
+            "ComparisonOperator": "LessThanThreshold",
+            "Threshold": 1,
+            "TreatMissingData": "breaching",
+        },
+    )
+    for metric_name in ["daily_workflow_degraded", "daily_workflow_blocked"]:
+        template.has_resource_properties(
+            "AWS::CloudWatch::Alarm",
+            {
+                "Namespace": "StockaraPhase1",
+                "MetricName": metric_name,
+                "Statistic": "Sum",
+                "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+                "Threshold": 1,
+            },
+        )
+
+
 def test_product_quality_alarms_are_created():
     app = cdk.App()
     stack = MonitoringStack(
@@ -208,6 +268,7 @@ def test_product_quality_dashboard_widgets_are_created():
 
     for widget_title in [
         "Publication freshness and suppression",
+        "Daily workflow status",
         "Fallback and review gate usage",
         "Backfill and gap health",
     ]:

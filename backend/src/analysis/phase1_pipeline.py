@@ -552,6 +552,9 @@ def _run_publish_workflow_status(
 ) -> dict[str, Any]:
     payload = build_workflow_status_payload(event, run_date)
     publish_workflow_status_report(payload)
+    _emit_metric("daily_workflow_completed", 1)
+    _emit_metric("daily_workflow_degraded", 1 if payload["status"] == "degraded" else 0)
+    _emit_metric("daily_workflow_blocked", 1 if payload["status"] == "blocked" else 0)
     return {
         "statusCode": 200,
         "body": {

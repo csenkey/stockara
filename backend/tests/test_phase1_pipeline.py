@@ -624,6 +624,33 @@ def test_publish_workflow_status_report_writes_latest_and_history_artifacts():
     ]
 
 
+def test_run_publish_workflow_status_emits_status_metrics():
+    with (
+        patch("src.analysis.phase1_pipeline.publish_workflow_status_report"),
+        patch("src.analysis.phase1_pipeline._emit_metric") as emit_metric,
+    ):
+        result = phase1_pipeline._run_publish_workflow_status(
+            {
+                "workflow_result": {
+                    "workflow_decision": {"decision": "publish_degraded"},
+                    "analysis": {
+                        "Payload": {
+                            "statusCode": 200,
+                            "body": {"publication_date": "2026-07-29"},
+                        }
+                    },
+                }
+            },
+            date(2026, 7, 30),
+        )
+
+    assert result["statusCode"] == 200
+    assert result["body"]["workflow_status"] == "degraded"
+    emit_metric.assert_any_call("daily_workflow_completed", 1)
+    emit_metric.assert_any_call("daily_workflow_degraded", 1)
+    emit_metric.assert_any_call("daily_workflow_blocked", 0)
+
+
 def test_price_volume_signals_prefer_stored_market_signals():
     with patch("src.analysis.phase1_pipeline.store") as mock_store:
         mock_store.market_signals_for_ticker.return_value = [

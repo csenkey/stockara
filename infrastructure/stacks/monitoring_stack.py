@@ -1,6 +1,7 @@
 """CloudWatch monitoring for Stockara Phase 1."""
 
 from aws_cdk import (
+    ArnFormat,
     Duration,
     Stack,
     aws_cloudwatch as cloudwatch,
@@ -59,6 +60,17 @@ class MonitoringStack(Stack):
                 deployment_stage, "stockara-health-api", "health-api"
             ),
         }
+        daily_workflow_name = resource_name(
+            deployment_stage,
+            "stockara-daily-pipeline",
+            "daily-pipeline",
+        )
+        daily_workflow_arn = self.format_arn(
+            service="states",
+            resource="stateMachine",
+            resource_name=daily_workflow_name,
+            arn_format=ArnFormat.COLON_RESOURCE_NAME,
+        )
 
         for logical_name, function_name in function_names.items():
             logs.LogGroup(
@@ -290,6 +302,100 @@ class MonitoringStack(Stack):
                 evaluation_periods=1,
                 comparison_operator=comparison_operator,
                 treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+            )
+            alarm.add_alarm_action(cw_actions.SnsAction(self.alerts_topic))
+
+        workflow_alarms = [
+            (
+                "DailyWorkflowFailedAlarm",
+                "stockara-daily-workflow-failed",
+                "daily-workflow-failed",
+                "AWS/States",
+                "ExecutionsFailed",
+                "Sum",
+                Duration.hours(1),
+                1,
+                cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                cloudwatch.TreatMissingData.NOT_BREACHING,
+                {"StateMachineArn": daily_workflow_arn},
+                "Daily Step Functions workflow execution failed",
+            ),
+            (
+                "DailyWorkflowDegradedAlarm",
+                "stockara-daily-workflow-degraded",
+                "daily-workflow-degraded",
+                "StockaraPhase1",
+                "daily_workflow_degraded",
+                "Sum",
+                Duration.hours(26),
+                1,
+                cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                cloudwatch.TreatMissingData.NOT_BREACHING,
+                {},
+                "Daily Step Functions workflow completed with degraded publication",
+            ),
+            (
+                "DailyWorkflowBlockedAlarm",
+                "stockara-daily-workflow-blocked",
+                "daily-workflow-blocked",
+                "StockaraPhase1",
+                "daily_workflow_blocked",
+                "Sum",
+                Duration.hours(26),
+                1,
+                cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                cloudwatch.TreatMissingData.NOT_BREACHING,
+                {},
+                "Daily Step Functions workflow ended with blocked publication",
+            ),
+            (
+                "DailyWorkflowMissingExecutionAlarm",
+                "stockara-daily-workflow-missing",
+                "daily-workflow-missing",
+                "AWS/States",
+                "ExecutionsStarted",
+                "SampleCount",
+                Duration.hours(26),
+                1,
+                cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+                cloudwatch.TreatMissingData.BREACHING,
+                {"StateMachineArn": daily_workflow_arn},
+                "No daily Step Functions workflow execution started in the expected window",
+            ),
+        ]
+
+        for (
+            construct_id,
+            prod_alarm_name,
+            staged_alarm_name,
+            namespace,
+            metric_name,
+            statistic,
+            period,
+            threshold,
+            comparison_operator,
+            treat_missing_data,
+            dimensions_map,
+            description,
+        ) in workflow_alarms:
+            alarm = cloudwatch.Alarm(
+                self,
+                construct_id,
+                alarm_name=resource_name(
+                    deployment_stage, prod_alarm_name, staged_alarm_name
+                ),
+                alarm_description=description,
+                metric=cloudwatch.Metric(
+                    namespace=namespace,
+                    metric_name=metric_name,
+                    statistic=statistic,
+                    period=period,
+                    dimensions_map=dimensions_map,
+                ),
+                threshold=threshold,
+                evaluation_periods=1,
+                comparison_operator=comparison_operator,
+                treat_missing_data=treat_missing_data,
             )
             alarm.add_alarm_action(cw_actions.SnsAction(self.alerts_topic))
 
@@ -634,6 +740,38 @@ class MonitoringStack(Stack):
                     cloudwatch.Metric(
                         namespace="StockaraPhase1",
                         metric_name="artifact_publish_failures",
+                        statistic="Sum",
+                        period=Duration.hours(1),
+                    ),
+                ],
+            ),
+            cloudwatch.GraphWidget(
+                title="Daily workflow status",
+                left=[
+                    cloudwatch.Metric(
+                        namespace="StockaraPhase1",
+                        metric_name="daily_workflow_completed",
+                        statistic="Sum",
+                        period=Duration.hours(26),
+                    ),
+                    cloudwatch.Metric(
+                        namespace="StockaraPhase1",
+                        metric_name="daily_workflow_degraded",
+                        statistic="Sum",
+                        period=Duration.hours(26),
+                    ),
+                    cloudwatch.Metric(
+                        namespace="StockaraPhase1",
+                        metric_name="daily_workflow_blocked",
+                        statistic="Sum",
+                        period=Duration.hours(26),
+                    ),
+                ],
+                right=[
+                    cloudwatch.Metric(
+                        namespace="AWS/States",
+                        metric_name="ExecutionsFailed",
+                        dimensions_map={"StateMachineArn": daily_workflow_arn},
                         statistic="Sum",
                         period=Duration.hours(1),
                     ),
