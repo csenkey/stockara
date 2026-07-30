@@ -512,6 +512,47 @@ def test_handler_marks_zero_provider_rows_as_degraded(
     )
 
 
+@patch("backend.src.collectors.dividend_collector.publish_calendar_provider_snapshots")
+@patch("backend.src.collectors.dividend_collector.publish_calendar_artifacts")
+@patch("backend.src.collectors.dividend_collector.fetch_dividend_events")
+@patch("backend.src.collectors.dividend_collector.DatabasePool")
+@patch("backend.src.collectors.dividend_collector.store")
+def test_handler_supports_repair_calendars_dry_run_for_dividends(
+    mock_store,
+    mock_pool,
+    mock_fetch,
+    mock_publish_artifacts,
+    mock_publish_snapshots,
+):
+    mock_store.active_stock_metadata.return_value = [
+        {"ticker": "MSFT", "company_name": "Microsoft"},
+        {"ticker": "AAPL", "company_name": "Apple"},
+        {"ticker": "NVDA", "company_name": "NVIDIA"},
+    ]
+
+    result = handler(
+        {
+            "mode": "repair_calendars",
+            "tickers": ["nvda", "aapl"],
+            "max_tickers": 1,
+            "provider_budget": {"alpha_vantage": 2},
+            "dry_run": True,
+        },
+        None,
+    )
+
+    assert result["statusCode"] == 200
+    body = result["body"]
+    assert body["status"] == "dry_run"
+    assert body["mode"] == "repair_calendars"
+    assert body["selected_tickers"] == ["AAPL"]
+    assert body["provider_budget"] == {"alpha_vantage": 2}
+    mock_fetch.assert_not_called()
+    mock_store.put_dividend_event.assert_not_called()
+    mock_publish_artifacts.assert_not_called()
+    mock_publish_snapshots.assert_not_called()
+
+
 @patch("backend.src.collectors.dividend_collector.write_manifest")
 @patch("backend.src.collectors.dividend_collector.load_manifest")
 @patch("backend.src.collectors.dividend_collector.publish_calendar_provider_snapshots")

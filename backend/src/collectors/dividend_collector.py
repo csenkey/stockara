@@ -15,7 +15,12 @@ import structlog
 import yfinance as yf
 
 from src.db.connection import DatabasePool, store
-from src.models.schemas import CollectionOutputCounts, CollectionTaskType
+from src.models.schemas import (
+    CollectionOutputCounts,
+    CollectionTaskType,
+    RepairMode,
+    RepairModeRequest,
+)
 from src.services.secrets import get_provider_api_key
 from src.services.collection_manifest import (
     complete_task,
@@ -67,6 +72,7 @@ class ManifestTaskRun:
 def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
     """Collect dividend calendar/history events for active stocks."""
     event = event or {}
+    event = _calendar_repair_event(event)
     log = logger.bind(lambda_event=event)
     log.info("dividend_collector_started")
     manifest_task_run: ManifestTaskRun | None = None
@@ -82,6 +88,21 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
         range_end = collection_date + timedelta(
             days=int(event.get("lookahead_days", DEFAULT_LOOKAHEAD_DAYS))
         )
+        repair_mode = str(event.get("repair_mode") or "")
+        if event.get("dry_run"):
+            return {
+                "statusCode": 200,
+                "body": {
+                    "status": "dry_run",
+                    "mode": repair_mode or event.get("mode", "dividend_calendar"),
+                    "events_collected": 0,
+                    "selected_ticker_count": len(stocks),
+                    "selected_tickers": [stock["ticker"] for stock in stocks],
+                    "provider_budget": event.get("provider_budget", {}),
+                    "range_start": range_start.isoformat(),
+                    "range_end": range_end.isoformat(),
+                },
+            }
         stored_count = 0
         failed_tickers: list[str] = []
         collected_events: list[dict[str, Any]] = []
@@ -172,6 +193,7 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
             "statusCode": 200,
             "body": {
                 "status": response_status,
+                **({"mode": repair_mode} if repair_mode else {}),
                 "events_collected": stored_count,
                 "selected_ticker_count": len(stocks),
                 "failed_tickers": failed_tickers,
@@ -186,6 +208,29 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
         raise
     finally:
         DatabasePool.close()
+
+
+def _calendar_repair_event(event: dict[str, Any]) -> dict[str, Any]:
+    if event.get("mode") != RepairMode.REPAIR_CALENDARS:
+        return event
+    request = RepairModeRequest.model_validate(event)
+    provider_budget = dict(request.provider_budget)
+    repair_event = dict(event)
+    repair_event["mode"] = "repair_calendars"
+    repair_event["repair_mode"] = RepairMode.REPAIR_CALENDARS.value
+    repair_event["provider_budget"] = provider_budget
+    repair_event["dry_run"] = request.dry_run
+    if request.tickers:
+        repair_event["tickers"] = request.tickers
+        repair_event["max_tickers"] = min(
+            request.max_tickers or len(request.tickers),
+            len(request.tickers),
+        )
+    elif request.max_tickers is not None:
+        repair_event["max_tickers"] = request.max_tickers
+    if "alpha_vantage" in provider_budget:
+        repair_event["alpha_vantage_max_calls"] = provider_budget["alpha_vantage"]
+    return repair_event
 
 
 def _select_stocks(stocks: list[dict[str, Any]], event: dict[str, Any]) -> list[dict[str, Any]]:

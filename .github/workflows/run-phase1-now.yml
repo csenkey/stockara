@@ -212,7 +212,7 @@ jobs:
           set -euo pipefail
           aws lambda invoke \
             --function-name "$EARNINGS_COLLECTOR_FN" \
-            --payload '{"max_tickers":${{ inputs.earnings_max_tickers }}}' \
+            --payload '{"mode":"repair_calendars","max_tickers":${{ inputs.earnings_max_tickers }},"provider_budget":{},"dry_run":false}' \
             --log-type Tail \
             --cli-read-timeout 900 \
             --cli-binary-format raw-in-base64-out \
@@ -232,7 +232,7 @@ jobs:
           set -euo pipefail
           aws lambda invoke \
             --function-name "$DIVIDEND_COLLECTOR_FN" \
-            --payload '{"max_tickers":${{ inputs.dividend_max_tickers }}}' \
+            --payload '{"mode":"repair_calendars","max_tickers":${{ inputs.dividend_max_tickers }},"provider_budget":{},"dry_run":false}' \
             --log-type Tail \
             --cli-read-timeout 900 \
             --cli-binary-format raw-in-base64-out \

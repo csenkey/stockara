@@ -319,6 +319,68 @@ def test_handler_collects_and_stores_events(mock_store, mock_pool, mock_fetch, m
     mock_metric.assert_any_call("earnings_events_collected", 1)
 
 
+@patch("backend.src.collectors.earnings_collector.fetch_earnings_calendar_events")
+@patch("backend.src.collectors.earnings_collector.DatabasePool")
+@patch("backend.src.collectors.earnings_collector.store")
+def test_handler_respects_explicit_max_tickers_for_earnings(
+    mock_store,
+    mock_pool,
+    mock_fetch,
+):
+    mock_store.active_stock_metadata.return_value = [
+        {"ticker": "MSFT", "company_name": "Microsoft"},
+        {"ticker": "AAPL", "company_name": "Apple"},
+    ]
+    mock_fetch.return_value = []
+
+    result = handler({"max_tickers": 1}, None)
+
+    assert result["statusCode"] == 200
+    selected = mock_fetch.call_args.args[0]
+    assert [stock["ticker"] for stock in selected] == ["AAPL"]
+
+
+@patch("backend.src.collectors.earnings_collector.publish_calendar_provider_snapshots")
+@patch("backend.src.collectors.earnings_collector.publish_calendar_artifacts")
+@patch("backend.src.collectors.earnings_collector.fetch_earnings_calendar_events")
+@patch("backend.src.collectors.earnings_collector.DatabasePool")
+@patch("backend.src.collectors.earnings_collector.store")
+def test_handler_supports_repair_calendars_dry_run_for_earnings(
+    mock_store,
+    mock_pool,
+    mock_fetch,
+    mock_publish_artifacts,
+    mock_publish_snapshots,
+):
+    mock_store.active_stock_metadata.return_value = [
+        {"ticker": "MSFT", "company_name": "Microsoft"},
+        {"ticker": "AAPL", "company_name": "Apple"},
+        {"ticker": "NVDA", "company_name": "NVIDIA"},
+    ]
+
+    result = handler(
+        {
+            "mode": "repair_calendars",
+            "tickers": ["nvda", "aapl"],
+            "max_tickers": 1,
+            "provider_budget": {"alpha_vantage": 3},
+            "dry_run": True,
+        },
+        None,
+    )
+
+    assert result["statusCode"] == 200
+    body = result["body"]
+    assert body["status"] == "dry_run"
+    assert body["mode"] == "repair_calendars"
+    assert body["selected_tickers"] == ["AAPL"]
+    assert body["provider_budget"] == {"alpha_vantage": 3}
+    mock_fetch.assert_not_called()
+    mock_store.put_earnings_event.assert_not_called()
+    mock_publish_artifacts.assert_not_called()
+    mock_publish_snapshots.assert_not_called()
+
+
 @patch("backend.src.collectors.earnings_collector.write_manifest")
 @patch("backend.src.collectors.earnings_collector.load_manifest")
 @patch("backend.src.collectors.earnings_collector.publish_calendar_provider_snapshots")

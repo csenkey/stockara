@@ -42,6 +42,15 @@ on:
         description: "Maximum yfinance dividend rows per ticker"
         required: true
         default: "80"
+      provider_budget_json:
+        description: "Optional provider request budgets, for example {\"alpha_vantage\":5}"
+        required: false
+        default: "{}"
+      dry_run:
+        description: "Build and validate repair payloads without fetching or writing calendar data"
+        required: true
+        default: false
+        type: boolean
       run_earnings:
         description: "Run earnings calendar collector"
         required: true
@@ -88,6 +97,17 @@ jobs:
               exit 1
             fi
           done
+          python - <<'PY'
+          import json
+          import os
+
+          value = os.environ["PROVIDER_BUDGET_JSON"]
+          parsed = json.loads(value or "{}")
+          if not isinstance(parsed, dict) or any(int(budget) < 0 for budget in parsed.values()):
+              raise SystemExit("provider_budget_json must be a JSON object with non-negative integer values.")
+          PY
+        env:
+          PROVIDER_BUDGET_JSON: ${{ inputs.provider_budget_json }}
 
       - name: Check AWS OIDC role configuration
         run: |
@@ -131,6 +151,8 @@ jobs:
           max_tickers = int(os.environ["MAX_TICKERS"])
           chunk_size = int(os.environ["CHUNK_SIZE"])
           max_chunks = int(os.environ["MAX_CHUNKS"])
+          provider_budget = json.loads(os.environ["PROVIDER_BUDGET_JSON"] or "{}")
+          dry_run = os.environ["DRY_RUN"].lower() == "true"
 
           if chunk_size <= 0:
               chunk_size = max_tickers
@@ -158,8 +180,11 @@ jobs:
           for index, chunk in enumerate(chunks):
               base = {
                   **chunk,
+                  "mode": "repair_calendars",
                   "lookback_days": int(os.environ["LOOKBACK_DAYS"]),
                   "lookahead_days": int(os.environ["LOOKAHEAD_DAYS"]),
+                  "provider_budget": provider_budget,
+                  "dry_run": dry_run,
               }
               if "tickers" in base:
                   base["max_tickers"] = len(base["tickers"])
@@ -188,6 +213,8 @@ jobs:
           LOOKAHEAD_DAYS: ${{ inputs.lookahead_days }}
           EARNINGS_YFINANCE_LIMIT: ${{ inputs.earnings_yfinance_limit }}
           DIVIDEND_HISTORY_LIMIT: ${{ inputs.dividend_history_limit }}
+          PROVIDER_BUDGET_JSON: ${{ inputs.provider_budget_json }}
+          DRY_RUN: ${{ inputs.dry_run }}
 
       - name: Invoke earnings calendar collector
         if: ${{ inputs.run_earnings }}
