@@ -62,7 +62,7 @@
 ## Milestone 5: Retire Superseded Scheduling
 
 - [x] Disable the 5-minute analyzer publisher schedule after the Step Functions workflow is responsible for daily publication.
-- [ ] Disable or narrow the 5-minute collection distributor schedule after the workflow can create, dispatch, wait, and repair the daily manifest.
+- [x] Disable or narrow the 5-minute collection distributor schedule after the workflow can create, dispatch, wait, and repair the daily manifest.
 - [ ] Disable or narrow the frequent bounded stock collector schedule after the workflow owns final price readiness and gap repair.
 - [ ] Keep the 3-times-per-day global news schedule only if it provides useful prefetching within free quota; otherwise fold news collection fully into the daily workflow.
 - [ ] Decide whether stock gap scan remains a separate after-market maintenance job or becomes a workflow step.

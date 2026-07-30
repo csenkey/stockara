@@ -122,6 +122,7 @@ def test_calendar_collector_lambdas_and_schedules_are_created():
         {
             "Name": "stockara-codex-test-collection-distributor",
             "ScheduleExpression": "rate(5 minutes)",
+            "State": "DISABLED",
         },
     )
     template.has_resource_properties(

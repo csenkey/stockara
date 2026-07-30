@@ -530,7 +530,11 @@ class ApiStack(Stack):
                 "stockara-collection-distributor",
                 "collection-distributor",
             ),
-            description="Refreshes the daily collection manifest and dispatches one task",
+            description=(
+                "Disabled legacy manifest dispatcher retained as rollback path; "
+                "daily manifest dispatch is owned by the Step Functions workflow"
+            ),
+            enabled=False,
             schedule=events.Schedule.rate(Duration.minutes(5)),
             targets=[targets.LambdaFunction(self.collection_distributor_fn)],
         )
