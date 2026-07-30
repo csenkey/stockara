@@ -1,0 +1,111 @@
+name: Run Daily Workflow Now
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_stage:
+        description: "Deployment stage to run"
+        required: true
+        default: "prod"
+        type: choice
+        options:
+          - prod
+      wait_seconds:
+        description: "Seconds to wait before inspecting the execution"
+        required: true
+        default: "45"
+
+concurrency:
+  group: run-daily-workflow-now-${{ inputs.deployment_stage }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+jobs:
+  run:
+    name: Start deployed daily Step Functions workflow
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Validate inputs
+        shell: bash
+        run: |
+          if ! [[ "${{ inputs.wait_seconds }}" =~ ^[0-9]+$ ]]; then
+            echo "wait_seconds must be a non-negative integer."
+            exit 1
+          fi
+
+      - name: Check AWS OIDC role configuration
+        run: |
+          if [[ -z "${{ secrets.AWS_ROLE_TO_ASSUME }}" ]]; then
+            echo "Missing GitHub secret AWS_ROLE_TO_ASSUME."
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: stockara-daily-workflow-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve state machine
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="${{ inputs.deployment_stage }}"
+          if [[ "$stage" == "prod" ]]; then
+            state_machine_name="stockara-daily-pipeline"
+          else
+            echo "Unsupported deployment stage: $stage"
+            exit 1
+          fi
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          state_machine_arn="arn:aws:states:${AWS_REGION}:${account_id}:stateMachine:${state_machine_name}"
+          aws stepfunctions describe-state-machine \
+            --state-machine-arn "$state_machine_arn" \
+            --query "{name:name,status:status,stateMachineArn:stateMachineArn}" \
+            --output json
+          echo "STATE_MACHINE_ARN=$state_machine_arn" >> "$GITHUB_ENV"
+
+      - name: Start manual shadow execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          execution_name="manual-shadow-${{ github.run_id }}-${{ github.run_attempt }}"
+          cat > execution-input.json <<JSON
+          {
+            "workflow": "manual_shadow_daily_step_functions",
+            "trigger": "github_actions",
+            "github_run_id": "${{ github.run_id }}",
+            "github_run_attempt": "${{ github.run_attempt }}"
+          }
+          JSON
+          execution_arn="$(aws stepfunctions start-execution \
+            --state-machine-arn "$STATE_MACHINE_ARN" \
+            --name "$execution_name" \
+            --input file://execution-input.json \
+            --query executionArn \
+            --output text)"
+          echo "Started $execution_arn"
+          echo "EXECUTION_ARN=$execution_arn" >> "$GITHUB_ENV"
+
+      - name: Inspect execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          sleep "${{ inputs.wait_seconds }}"
+          aws stepfunctions describe-execution \
+            --execution-arn "$EXECUTION_ARN" \
+            --query "{status:status,startDate:startDate,stopDate:stopDate,name:name}" \
+            --output json
+          aws stepfunctions get-execution-history \
+            --execution-arn "$EXECUTION_ARN" \
+            --max-items 20 \
+            --query "events[].{id:id,type:type,state:stateEnteredEventDetails.name,stateExited:stateExitedEventDetails.name,lambda:lambdaFunctionScheduledEventDetails.resource}" \
+            --output table
