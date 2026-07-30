@@ -28,7 +28,7 @@
 - [x] Implement `retry_ai_analysis` and `retry_ai_review` modes that reuse stored candidate scores/evidence and publish clear model/error provenance.
   - [x] Add analyzer retry modes for fallback/missing AI analyses and missing/error AI reviews.
   - [x] Add a manual `Run AI Retry Now` workflow with dry-run, ticker subset, run date, and max target controls.
-- [ ] Update GitHub Actions manual workflows to call repair modes instead of bespoke one-off Lambda payloads where practical.
+- [x] Update GitHub Actions manual workflows to call repair modes instead of bespoke one-off Lambda payloads where practical.
   - [x] Update `Sync Watchlist Metadata Now` to use the shared repair-mode payload shape.
   - [x] Update `Run Phase 1 Pipeline Now` metadata sync and historical repair payloads to use shared repair-mode names.
   - [x] Update `Run News Collection Now` to use `repair_news` with provider budget and dry-run inputs.
