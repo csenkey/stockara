@@ -67,14 +67,29 @@ def test_handler_writes_manifest_to_s3(mock_pool, mock_active_stocks, mock_boto_
     }[service]
     mock_active_stocks.return_value = [{"ticker": "aapl"}, {"ticker": "msft"}]
 
-    with patch(
-        "src.collectors.collection_distributor.PRICE_COLLECTOR_FUNCTION_NAME",
-        "stockara-stock-collector",
+    with (
+        patch(
+            "src.collectors.collection_distributor.PRICE_COLLECTOR_FUNCTION_NAME",
+            "stockara-stock-collector",
+        ),
+        patch(
+            "src.collectors.collection_distributor.NEWS_COLLECTOR_FUNCTION_NAME",
+            "stockara-news-collector",
+        ),
+        patch(
+            "src.collectors.collection_distributor.EARNINGS_COLLECTOR_FUNCTION_NAME",
+            "stockara-earnings-collector",
+        ),
+        patch(
+            "src.collectors.collection_distributor.DIVIDEND_COLLECTOR_FUNCTION_NAME",
+            "stockara-dividend-collector",
+        ),
     ):
         response = handler(
             {
                 "bucket": "stockara-artifacts",
                 "manifest_date": "2026-06-20",
+                "max_tasks_per_run": 2,
             },
             None,
         )
@@ -82,7 +97,15 @@ def test_handler_writes_manifest_to_s3(mock_pool, mock_active_stocks, mock_boto_
     assert response["statusCode"] == 200
     assert response["body"]["manifest_key"] == "collection_manifest/2026-06-20.json"
     assert response["body"]["task_count"] == 4
-    assert response["body"]["dispatched_task_count"] == 1
+    assert response["body"]["dispatched_task_count"] == 2
+    assert response["body"]["max_tasks_per_run"] == 2
+    assert response["body"]["task_counts"]["leased"] == 2
+    assert response["body"]["task_counts"]["pending"] == 2
+    assert response["body"]["ready_task_count"] == 2
+    assert response["body"]["active_incomplete_task_count"] == 4
+    assert response["body"]["incomplete_task_count"] == 4
+    assert response["body"]["dispatch_complete"] is False
+    assert response["body"]["dispatch_ready_for_analysis"] is False
     assert s3.put_object.called
     call = next(
         item.kwargs
@@ -104,7 +127,8 @@ def test_handler_writes_manifest_to_s3(mock_pool, mock_active_stocks, mock_boto_
     assert health_payload["manifest_key"] == "collection_manifest/2026-06-20.json"
     assert health_payload["task_counts"]["total"] == 4
     assert health_payload["tasks_by_type"]["price"]["leased"] == 1
-    lambda_client.invoke.assert_called_once()
+    assert health_payload["tasks_by_type"]["news"]["leased"] == 1
+    assert lambda_client.invoke.call_count == 2
 
 
 @patch("src.collectors.collection_distributor.boto3.client")
@@ -132,6 +156,7 @@ def test_dispatch_ready_tasks_round_robins_task_types(mock_boto_client, monkeypa
         "collection_manifest/2026-06-20.json",
         manifest,
         datetime(2026, 6, 20, 7, 31, tzinfo=timezone.utc),
+        max_tasks_per_run=4,
     )
 
     assert dispatched == [

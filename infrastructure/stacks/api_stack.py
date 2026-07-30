@@ -689,9 +689,30 @@ class ApiStack(Stack):
         create_or_refresh_manifest = self._lambda_workflow_step(
             "CreateOrRefreshManifest",
             self.collection_distributor_fn,
-            {"workflow": "daily_step_functions", "stage": "create_or_refresh_manifest"},
+            {
+                "workflow": "daily_step_functions",
+                "stage": "create_or_refresh_manifest",
+                "max_tasks_per_run": 80,
+            },
             "$.manifest",
         )
+        dispatch_manifest_tasks = self._lambda_workflow_step(
+            "DispatchManifestTasks",
+            self.collection_distributor_fn,
+            {
+                "workflow": "daily_step_functions",
+                "stage": "dispatch_manifest_tasks",
+                "max_tasks_per_run": 80,
+            },
+            "$.manifest_dispatch",
+        )
+        wait_for_manifest_dispatch = sfn.Wait(
+            self,
+            "WaitForManifestDispatch",
+            time=sfn.WaitTime.duration(Duration.minutes(5)),
+            comment="Wait for leased manifest worker Lambdas before dispatching more chunks.",
+        )
+        wait_for_manifest_dispatch.next(dispatch_manifest_tasks)
         collect_prices = self._lambda_workflow_step(
             "CollectPrices",
             self.stock_collector_fn,
@@ -806,12 +827,33 @@ class ApiStack(Stack):
         publication_readiness_chain = (
             decide_publication_readiness.afterwards().next(publish_workflow_status)
         )
+        manifest_dispatch_decision = (
+            sfn.Choice(
+                self,
+                "DecideManifestDispatchReadiness",
+                comment=(
+                    "Continue once no pending, leased, or running manifest worker "
+                    "tasks remain; retry-wait tasks become degraded data quality."
+                ),
+            )
+            .when(
+                sfn.Condition.boolean_equals(
+                    "$.manifest_dispatch.Payload.body.dispatch_ready_for_analysis",
+                    True,
+                ),
+                collect_prices,
+            )
+            .otherwise(wait_for_manifest_dispatch)
+        )
 
         definition = (
             sync_static_metadata
             .next(create_or_refresh_manifest)
-            .next(collect_prices)
-            .next(repair_price_gaps)
+            .next(dispatch_manifest_tasks)
+            .next(manifest_dispatch_decision)
+        )
+        (
+            collect_prices.next(repair_price_gaps)
             .next(collect_news)
             .next(collect_calendars_and_evidence)
             .next(wait_for_analysis_window)

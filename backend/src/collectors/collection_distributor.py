@@ -74,11 +74,13 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
             generated_at=now,
         )
 
-    dispatched = _dispatch_ready_tasks(bucket, key, manifest, now)
+    max_tasks_per_run = _max_tasks_per_run(event)
+    dispatched = _dispatch_ready_tasks(bucket, key, manifest, now, max_tasks_per_run)
     recompute_summary(manifest)
     if not dispatched:
         _put_manifest(bucket, key, manifest)
     _publish_data_health_artifact(bucket, key, manifest, now)
+    dispatch_status = _manifest_dispatch_status(manifest, now)
     log.info(
         "collection_manifest_refreshed",
         bucket=bucket,
@@ -99,7 +101,9 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
             "task_count": len(manifest.tasks),
             "dispatched_task_count": len(dispatched),
             "dispatched_task_ids": dispatched,
+            "max_tasks_per_run": max_tasks_per_run,
             "active_ticker_count": manifest.active_ticker_count,
+            **dispatch_status,
         },
     )
 
@@ -254,6 +258,16 @@ def _manifest_date(event: dict[str, Any]) -> date:
     return datetime.now(timezone.utc).date()
 
 
+def _max_tasks_per_run(event: dict[str, Any]) -> int:
+    value = event.get("max_tasks_per_run")
+    if value is None:
+        return MAX_TASKS_PER_RUN
+    try:
+        return max(int(value), 0)
+    except (TypeError, ValueError):
+        return MAX_TASKS_PER_RUN
+
+
 def _load_existing_manifest(bucket: str, key: str) -> CollectionManifest | None:
     try:
         response = boto3.client("s3").get_object(Bucket=bucket, Key=key)
@@ -268,11 +282,12 @@ def _dispatch_ready_tasks(
     key: str,
     manifest: CollectionManifest,
     now: datetime,
+    max_tasks_per_run: int,
 ) -> list[str]:
     lambda_client = boto3.client("lambda")
     dispatched: list[str] = []
     for task in _ready_tasks_by_type(manifest, now):
-        if len(dispatched) >= MAX_TASKS_PER_RUN:
+        if len(dispatched) >= max_tasks_per_run:
             break
         function_name = _worker_function_name(task.task_type)
         if not function_name:
@@ -300,6 +315,38 @@ def _dispatch_ready_tasks(
         )
         dispatched.append(task.task_id)
     return dispatched
+
+
+def _manifest_dispatch_status(
+    manifest: CollectionManifest,
+    now: datetime,
+) -> dict[str, Any]:
+    summary = manifest.summary
+    pending = summary.pending_tasks
+    leased = summary.leased_tasks
+    running = summary.running_tasks
+    retry_wait = summary.retry_wait_tasks
+    failed = summary.failed_tasks
+    active_incomplete = pending + leased + running
+    incomplete = active_incomplete + retry_wait
+    return {
+        "task_counts": {
+            "total": summary.total_tasks,
+            "pending": pending,
+            "leased": leased,
+            "running": running,
+            "succeeded": summary.succeeded_tasks,
+            "failed": failed,
+            "retry_wait": retry_wait,
+            "skipped": summary.skipped_tasks,
+        },
+        "ready_task_count": len(_ready_tasks_by_type(manifest, now)),
+        "active_incomplete_task_count": active_incomplete,
+        "incomplete_task_count": incomplete,
+        "terminal_failed_task_count": failed,
+        "dispatch_complete": incomplete == 0,
+        "dispatch_ready_for_analysis": active_incomplete == 0,
+    }
 
 
 def _ready_tasks_by_type(

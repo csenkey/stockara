@@ -308,6 +308,9 @@ def test_daily_pipeline_state_machine_is_created_in_shadow_mode():
     for state_name in [
         "SyncStaticMetadata",
         "CreateOrRefreshManifest",
+        "DispatchManifestTasks",
+        "WaitForManifestDispatch",
+        "DecideManifestDispatchReadiness",
         "CollectPrices",
         "RepairPriceGaps",
         "CollectNews",
@@ -348,6 +351,10 @@ def test_daily_pipeline_state_machine_is_created_in_shadow_mode():
     assert "ArtifactPublishFailed" in definition
     assert "Parallel" in definition
     assert "Give collectors time to finish before the 22:00 UTC analysis gate." in definition
+    assert "Wait for leased manifest worker Lambdas before dispatching more chunks." in definition
+    assert "dispatch_ready_for_analysis" in definition
+    assert "max_tasks_per_run" in definition
+    assert "80" in definition
     assert "repair_news" in definition
     assert "repair_calendars" in definition
     assert "repair_evidence" in definition
