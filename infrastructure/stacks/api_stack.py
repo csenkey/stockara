@@ -881,7 +881,7 @@ class ApiStack(Stack):
             definition_body=sfn.DefinitionBody.from_chainable(definition),
             timeout=Duration.hours(3),
             comment=(
-                "Manual/shadow daily Stockara workflow coordinating coarse "
+                "Daily Stockara workflow coordinating coarse "
                 "collector, repair, and publication Lambdas."
             ),
         )
@@ -896,7 +896,7 @@ class ApiStack(Stack):
                 "daily-pipeline",
             ),
             description=(
-                "Starts the shadow Step Functions daily workflow before the "
+                "Starts the Step Functions daily workflow before the "
                 "22:00 UTC analysis target"
             ),
             schedule=events.Schedule.cron(

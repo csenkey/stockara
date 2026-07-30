@@ -282,7 +282,7 @@ def test_calendar_collector_lambdas_and_schedules_are_created():
     )
 
 
-def test_daily_pipeline_state_machine_is_created_in_shadow_mode():
+def test_daily_pipeline_state_machine_is_created_for_daily_production_run():
     app = cdk.App()
     stack = cdk.Stack(app, "Deps")
     table = dynamodb.Table(
@@ -313,7 +313,7 @@ def test_daily_pipeline_state_machine_is_created_in_shadow_mode():
 
     assert properties["StateMachineName"] == "stockara-codex-test-daily-pipeline"
     assert properties["StateMachineType"] == "STANDARD"
-    assert "Manual/shadow daily Stockara workflow" in definition
+    assert "Daily Stockara workflow coordinating coarse" in definition
     for state_name in [
         "SyncStaticMetadata",
         "CreateOrRefreshManifest",
