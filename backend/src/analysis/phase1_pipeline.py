@@ -1810,6 +1810,11 @@ def build_publication_payload(
             )
         )
 
+    fallback_previews = _fallback_previews(
+        publishable_analyses,
+        stock_map,
+        run_date,
+    )
     data_warnings = _source_warnings(scores)
     if data_quality:
         data_warnings.extend(data_quality.get("warnings", []))
@@ -1857,6 +1862,7 @@ def build_publication_payload(
         ),
         "top_picks": top_picks,
         "sell_alerts": sell_alerts,
+        "fallback_previews": fallback_previews,
         "upcoming_earnings": upcoming_earnings or [],
         "upcoming_dividends": upcoming_dividends or [],
         "candidate_count": len(scores),
@@ -3684,6 +3690,87 @@ def _fallback_policy_summary(analyses: list[dict[str, Any]]) -> dict[str, Any]:
         "fallback_tickers": [analysis["ticker"] for analysis in fallback_analyses],
         "suppressed_fallback_tickers": [analysis["ticker"] for analysis in suppressed],
     }
+
+
+def _fallback_previews(
+    analyses: list[dict[str, Any]],
+    stock_map: dict[str, dict[str, Any]],
+    run_date: date,
+) -> list[dict[str, Any]]:
+    preview_candidates = [
+        analysis
+        for analysis in analyses
+        if analysis.get("recommendation") in {"BUY", "SELL"}
+        and not _is_publication_allowed(analysis)
+        and _is_fallback_preview_candidate(analysis)
+        and analysis.get("ticker") in stock_map
+    ]
+    preview_candidates.sort(
+        key=lambda row: (
+            max(row.get("opportunity_score", 0), row.get("negative_score", 0)),
+            row.get("confidence_score", 0),
+        ),
+        reverse=True,
+    )
+    previews = []
+    for rank, row in enumerate(preview_candidates[:TOP_PICK_COUNT], start=1):
+        stock = stock_map[row["ticker"]]
+        confidence_cap = _fallback_preview_confidence_cap(row)
+        previews.append(
+            _with_recommendation_context(
+                {
+                    "rank": rank,
+                    "ticker": row["ticker"],
+                    "company_name": stock["company_name"],
+                    "sector": stock["sector"],
+                    "logo_url": _stock_logo_url(stock),
+                    "company_info": _company_info(stock),
+                    "analysis_method": row.get("analysis_method", "ai"),
+                    "publication_tier": "fallback_preview",
+                    "recommendation": row["recommendation"],
+                    "risk_level": row["risk_level"],
+                    "confidence_score": min(int(row["confidence_score"]), confidence_cap),
+                    "confidence_cap": confidence_cap,
+                    "catalyst": row["catalyst"],
+                    "expected_timeframe": row["expected_timeframe"],
+                    "rationale": row["reasoning"],
+                    "invalidation_criteria": row.get("invalidation_criteria"),
+                    "ai_review": row.get("ai_review"),
+                    "missing_evidence": row.get("missing_evidence", []),
+                    "confidence_adjustments": row.get("confidence_adjustments", []),
+                    "preview_warning": _fallback_preview_warning(row),
+                    "automated_trading_excluded": True,
+                    "supporting_evidence": _evidence(row.get("signals", [])),
+                    "source_traceability": [
+                        signal["source"] for signal in row.get("signals", [])[:5]
+                    ],
+                },
+                row["ticker"],
+                run_date,
+            )
+        )
+    return previews
+
+
+def _is_fallback_preview_candidate(analysis: dict[str, Any]) -> bool:
+    if analysis.get("analysis_method") == "fallback_heuristic":
+        return True
+    review_status = (analysis.get("ai_review") or {}).get("status")
+    return review_status in {"error", "unavailable"}
+
+
+def _fallback_preview_confidence_cap(analysis: dict[str, Any]) -> int:
+    if analysis.get("analysis_method") == "fallback_heuristic":
+        return FALLBACK_CONFIDENCE_CAP
+    return 65
+
+
+def _fallback_preview_warning(analysis: dict[str, Any]) -> str:
+    if analysis.get("analysis_method") == "fallback_heuristic":
+        reason = str(analysis.get("fallback_reason") or "fallback_heuristic")
+        return f"Heuristic fallback preview only; AI analysis did not complete ({reason})."
+    status = str((analysis.get("ai_review") or {}).get("status") or "unknown")
+    return f"AI review did not approve this recommendation ({status}); human review required."
 
 
 def _review_policy_summary(analyses: list[dict[str, Any]]) -> dict[str, Any]:

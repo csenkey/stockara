@@ -1786,6 +1786,13 @@ def test_build_publication_payload_suppresses_fallback_buy_and_sell_by_default()
 
     assert payload["top_picks"] == []
     assert payload["sell_alerts"] == []
+    assert [preview["ticker"] for preview in payload["fallback_previews"]] == ["NVDA", "TSLA"]
+    assert all(preview["publication_tier"] == "fallback_preview" for preview in payload["fallback_previews"])
+    assert all(preview["automated_trading_excluded"] is True for preview in payload["fallback_previews"])
+    assert all(
+        preview["confidence_score"] <= FALLBACK_CONFIDENCE_CAP
+        for preview in payload["fallback_previews"]
+    )
     assert payload["fallback_policy"]["fallback_analysis_count"] == 2
     assert payload["fallback_policy"]["suppressed_fallback_count"] == 2
     assert payload["fallback_policy"]["fallback_reason_counts"] == {
@@ -1797,6 +1804,38 @@ def test_build_publication_payload_suppresses_fallback_buy_and_sell_by_default()
     assert "heuristic fallback" in payload["data_warnings"][-2]
     assert "withheld from public publication" in payload["data_warnings"][-1]
     emit_metric.assert_called_once_with("fallback_publication_suppressed", 2)
+
+
+def test_build_publication_payload_includes_review_unavailable_preview_only():
+    stocks = [{"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology"}]
+    scores = [_candidate_score("NVDA", opportunity_score=85, negative_score=5)]
+    analyses = [
+        {
+            "ticker": "NVDA",
+            "analysis_method": "ai",
+            "publication_allowed": False,
+            "recommendation": "BUY",
+            "risk_level": "MEDIUM",
+            "confidence_score": 82,
+            "catalyst": "Unusual volume",
+            "expected_timeframe": "1-30 days",
+            "reasoning": "AI analysis succeeded but review was unavailable.",
+            "invalidation_criteria": "Momentum fades.",
+            "opportunity_score": 85,
+            "negative_score": 5,
+            "signals": [],
+            "ai_review": {"status": "unavailable", "approved": False},
+        }
+    ]
+
+    with patch("src.analysis.phase1_pipeline.store.sell_alert_tickers", return_value=[]):
+        payload = build_publication_payload(analyses, scores, stocks, date(2026, 6, 17))
+
+    assert payload["top_picks"] == []
+    assert payload["sell_alerts"] == []
+    assert payload["fallback_previews"][0]["ticker"] == "NVDA"
+    assert payload["fallback_previews"][0]["confidence_score"] == 65
+    assert "human review required" in payload["fallback_previews"][0]["preview_warning"]
 
 
 def test_build_publication_payload_includes_ai_method_on_public_pick():
