@@ -1,0 +1,195 @@
+name: Inspect Daily Workflow Now
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_stage:
+        description: "Deployment stage to inspect"
+        required: true
+        default: "prod"
+        type: choice
+        options:
+          - prod
+      cutoff_iso:
+        description: "Only treat executions at or after this UTC ISO timestamp as candidates"
+        required: true
+        default: "2026-07-30T21:05:00Z"
+
+concurrency:
+  group: inspect-daily-workflow-now-${{ inputs.deployment_stage }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+jobs:
+  inspect:
+    name: Inspect deployed daily Step Functions workflow
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check AWS OIDC role configuration
+        run: |
+          if [[ -z "${{ secrets.AWS_ROLE_TO_ASSUME }}" ]]; then
+            echo "Missing GitHub secret AWS_ROLE_TO_ASSUME."
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: stockara-daily-inspect-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve production resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="${{ inputs.deployment_stage }}"
+          if [[ "$stage" != "prod" ]]; then
+            echo "Unsupported deployment stage: $stage"
+            exit 1
+          fi
+
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          state_machine_arn="arn:aws:states:${AWS_REGION}:${account_id}:stateMachine:stockara-daily-pipeline"
+          aws stepfunctions describe-state-machine \
+            --state-machine-arn "$state_machine_arn" \
+            --query "{name:name,status:status,stateMachineArn:stateMachineArn}" \
+            --output json
+          echo "STATE_MACHINE_ARN=$state_machine_arn" >> "$GITHUB_ENV"
+
+          bucket="$(
+            aws cloudformation describe-stacks \
+              --stack-name StockMonitoringFrontend \
+              --query "Stacks[0].Outputs[?OutputKey=='BucketName'].OutputValue | [0]" \
+              --output text
+          )"
+          if [[ -z "$bucket" || "$bucket" == "None" ]]; then
+            echo "Could not resolve frontend bucket output."
+            exit 1
+          fi
+          echo "FRONTEND_BUCKET=$bucket" >> "$GITHUB_ENV"
+          echo "Resolved frontend bucket: $bucket"
+
+      - name: Inspect recent executions and workflow artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          cutoff_iso="${{ inputs.cutoff_iso }}"
+          aws stepfunctions list-executions \
+            --state-machine-arn "$STATE_MACHINE_ARN" \
+            --max-results 25 \
+            --output json > executions.json
+
+          python - <<'PY'
+          import json
+          import os
+          from datetime import datetime, timezone
+
+          cutoff = datetime.fromisoformat(os.environ["CUTOFF_ISO"].replace("Z", "+00:00"))
+          payload = json.load(open("executions.json"))
+          executions = payload.get("executions", [])
+          print(f"cutoff={cutoff.isoformat()}")
+          print("recent_executions:")
+          for item in executions[:10]:
+              started = item["startDate"]
+              if isinstance(started, str):
+                  started_text = started
+              else:
+                  started_text = started.isoformat()
+              print(f"- {item['name']} status={item['status']} started={started_text}")
+
+          candidates = []
+          for item in executions:
+              started = item["startDate"]
+              if isinstance(started, str):
+                  started_dt = datetime.fromisoformat(started.replace("Z", "+00:00"))
+              else:
+                  started_dt = started
+              if started_dt.tzinfo is None:
+                  started_dt = started_dt.replace(tzinfo=timezone.utc)
+              if started_dt >= cutoff:
+                  candidates.append(item)
+
+          if not candidates:
+              raise SystemExit("No Step Functions executions found at or after cutoff.")
+
+          selected = candidates[0]
+          print(
+              "selected_execution="
+              f"{selected['name']} status={selected['status']} arn={selected['executionArn']}"
+          )
+          with open(os.environ["GITHUB_ENV"], "a") as env:
+              env.write(f"SELECTED_EXECUTION_ARN={selected['executionArn']}\n")
+              env.write(f"SELECTED_EXECUTION_STATUS={selected['status']}\n")
+          PY
+        env:
+          CUTOFF_ISO: ${{ inputs.cutoff_iso }}
+
+      - name: Inspect selected execution history
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws stepfunctions describe-execution \
+            --execution-arn "$SELECTED_EXECUTION_ARN" \
+            --query "{name:name,status:status,startDate:startDate,stopDate:stopDate,input:input,output:output}" \
+            --output json > selected-execution.json
+          python -m json.tool selected-execution.json
+
+          aws stepfunctions get-execution-history \
+            --execution-arn "$SELECTED_EXECUTION_ARN" \
+            --max-items 80 \
+            --query "events[].{id:id,type:type,state:stateEnteredEventDetails.name,stateExited:stateExitedEventDetails.name,error:taskFailedEventDetails.error,cause:taskFailedEventDetails.cause}" \
+            --output table
+
+          if [[ "$SELECTED_EXECUTION_STATUS" == "FAILED" || "$SELECTED_EXECUTION_STATUS" == "TIMED_OUT" || "$SELECTED_EXECUTION_STATUS" == "ABORTED" ]]; then
+            echo "Selected Step Functions execution ended with terminal status: $SELECTED_EXECUTION_STATUS"
+            exit 1
+          fi
+
+      - name: Validate workflow/latest.json from S3
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws s3 cp "s3://$FRONTEND_BUCKET/workflow/latest.json" workflow-latest.json
+          python - <<'PY'
+          import json
+
+          payload = json.load(open("workflow-latest.json"))
+          required = {
+              "artifact_type": "daily_workflow_status",
+              "run_date": str,
+              "generated_at": str,
+              "status": str,
+              "decision": str,
+              "artifacts": dict,
+          }
+          for key, expected_type in required.items():
+              value = payload.get(key)
+              if not isinstance(value, expected_type):
+                  raise SystemExit(f"workflow/latest.json missing or invalid field: {key}")
+          if payload["status"] not in {"success", "degraded", "waiting", "blocked"}:
+              raise SystemExit(f"Unexpected workflow status: {payload['status']}")
+          print(
+              "workflow_latest="
+              f"run_date={payload['run_date']} "
+              f"generated_at={payload['generated_at']} "
+              f"status={payload['status']} "
+              f"decision={payload['decision']}"
+          )
+          print(f"workflow_error={payload.get('workflow_error')}")
+          for name, step in (payload.get("steps") or {}).items():
+              if isinstance(step, dict):
+                  print(
+                      f"step={name} "
+                      f"status={step.get('status')} "
+                      f"stage={step.get('stage')} "
+                      f"error={step.get('error')}"
+                  )
+          PY
