@@ -50,7 +50,7 @@
 ## Milestone 4: Step Functions Orchestrator
 
 - [x] Add a CDK Step Functions state machine for the daily Stockara workflow.
-- [ ] Start the state machine from one EventBridge daily schedule before the target analysis time.
+- [x] Start the state machine from one EventBridge daily schedule before the target analysis time.
 - [x] Invoke existing Lambdas through coarse workflow states instead of per-ticker Step Functions states.
 - [ ] Add retries/catches for provider throttling, transient Lambda failures, manifest incompleteness, OpenAI failures, and artifact publish failures.
 - [ ] Add a readiness decision state that chooses `publish`, `publish_degraded`, `wait_or_repair`, or `blocked`.

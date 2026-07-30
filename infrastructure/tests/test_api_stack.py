@@ -304,18 +304,36 @@ def test_daily_pipeline_state_machine_is_created_in_shadow_mode():
         "CollectEarnings",
         "CollectDividends",
         "CollectEvidence",
+        "WaitForAnalysisWindow",
         "AnalyzeAndPublish",
     ]:
         assert state_name in definition
     assert "MaxAttempts" in definition
     assert "Parallel" in definition
+    assert "Give collectors time to finish before the 22:00 UTC analysis gate." in definition
     assert "repair_news" in definition
     assert "repair_calendars" in definition
     assert "repair_evidence" in definition
+    template.has_resource_properties(
+        "AWS::Events::Rule",
+        {
+            "Name": "stockara-codex-test-daily-pipeline",
+            "ScheduleExpression": "cron(5 21 * * ? *)",
+            "Targets": assertions.Match.array_with(
+                [
+                    assertions.Match.object_like(
+                        {
+                            "Input": '{"workflow":"scheduled_daily_step_functions"}',
+                        }
+                    )
+                ]
+            ),
+        },
+    )
     template.has_output(
         "DailyWorkflowStateMachineName",
         assertions.Match.object_like(
             {"Description": "Manual/shadow Step Functions workflow for the daily pipeline"}
         ),
     )
-    template.resource_count_is("AWS::Events::Rule", 8)
+    template.resource_count_is("AWS::Events::Rule", 9)

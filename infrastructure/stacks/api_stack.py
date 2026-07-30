@@ -509,6 +509,9 @@ class ApiStack(Stack):
         health_resource.add_method("GET", apigw.LambdaIntegration(self.api_handler_fn))
 
         self.daily_workflow = self._create_daily_workflow(deployment_stage)
+        self.daily_workflow_schedule = self._create_daily_workflow_schedule(
+            deployment_stage
+        )
 
         stock_collection_rule = events.Rule(
             self,
@@ -772,6 +775,12 @@ class ApiStack(Stack):
         collect_calendars_and_evidence.branch(collect_earnings)
         collect_calendars_and_evidence.branch(collect_dividends)
         collect_calendars_and_evidence.branch(collect_evidence)
+        wait_for_analysis_window = sfn.Wait(
+            self,
+            "WaitForAnalysisWindow",
+            time=sfn.WaitTime.duration(Duration.minutes(60)),
+            comment="Give collectors time to finish before the 22:00 UTC analysis gate.",
+        )
 
         definition = (
             sync_static_metadata
@@ -780,6 +789,7 @@ class ApiStack(Stack):
             .next(repair_price_gaps)
             .next(collect_news)
             .next(collect_calendars_and_evidence)
+            .next(wait_for_analysis_window)
             .next(analyze_and_publish)
         )
 
@@ -798,6 +808,32 @@ class ApiStack(Stack):
                 "Manual/shadow daily Stockara workflow coordinating coarse "
                 "collector, repair, and publication Lambdas."
             ),
+        )
+
+    def _create_daily_workflow_schedule(self, deployment_stage: str) -> events.Rule:
+        return events.Rule(
+            self,
+            "DailyPipelineWorkflowSchedule",
+            rule_name=resource_name(
+                deployment_stage,
+                "stockara-daily-pipeline",
+                "daily-pipeline",
+            ),
+            description=(
+                "Starts the shadow Step Functions daily workflow before the "
+                "22:00 UTC analysis target"
+            ),
+            schedule=events.Schedule.cron(
+                minute="5", hour="21", day="*", month="*", year="*"
+            ),
+            targets=[
+                targets.SfnStateMachine(
+                    self.daily_workflow,
+                    input=events.RuleTargetInput.from_object(
+                        {"workflow": "scheduled_daily_step_functions"}
+                    ),
+                )
+            ],
         )
 
     def _lambda_workflow_step(
