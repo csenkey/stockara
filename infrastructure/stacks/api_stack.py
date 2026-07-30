@@ -19,6 +19,8 @@ from aws_cdk import (
     aws_lambda as _lambda,
     aws_s3 as s3,
     aws_secretsmanager as secretsmanager,
+    aws_stepfunctions as sfn,
+    aws_stepfunctions_tasks as sfn_tasks,
 )
 from constructs import Construct
 
@@ -506,6 +508,8 @@ class ApiStack(Stack):
         health_resource = api_resource.add_resource("health")
         health_resource.add_method("GET", apigw.LambdaIntegration(self.api_handler_fn))
 
+        self.daily_workflow = self._create_daily_workflow(deployment_stage)
+
         stock_collection_rule = events.Rule(
             self,
             "StockCollectionSchedule",
@@ -669,3 +673,156 @@ class ApiStack(Stack):
             value=self.evidence_collector_fn.function_name,
             description="Lambda function for collecting SEC filings and analyst actions",
         )
+        CfnOutput(
+            self,
+            "DailyWorkflowStateMachineName",
+            value=self.daily_workflow.state_machine_name,
+            description="Manual/shadow Step Functions workflow for the daily pipeline",
+        )
+
+    def _create_daily_workflow(self, deployment_stage: str) -> sfn.StateMachine:
+        sync_static_metadata = self._lambda_workflow_step(
+            "SyncStaticMetadata",
+            self.watchlist_seed_fn,
+            {"mode": "sync_static_metadata"},
+            "$.sync_static_metadata",
+        )
+        create_or_refresh_manifest = self._lambda_workflow_step(
+            "CreateOrRefreshManifest",
+            self.collection_distributor_fn,
+            {"workflow": "daily_step_functions", "stage": "create_or_refresh_manifest"},
+            "$.manifest",
+        )
+        collect_prices = self._lambda_workflow_step(
+            "CollectPrices",
+            self.stock_collector_fn,
+            {"max_tickers": 50, "workflow": "daily_step_functions"},
+            "$.prices",
+        )
+        repair_price_gaps = self._lambda_workflow_step(
+            "RepairPriceGaps",
+            self.stock_collector_fn,
+            {
+                "mode": "repair_price_gaps",
+                "max_tickers": 50,
+                "workflow": "daily_step_functions",
+            },
+            "$.price_gap_repair",
+        )
+        collect_news = self._lambda_workflow_step(
+            "CollectNews",
+            self.news_collector_fn,
+            {
+                "mode": "repair_news",
+                "max_tickers": 75,
+                "provider_budget": {
+                    "newsapi": 20,
+                    "finnhub": 50,
+                    "alpha_vantage": 10,
+                },
+                "workflow": "daily_step_functions",
+            },
+            "$.news",
+        )
+        collect_earnings = self._lambda_workflow_step(
+            "CollectEarnings",
+            self.earnings_collector_fn,
+            {
+                "mode": "repair_calendars",
+                "max_tickers": 50,
+                "provider_budget": {"alpha_vantage": 20, "finnhub": 50},
+                "workflow": "daily_step_functions",
+            },
+            "$.earnings",
+        )
+        collect_dividends = self._lambda_workflow_step(
+            "CollectDividends",
+            self.dividend_collector_fn,
+            {
+                "mode": "repair_calendars",
+                "max_tickers": 50,
+                "provider_budget": {"alpha_vantage": 20, "finnhub": 50},
+                "workflow": "daily_step_functions",
+            },
+            "$.dividends",
+        )
+        collect_evidence = self._lambda_workflow_step(
+            "CollectEvidence",
+            self.evidence_collector_fn,
+            {
+                "mode": "repair_evidence",
+                "max_tickers": 100,
+                "provider_budget": {"sec": 100, "finnhub": 100, "yfinance": 100},
+                "workflow": "daily_step_functions",
+            },
+            "$.evidence",
+        )
+        analyze_and_publish = self._lambda_workflow_step(
+            "AnalyzeAndPublish",
+            self.ai_analyzer_fn,
+            {"mode": "daily", "workflow": "daily_step_functions"},
+            "$.analysis",
+        )
+
+        collect_calendars_and_evidence = sfn.Parallel(
+            self,
+            "CollectCalendarsAndEvidence",
+            result_path="$.optional_evidence",
+        )
+        collect_calendars_and_evidence.branch(collect_earnings)
+        collect_calendars_and_evidence.branch(collect_dividends)
+        collect_calendars_and_evidence.branch(collect_evidence)
+
+        definition = (
+            sync_static_metadata
+            .next(create_or_refresh_manifest)
+            .next(collect_prices)
+            .next(repair_price_gaps)
+            .next(collect_news)
+            .next(collect_calendars_and_evidence)
+            .next(analyze_and_publish)
+        )
+
+        return sfn.StateMachine(
+            self,
+            "DailyPipelineWorkflow",
+            state_machine_name=resource_name(
+                deployment_stage,
+                "stockara-daily-pipeline",
+                "daily-pipeline",
+            ),
+            state_machine_type=sfn.StateMachineType.STANDARD,
+            definition_body=sfn.DefinitionBody.from_chainable(definition),
+            timeout=Duration.hours(3),
+            comment=(
+                "Manual/shadow daily Stockara workflow coordinating coarse "
+                "collector, repair, and publication Lambdas."
+            ),
+        )
+
+    def _lambda_workflow_step(
+        self,
+        construct_id: str,
+        lambda_function: _lambda.IFunction,
+        payload: dict,
+        result_path: str,
+    ) -> sfn_tasks.LambdaInvoke:
+        step = sfn_tasks.LambdaInvoke(
+            self,
+            construct_id,
+            lambda_function=lambda_function,
+            payload=sfn.TaskInput.from_object(payload),
+            result_path=result_path,
+        )
+        step.add_retry(
+            errors=[
+                "Lambda.ServiceException",
+                "Lambda.AWSLambdaException",
+                "Lambda.SdkClientException",
+                "Lambda.TooManyRequestsException",
+            ],
+            interval=Duration.seconds(2),
+            max_attempts=3,
+            backoff_rate=2,
+        )
+        return step

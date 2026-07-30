@@ -1,11 +1,13 @@
 """Tests for the ApiStack CDK stack."""
 
+import json
+from unittest.mock import patch
+
 import aws_cdk as cdk
 import aws_cdk.assertions as assertions
 from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_s3 as s3
-from unittest.mock import patch
 
 from stacks.api_stack import ApiStack
 
@@ -258,3 +260,62 @@ def test_calendar_collector_lambdas_and_schedules_are_created():
             "ScheduleExpression": "cron(45 20 * * ? *)",
         },
     )
+
+
+def test_daily_pipeline_state_machine_is_created_in_shadow_mode():
+    app = cdk.App()
+    stack = cdk.Stack(app, "Deps")
+    table = dynamodb.Table(
+        stack,
+        "DataTable",
+        partition_key=dynamodb.Attribute(
+            name="PK", type=dynamodb.AttributeType.STRING
+        ),
+        sort_key=dynamodb.Attribute(name="SK", type=dynamodb.AttributeType.STRING),
+    )
+    bucket = s3.Bucket(stack, "Artifacts")
+    code = lambda_.Code.from_inline("def handler(event, context): return {}")
+    with patch("stacks.api_stack._lambda.Code.from_asset", return_value=code):
+        api_stack = ApiStack(
+            app,
+            "ApiTest",
+            data_table=table,
+            artifact_bucket=bucket,
+            deployment_stage="codex-test",
+        )
+    template = assertions.Template.from_stack(api_stack)
+
+    template.resource_count_is("AWS::StepFunctions::StateMachine", 1)
+    resources = template.find_resources("AWS::StepFunctions::StateMachine")
+    state_machine = next(iter(resources.values()))
+    properties = state_machine["Properties"]
+    definition = json.dumps(properties["DefinitionString"])
+
+    assert properties["StateMachineName"] == "stockara-codex-test-daily-pipeline"
+    assert properties["StateMachineType"] == "STANDARD"
+    assert "Manual/shadow daily Stockara workflow" in definition
+    for state_name in [
+        "SyncStaticMetadata",
+        "CreateOrRefreshManifest",
+        "CollectPrices",
+        "RepairPriceGaps",
+        "CollectNews",
+        "CollectCalendarsAndEvidence",
+        "CollectEarnings",
+        "CollectDividends",
+        "CollectEvidence",
+        "AnalyzeAndPublish",
+    ]:
+        assert state_name in definition
+    assert "MaxAttempts" in definition
+    assert "Parallel" in definition
+    assert "repair_news" in definition
+    assert "repair_calendars" in definition
+    assert "repair_evidence" in definition
+    template.has_output(
+        "DailyWorkflowStateMachineName",
+        assertions.Match.object_like(
+            {"Description": "Manual/shadow Step Functions workflow for the daily pipeline"}
+        ),
+    )
+    template.resource_count_is("AWS::Events::Rule", 8)
