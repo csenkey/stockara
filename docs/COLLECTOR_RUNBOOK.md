@@ -79,6 +79,14 @@ history and immediately run a bounded number of `repair_price_gaps` invocations
 from `price-gaps/latest.json`. Keep `repair_max_tasks` small while provider
 health or quota state is uncertain.
 
+News repair mode currently supported:
+
+- `repair_news`: fetches targeted or broad news with the shared
+  `provider_budget` map. In `Run News Collection Now`, use
+  `provider_budget_json` to cap or disable providers, for example
+  `{"newsapi":1,"finnhub":5,"alpha_vantage":1}`. Set a provider budget to `0`
+  to skip that provider for the run.
+
 Expected summary fields:
 
 - `created`: active seed rows that were missing in DynamoDB and were inserted.

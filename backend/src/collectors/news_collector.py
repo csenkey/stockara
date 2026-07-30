@@ -21,6 +21,8 @@ from src.db.connection import DatabasePool, store
 from src.models.schemas import (
     CollectionOutputCounts,
     CollectionTaskType,
+    RepairMode,
+    RepairModeRequest,
 )
 from src.services.collection_manifest import (
     complete_task,
@@ -854,7 +856,13 @@ def emit_news_collection_summary_metrics(summary: dict[str, Any]) -> None:
         logger.warning("news_collection_summary_metrics_failed", error=str(e))
 
 
-def collect_news(tickers: list[str] | None = None) -> dict[str, Any]:
+def collect_news(
+    tickers: list[str] | None = None,
+    *,
+    provider_budget: dict[str, int] | None = None,
+    dry_run: bool = False,
+    operation_mode: str = "news_collection",
+) -> dict[str, Any]:
     """Main news collection logic.
 
     Polls all configured sources, deduplicates, summarizes, and stores articles.
@@ -866,14 +874,24 @@ def collect_news(tickers: list[str] | None = None) -> dict[str, Any]:
         "Starting news collection",
         poll_interval_minutes=POLL_INTERVAL_MINUTES,
         tickers=tickers or [],
+        provider_budget=provider_budget or {},
+        dry_run=dry_run,
     )
 
+    if dry_run:
+        return {
+            "status": "dry_run",
+            "mode": operation_mode,
+            "tickers": tickers or [],
+            "provider_budget": provider_budget or {},
+            "sources_planned": _planned_news_sources(tickers, provider_budget or {}),
+            "articles_processed": 0,
+            "sources_available": 0,
+            "total_fetched": 0,
+        }
+
     # Fetch from all sources and track source health separately from article count.
-    source_results = [
-        fetch_newsapi_source(tickers=tickers),
-        fetch_finnhub_source(tickers=tickers),
-        fetch_alpha_vantage_source(tickers=tickers),
-    ]
+    source_results = _fetch_budgeted_news_sources(tickers, provider_budget or {})
     sources_available = sum(1 for result in source_results if result.is_available)
     failed_sources = [
         result.source for result in source_results if result.status == "failed"
@@ -916,6 +934,7 @@ def collect_news(tickers: list[str] | None = None) -> dict[str, Any]:
         emit_news_collection_summary_metrics(summary)
         result = {
             "status": "error" if configured_sources else "skipped",
+            "mode": operation_mode,
             "message": (
                 "All configured news sources unavailable"
                 if configured_sources
@@ -1022,6 +1041,7 @@ def collect_news(tickers: list[str] | None = None) -> dict[str, Any]:
 
     result = {
         "status": status,
+        "mode": operation_mode,
         "articles_processed": articles_stored,
         "sources_available": sources_available,
         "failed_sources": failed_sources,
@@ -1034,6 +1054,69 @@ def collect_news(tickers: list[str] | None = None) -> dict[str, Any]:
     }
     _publish_news_dashboard_artifact(ARTIFACT_BUCKET, result)
     return result
+
+
+def _provider_budget_allows(
+    provider: str, provider_budget: dict[str, int]
+) -> bool:
+    return int(provider_budget.get(provider, 1)) > 0
+
+
+def _budgeted_provider_tickers(
+    provider: str,
+    tickers: list[str] | None,
+    provider_budget: dict[str, int],
+) -> list[str] | None:
+    if not tickers or provider != "finnhub" or provider not in provider_budget:
+        return tickers
+    return tickers[: int(provider_budget[provider])]
+
+
+def _planned_news_sources(
+    tickers: list[str] | None, provider_budget: dict[str, int]
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "source": provider,
+            "enabled": _provider_budget_allows(provider, provider_budget),
+            "tickers": _budgeted_provider_tickers(provider, tickers, provider_budget)
+            or [],
+        }
+        for provider in ("newsapi", "finnhub", "alpha_vantage")
+    ]
+
+
+def _fetch_budgeted_news_sources(
+    tickers: list[str] | None, provider_budget: dict[str, int]
+) -> list[NewsSourceResult]:
+    results: list[NewsSourceResult] = []
+    if _provider_budget_allows("newsapi", provider_budget):
+        results.append(fetch_newsapi_source(tickers=tickers))
+    else:
+        results.append(
+            NewsSourceResult("newsapi", [], "skipped", "provider_budget_exhausted")
+        )
+
+    if _provider_budget_allows("finnhub", provider_budget):
+        results.append(
+            fetch_finnhub_source(
+                tickers=_budgeted_provider_tickers("finnhub", tickers, provider_budget)
+            )
+        )
+    else:
+        results.append(
+            NewsSourceResult("finnhub", [], "skipped", "provider_budget_exhausted")
+        )
+
+    if _provider_budget_allows("alpha_vantage", provider_budget):
+        results.append(fetch_alpha_vantage_source(tickers=tickers))
+    else:
+        results.append(
+            NewsSourceResult(
+                "alpha_vantage", [], "skipped", "provider_budget_exhausted"
+            )
+        )
+    return results
 
 
 def _publish_news_dashboard_artifact(
@@ -1144,10 +1227,22 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     manifest_task_run: ManifestTaskRun | None = None
 
     try:
-        manifest_task_run, tickers = _prepare_manifest_task_run(event, context)
-        if tickers is None:
-            tickers = _event_tickers(event)
-        result = collect_news(tickers=tickers)
+        repair_request = _news_repair_request_from_event(event)
+        if repair_request:
+            tickers = repair_request.tickers or None
+            if tickers and repair_request.max_tickers is not None:
+                tickers = tickers[: repair_request.max_tickers]
+            result = collect_news(
+                tickers=tickers,
+                provider_budget=repair_request.provider_budget,
+                dry_run=repair_request.dry_run,
+                operation_mode=repair_request.mode.value,
+            )
+        else:
+            manifest_task_run, tickers = _prepare_manifest_task_run(event, context)
+            if tickers is None:
+                tickers = _event_tickers(event)
+            result = collect_news(tickers=tickers)
         if manifest_task_run:
             _complete_manifest_task_run(
                 manifest_task_run,
@@ -1169,6 +1264,12 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         }
     finally:
         DatabasePool.close()
+
+
+def _news_repair_request_from_event(event: dict[str, Any]) -> RepairModeRequest | None:
+    if str(event.get("mode") or "") != RepairMode.REPAIR_NEWS.value:
+        return None
+    return RepairModeRequest.model_validate(event)
 
 
 def _event_tickers(event: dict[str, Any]) -> list[str] | None:

@@ -18,13 +18,14 @@
 - [x] Implement `repair_price_gaps` and `repair_history` modes using existing price gap scanner and date-bounded manifest tasks.
   - [x] Add shared `repair_price_gaps` and `repair_history` mode aliases to the stock collector with dry-run support.
   - [x] Wire gap scanning output directly into bounded `repair_price_gaps` invocations.
-- [ ] Implement `repair_news` mode that respects NewsAPI/Finnhub/Alpha Vantage quota budgets and can target only shortlisted or missing-news tickers.
+- [x] Implement `repair_news` mode that respects NewsAPI/Finnhub/Alpha Vantage quota budgets and can target only shortlisted or missing-news tickers.
 - [ ] Implement `repair_calendars` mode for earnings/dividend retry and fallback providers.
 - [ ] Implement `repair_evidence` mode for SEC filing and analyst-action gaps.
 - [ ] Implement `retry_ai_analysis` and `retry_ai_review` modes that reuse stored candidate scores/evidence and publish clear model/error provenance.
 - [ ] Update GitHub Actions manual workflows to call repair modes instead of bespoke one-off Lambda payloads where practical.
   - [x] Update `Sync Watchlist Metadata Now` to use the shared repair-mode payload shape.
   - [x] Update `Run Phase 1 Pipeline Now` metadata sync and historical repair payloads to use shared repair-mode names.
+  - [x] Update `Run News Collection Now` to use `repair_news` with provider budget and dry-run inputs.
 
 ## Milestone 3: Publish Useful Degraded Suggestions
 

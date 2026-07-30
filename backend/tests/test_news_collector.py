@@ -935,6 +935,47 @@ class TestCollectNews:
         assert result["collection_summary"]["status"] == "skipped"
         assert result["collection_summary"]["completeness_ratio"] == 1.0
 
+    @patch("backend.src.collectors.news_collector.emit_metrics")
+    @patch("backend.src.collectors.news_collector.OpenAI")
+    @patch("backend.src.collectors.news_collector.DatabasePool")
+    @patch("backend.src.collectors.news_collector.get_existing_hashes")
+    @patch("backend.src.collectors.news_collector.fetch_alpha_vantage_source")
+    @patch("backend.src.collectors.news_collector.fetch_finnhub_source")
+    @patch("backend.src.collectors.news_collector.fetch_newsapi_source")
+    def test_provider_budget_skips_and_caps_sources(
+        self,
+        mock_newsapi,
+        mock_finnhub,
+        mock_alpha,
+        mock_get_hashes,
+        mock_db_pool,
+        mock_openai,
+        mock_metrics,
+    ):
+        mock_newsapi.return_value = NewsSourceResult("newsapi", [])
+        mock_finnhub.return_value = NewsSourceResult("finnhub", [])
+        mock_get_hashes.return_value = set()
+        mock_conn = MagicMock()
+        mock_db_pool.initialize.return_value = None
+        mock_db_pool._pool.getconn.return_value = mock_conn
+        mock_openai.return_value = MagicMock()
+
+        result = collect_news(
+            tickers=["AAPL", "MSFT"],
+            provider_budget={
+                "newsapi": 1,
+                "finnhub": 1,
+                "alpha_vantage": 0,
+            },
+            operation_mode="repair_news",
+        )
+
+        assert result["mode"] == "repair_news"
+        assert result["collection_summary"]["skipped_sources"] == ["alpha_vantage"]
+        mock_newsapi.assert_called_once_with(tickers=["AAPL", "MSFT"])
+        mock_finnhub.assert_called_once_with(tickers=["AAPL"])
+        mock_alpha.assert_not_called()
+
 
 # --- Tests for handler ---
 
@@ -969,6 +1010,35 @@ class TestHandler:
         result = handler({}, None)
         assert result["statusCode"] == 200
         assert result["body"]["articles_processed"] == 5
+        mock_db_pool.close.assert_called_once()
+
+    @patch("backend.src.collectors.news_collector.DatabasePool")
+    @patch("backend.src.collectors.news_collector.collect_news")
+    def test_handler_accepts_repair_news_mode(self, mock_collect, mock_db_pool):
+        mock_collect.return_value = {
+            "status": "dry_run",
+            "mode": "repair_news",
+            "articles_processed": 0,
+        }
+
+        result = handler(
+            {
+                "mode": "repair_news",
+                "tickers": ["aapl", "msft"],
+                "max_tickers": 1,
+                "provider_budget": {"newsapi": 1, "finnhub": 0},
+                "dry_run": True,
+            },
+            None,
+        )
+
+        assert result["statusCode"] == 200
+        mock_collect.assert_called_once_with(
+            tickers=["AAPL"],
+            provider_budget={"newsapi": 1, "finnhub": 0},
+            dry_run=True,
+            operation_mode="repair_news",
+        )
         mock_db_pool.close.assert_called_once()
 
     @patch("backend.src.collectors.news_collector.logger")

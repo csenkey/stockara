@@ -14,6 +14,15 @@ on:
         description: "Optional comma-separated tickers to target"
         required: false
         default: ""
+      provider_budget_json:
+        description: "Optional provider budget JSON, e.g. {\"newsapi\":1,\"finnhub\":5}"
+        required: false
+        default: "{}"
+      dry_run:
+        description: "Build and validate the repair_news request without fetching or storing"
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
   group: run-news-collection-now-${{ inputs.deployment_stage }}
@@ -67,18 +76,46 @@ jobs:
         shell: bash
         env:
           TICKERS_CSV: ${{ inputs.tickers_csv }}
+          PROVIDER_BUDGET_JSON: ${{ inputs.provider_budget_json }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
           python - <<'PY' > news-payload.json
           import json
           import os
+          import sys
 
           tickers = [
               ticker.strip().upper()
               for ticker in os.environ["TICKERS_CSV"].split(",")
               if ticker.strip()
           ]
-          payload = {"tickers": tickers} if tickers else {}
+          try:
+              provider_budget = json.loads(os.environ["PROVIDER_BUDGET_JSON"] or "{}")
+          except json.JSONDecodeError as exc:
+              print(f"provider_budget_json is invalid JSON: {exc}", file=sys.stderr)
+              raise SystemExit(1)
+          if not isinstance(provider_budget, dict):
+              print("provider_budget_json must be a JSON object.", file=sys.stderr)
+              raise SystemExit(1)
+          normalized_budget = {}
+          for provider, value in provider_budget.items():
+              try:
+                  budget = int(value)
+              except (TypeError, ValueError):
+                  print(f"Provider budget for {provider!r} must be an integer.", file=sys.stderr)
+                  raise SystemExit(1)
+              if budget < 0:
+                  print(f"Provider budget for {provider!r} must be non-negative.", file=sys.stderr)
+                  raise SystemExit(1)
+              normalized_budget[str(provider).strip().lower()] = budget
+          payload = {
+              "mode": "repair_news",
+              "provider_budget": normalized_budget,
+              "dry_run": os.environ["DRY_RUN"].lower() == "true",
+          }
+          if tickers:
+              payload["tickers"] = tickers
           print(json.dumps(payload))
           PY
           cat news-payload.json
@@ -109,7 +146,9 @@ jobs:
           body = payload.get("body", {})
           status = str(body.get("status", "")).lower()
           sources_available = int(body.get("sources_available", 0) or 0)
-          if status in {"error", "failed"} or sources_available == 0:
+          if status in {"error", "failed"} or (
+              sources_available == 0 and status != "dry_run"
+          ):
               print(f"News collector failed: {body}")
               sys.exit(1)
           if status != "success":
