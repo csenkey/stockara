@@ -5,6 +5,7 @@ import pytest
 from backend.src.scripts.seed_watchlist_handler import (
     REQUIRED_METADATA_FIELDS,
     _build_stock_item,
+    _seed_path,
     _validate_header,
     handler,
     sync_static_metadata,
@@ -55,6 +56,10 @@ def test_seed_header_requires_static_metadata_columns():
 
 def test_seed_header_accepts_required_metadata_columns():
     _validate_header(sorted(REQUIRED_METADATA_FIELDS))
+
+
+def test_seed_path_prefers_packaged_backend_seed_csv():
+    assert _seed_path().as_posix().endswith("backend/src/data/watchlist_seed.csv")
 
 
 def test_build_stock_item_includes_static_metadata():

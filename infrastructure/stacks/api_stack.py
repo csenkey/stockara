@@ -33,7 +33,9 @@ BACKEND_ASSET_PATH = os.path.abspath(
 PROJECT_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..")
 )
-WATCHLIST_SEED_PATH = os.path.join(PROJECT_ROOT, "data", "watchlist_seed.csv")
+BACKEND_WATCHLIST_SEED_PATH = os.path.join(
+    BACKEND_ASSET_PATH, "src", "data", "watchlist_seed.csv"
+)
 
 
 def _file_sha256(path: str) -> str:
@@ -233,20 +235,8 @@ class ApiStack(Stack):
                 "watchlist-seed",
             ),
             runtime=_lambda.Runtime.PYTHON_3_12,
-            handler="backend.src.scripts.seed_watchlist_handler.handler",
-            code=_lambda.Code.from_asset(
-                PROJECT_ROOT,
-                exclude=[
-                    ".git",
-                    ".hypothesis",
-                    ".pytest_cache",
-                    ".ruff_cache",
-                    "docs",
-                    "frontend/node_modules",
-                    "frontend/dist",
-                    "infrastructure/cdk.out",
-                ],
-            ),
+            handler="src.scripts.seed_watchlist_handler.handler",
+            code=backend_code,
             memory_size=256,
             timeout=Duration.minutes(3),
             role=batch_role,
@@ -483,7 +473,7 @@ class ApiStack(Stack):
             properties={
                 "TableName": data_table.table_name,
                 "SellAlertTickers": "AAPL,MSFT,NVDA",
-                "SeedHash": _file_sha256(WATCHLIST_SEED_PATH),
+                "SeedHash": _file_sha256(BACKEND_WATCHLIST_SEED_PATH),
             },
         )
 

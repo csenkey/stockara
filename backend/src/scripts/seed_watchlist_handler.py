@@ -183,7 +183,15 @@ def _build_stock_item(row: dict[str, str], sell_alert_tickers: set[str]) -> dict
 
 
 def _seed_path() -> Path:
-    return Path(__file__).resolve().parents[3] / "data" / "watchlist_seed.csv"
+    current_file = Path(__file__).resolve()
+    candidates = (
+        current_file.parents[1] / "data" / "watchlist_seed.csv",
+        current_file.parents[3] / "data" / "watchlist_seed.csv",
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
 
 
 def _load_seed_rows() -> list[dict[str, str]]:

@@ -9,7 +9,10 @@ from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_s3 as s3
 
+from stacks.api_stack import BACKEND_ASSET_PATH
+from stacks.api_stack import BACKEND_WATCHLIST_SEED_PATH
 from stacks.api_stack import ApiStack
+from stacks.api_stack import _file_sha256
 
 
 def test_calendar_collector_lambdas_and_schedules_are_created():
@@ -148,7 +151,14 @@ def test_calendar_collector_lambdas_and_schedules_are_created():
         "AWS::CloudFormation::CustomResource",
         {
             "SellAlertTickers": "AAPL,MSFT,NVDA",
-            "SeedHash": assertions.Match.string_like_regexp("^[0-9a-f]{64}$"),
+            "SeedHash": _file_sha256(BACKEND_WATCHLIST_SEED_PATH),
+        },
+    )
+    template.has_resource_properties(
+        "AWS::Lambda::Function",
+        {
+            "FunctionName": "stockara-codex-test-watchlist-seed",
+            "Handler": "src.scripts.seed_watchlist_handler.handler",
         },
     )
     template.has_resource_properties(
@@ -446,3 +456,28 @@ def test_daily_pipeline_state_machine_iam_is_scoped_to_workflow_lambdas():
             }
         },
     )
+
+
+def test_watchlist_seed_lambda_uses_dependency_bundled_backend_asset():
+    app = cdk.App()
+    stack = cdk.Stack(app, "Deps")
+    table = dynamodb.Table(
+        stack,
+        "DataTable",
+        partition_key=dynamodb.Attribute(
+            name="PK", type=dynamodb.AttributeType.STRING
+        ),
+        sort_key=dynamodb.Attribute(name="SK", type=dynamodb.AttributeType.STRING),
+    )
+    bucket = s3.Bucket(stack, "Artifacts")
+    code = lambda_.Code.from_inline("def handler(event, context): return {}")
+    with patch("stacks.api_stack._lambda.Code.from_asset", return_value=code) as asset:
+        ApiStack(
+            app,
+            "ApiTest",
+            data_table=table,
+            artifact_bucket=bucket,
+            deployment_stage="codex-test",
+        )
+
+    assert [call.args[0] for call in asset.call_args_list] == [BACKEND_ASSET_PATH]
