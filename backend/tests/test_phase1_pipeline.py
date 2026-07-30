@@ -1870,6 +1870,18 @@ def test_build_publication_payload_includes_ai_method_on_public_pick():
         "news",
         "source_evidence",
     ]
+    assert payload["top_picks"][0]["confidence_adjustments"] == [
+        {
+            "reason": "optional_evidence_gap",
+            "adjustment": -10,
+            "missing_evidence": [
+                "dividend_calendar",
+                "earnings_calendar",
+                "news",
+                "source_evidence",
+            ],
+        }
+    ]
     assert payload["top_picks"][0]["confidence_score"] == 74
 
 
@@ -1963,6 +1975,76 @@ def test_publish_payload_writes_latest_and_history_artifacts():
     ]
     put_record.assert_called_once_with(date(2026, 6, 17), payload)
     emit_metric.assert_called_once_with("artifact_publish_failures", 0)
+
+
+def test_publish_payload_preserves_tier_metadata_without_automated_preview_leakage():
+    payload = {
+        "publication_date": "2026-06-17",
+        "generated_at": "2026-06-17T22:00:00",
+        "publication_tiers": {
+            "published_counts": {"decision_grade": 1, "reduced_confidence": 1},
+            "analysis_counts": {"fallback_preview": 1},
+        },
+        "top_picks": [
+            {
+                "ticker": "NVDA",
+                "publication_tier": "reduced_confidence",
+                "missing_evidence": ["news"],
+                "confidence_adjustments": [
+                    {
+                        "reason": "optional_evidence_gap",
+                        "adjustment": -10,
+                        "detail": "Optional news evidence missing.",
+                    }
+                ],
+            }
+        ],
+        "sell_alerts": [
+            {
+                "ticker": "TSLA",
+                "publication_tier": "decision_grade",
+            }
+        ],
+        "fallback_previews": [
+            {
+                "ticker": "AAPL",
+                "publication_tier": "fallback_preview",
+                "automated_trading_excluded": True,
+                "confidence_cap": FALLBACK_CONFIDENCE_CAP,
+                "preview_warning": "Heuristic fallback preview only.",
+            }
+        ],
+        "upcoming_earnings": [],
+        "upcoming_dividends": [],
+        "data_quality": {"coverage_status": "partial"},
+        "data_warnings": [],
+    }
+
+    with (
+        patch.object(phase1_pipeline, "ARTIFACT_BUCKET", "stockara-artifacts"),
+        patch("src.analysis.phase1_pipeline.boto3.client") as boto_client,
+        patch("src.analysis.phase1_pipeline.store.put_publication_record"),
+        patch("src.analysis.phase1_pipeline._emit_metric"),
+    ):
+        publish_payload(payload, date(2026, 6, 17))
+
+    writes = {
+        call.kwargs["Key"]: phase1_pipeline.json.loads(
+            call.kwargs["Body"].decode("utf-8")
+        )
+        for call in boto_client.return_value.put_object.call_args_list
+    }
+    main_artifact = writes["top-picks/latest.json"]
+    sell_artifact = writes["sell-alerts/latest.json"]
+
+    assert main_artifact["publication_tiers"]["analysis_counts"]["fallback_preview"] == 1
+    assert main_artifact["top_picks"][0]["publication_tier"] == "reduced_confidence"
+    assert main_artifact["top_picks"][0]["missing_evidence"] == ["news"]
+    assert main_artifact["top_picks"][0]["confidence_adjustments"][0]["adjustment"] == -10
+    assert main_artifact["fallback_previews"][0]["publication_tier"] == "fallback_preview"
+    assert main_artifact["fallback_previews"][0]["automated_trading_excluded"] is True
+    assert "fallback_previews" not in sell_artifact
+    assert sell_artifact["sell_alerts"] == payload["sell_alerts"]
 
 
 def test_publish_collection_status_payload_writes_status_artifacts_only():
