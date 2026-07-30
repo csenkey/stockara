@@ -786,6 +786,7 @@ class ApiStack(Stack):
             time=sfn.WaitTime.duration(Duration.minutes(60)),
             comment="Give collectors time to finish before the 22:00 UTC analysis gate.",
         )
+        decide_publication_readiness = self._workflow_readiness_decision()
 
         definition = (
             sync_static_metadata
@@ -796,6 +797,7 @@ class ApiStack(Stack):
             .next(collect_calendars_and_evidence)
             .next(wait_for_analysis_window)
             .next(analyze_and_publish)
+            .next(decide_publication_readiness)
         )
 
         return sfn.StateMachine(
@@ -839,6 +841,100 @@ class ApiStack(Stack):
                     ),
                 )
             ],
+        )
+
+    def _workflow_readiness_decision(self) -> sfn.Choice:
+        publish = sfn.Pass(
+            self,
+            "Publish",
+            result=sfn.Result.from_object({"decision": "publish"}),
+            result_path="$.workflow_decision",
+        )
+        publish_degraded = sfn.Pass(
+            self,
+            "PublishDegraded",
+            result=sfn.Result.from_object({"decision": "publish_degraded"}),
+            result_path="$.workflow_decision",
+        )
+        wait_or_repair = sfn.Pass(
+            self,
+            "WaitOrRepair",
+            result=sfn.Result.from_object({"decision": "wait_or_repair"}),
+            result_path="$.workflow_decision",
+        )
+        blocked = sfn.Pass(
+            self,
+            "Blocked",
+            result=sfn.Result.from_object({"decision": "blocked"}),
+            result_path="$.workflow_decision",
+        )
+
+        return (
+            sfn.Choice(
+                self,
+                "DecidePublicationReadiness",
+                comment=(
+                    "Classify the daily run after analyzer publication into the "
+                    "operator-facing readiness outcome."
+                ),
+            )
+            .when(
+                sfn.Condition.number_equals("$.analysis.Payload.statusCode", 202),
+                wait_or_repair,
+            )
+            .when(
+                sfn.Condition.string_equals(
+                    "$.analysis.Payload.body.workflow_decision",
+                    "publish",
+                ),
+                publish,
+            )
+            .when(
+                sfn.Condition.string_equals(
+                    "$.analysis.Payload.body.workflow_decision",
+                    "publish_degraded",
+                ),
+                publish_degraded,
+            )
+            .when(
+                sfn.Condition.string_equals(
+                    "$.analysis.Payload.body.workflow_decision",
+                    "blocked",
+                ),
+                blocked,
+            )
+            .when(
+                sfn.Condition.string_equals(
+                    "$.analysis.Payload.body.stage",
+                    "already_published",
+                ),
+                publish,
+            )
+            .when(
+                sfn.Condition.string_equals(
+                    "$.analysis.Payload.body.stage",
+                    "scored",
+                ),
+                wait_or_repair,
+            )
+            .when(
+                sfn.Condition.string_equals(
+                    "$.analysis.Payload.body.stage",
+                    "analyzed_batch",
+                ),
+                wait_or_repair,
+            )
+            .when(
+                sfn.Condition.and_(
+                    sfn.Condition.is_string("$.analysis.Payload.body"),
+                    sfn.Condition.string_matches(
+                        "$.analysis.Payload.body",
+                        "Publication suppressed:*",
+                    ),
+                ),
+                blocked,
+            )
+            .otherwise(blocked)
         )
 
     def _lambda_workflow_step(

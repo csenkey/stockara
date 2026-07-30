@@ -306,12 +306,22 @@ def test_daily_pipeline_state_machine_is_created_in_shadow_mode():
         "CollectEvidence",
         "WaitForAnalysisWindow",
         "AnalyzeAndPublish",
+        "DecidePublicationReadiness",
+        "Publish",
+        "PublishDegraded",
+        "WaitOrRepair",
+        "Blocked",
         "SyncStaticMetadataFailed",
         "CollectNewsFailed",
         "CollectCalendarsAndEvidenceFailed",
         "AnalyzeAndPublishFailed",
     ]:
         assert state_name in definition
+    assert "Classify the daily run after analyzer publication" in definition
+    assert "publish_degraded" in definition
+    assert "wait_or_repair" in definition
+    assert "workflow_decision" in definition
+    assert "Publication suppressed:*" in definition
     assert "MaxAttempts" in definition
     assert "Catch" in definition
     assert "States.ALL" in definition

@@ -53,7 +53,7 @@
 - [x] Start the state machine from one EventBridge daily schedule before the target analysis time.
 - [x] Invoke existing Lambdas through coarse workflow states instead of per-ticker Step Functions states.
 - [x] Add retries/catches for provider throttling, transient Lambda failures, manifest incompleteness, OpenAI failures, and artifact publish failures.
-- [ ] Add a readiness decision state that chooses `publish`, `publish_degraded`, `wait_or_repair`, or `blocked`.
+- [x] Add a readiness decision state that chooses `publish`, `publish_degraded`, `wait_or_repair`, or `blocked`.
 - [ ] Publish workflow execution status artifacts under `workflow/latest.json` and `workflow/history/{date}.json`.
 - [ ] Add CloudWatch metrics/alarms for workflow failed, workflow degraded, workflow blocked, and workflow missing for the day.
 - [ ] Add CDK tests for state machine IAM, schedule, Lambda invocations, retry/catch policies, and outputs.

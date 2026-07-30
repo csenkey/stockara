@@ -580,7 +580,17 @@ def _publish_from_stored_state(
         )
         return {
             "statusCode": 200,
-            "body": "Publication suppressed: no candidate analyses available",
+            "body": {
+                "mode": "daily",
+                "stage": "suppressed",
+                "publication_status": "suppressed",
+                "publication_date": run_date.isoformat(),
+                "suppression_reason": "no_candidate_analyses",
+                "candidate_count": len(scores),
+                "analyzed_count": 0,
+                "workflow_decision": "blocked",
+                "data_readiness_summary": readiness_summary,
+            },
         }
 
     freshness = context["freshness"]
@@ -608,12 +618,30 @@ def _publish_from_stored_state(
     _emit_metric("top_picks_published", len(payload["top_picks"]))
     _emit_metric("sell_alerts_published", len(payload["sell_alerts"]))
 
+    readiness_summary = payload.get("data_readiness_summary") or {}
+    has_degraded_publication_context = bool(
+        readiness_summary.get("blocked_item_count")
+        or readiness_summary.get("degraded_item_count")
+        or payload.get("reduced_confidence_suggestions")
+        or payload.get("fallback_previews")
+        or (payload.get("data_quality") or {}).get("warnings")
+    )
+
     return {
         "statusCode": 200,
-        "body": (
-            f"Published {len(payload['top_picks'])} top picks and "
-            f"{len(payload['sell_alerts'])} sell alerts"
-        ),
+        "body": {
+            "mode": "daily",
+            "stage": "published",
+            "publication_status": "published",
+            "publication_date": run_date.isoformat(),
+            "top_picks_count": len(payload["top_picks"]),
+            "sell_alerts_count": len(payload["sell_alerts"]),
+            "workflow_decision": "publish_degraded"
+            if has_degraded_publication_context
+            else "publish",
+            "data_readiness_overall_status": readiness_summary.get("overall_status"),
+            "data_readiness_summary": readiness_summary,
+        },
     }
 
 

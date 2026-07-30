@@ -2294,10 +2294,13 @@ def test_publish_from_stored_state_suppresses_when_analysis_is_missing():
             run_date, context, scores, analyses=[]
         )
 
-    assert result == {
-        "statusCode": 200,
-        "body": "Publication suppressed: no candidate analyses available",
-    }
+    assert result["statusCode"] == 200
+    assert result["body"]["stage"] == "suppressed"
+    assert result["body"]["publication_status"] == "suppressed"
+    assert result["body"]["suppression_reason"] == "no_candidate_analyses"
+    assert result["body"]["workflow_decision"] == "blocked"
+    assert result["body"]["candidate_count"] == 1
+    assert result["body"]["analyzed_count"] == 0
     emit_metric.assert_called_once_with("publication_suppressed", 1)
     payload = publish_payload.call_args.args[0]
     assert payload["publication_status"] == "suppressed"
