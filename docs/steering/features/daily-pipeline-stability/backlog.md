@@ -57,7 +57,7 @@
 - [x] Publish workflow execution status artifacts under `workflow/latest.json` and `workflow/history/{date}.json`.
 - [x] Add CloudWatch metrics/alarms for workflow failed, workflow degraded, workflow blocked, and workflow missing for the day.
 - [x] Add CDK tests for state machine IAM, schedule, Lambda invocations, retry/catch policies, and outputs.
-- [ ] Run the orchestrator in manual or shadow mode before disabling existing independent schedules.
+- [x] Run the orchestrator in manual or shadow mode before disabling existing independent schedules.
 
 ## Milestone 5: Retire Superseded Scheduling
 
