@@ -775,6 +775,11 @@ class ApiStack(Stack):
         collect_calendars_and_evidence.branch(collect_earnings)
         collect_calendars_and_evidence.branch(collect_dividends)
         collect_calendars_and_evidence.branch(collect_evidence)
+        collect_calendars_and_evidence.add_catch(
+            self._workflow_fail_state("CollectCalendarsAndEvidenceFailed"),
+            errors=["States.ALL"],
+            result_path="$.workflow_error",
+        )
         wait_for_analysis_window = sfn.Wait(
             self,
             "WaitForAnalysisWindow",
@@ -856,9 +861,29 @@ class ApiStack(Stack):
                 "Lambda.AWSLambdaException",
                 "Lambda.SdkClientException",
                 "Lambda.TooManyRequestsException",
+                "States.Timeout",
+                "ProviderThrottled",
+                "ProviderRateLimited",
+                "ProviderQuotaExceeded",
+                "CollectionManifestIncomplete",
+                "OpenAITransientError",
+                "ArtifactPublishFailed",
             ],
             interval=Duration.seconds(2),
             max_attempts=3,
             backoff_rate=2,
         )
+        step.add_catch(
+            self._workflow_fail_state(f"{construct_id}Failed"),
+            errors=["States.ALL"],
+            result_path="$.workflow_error",
+        )
         return step
+
+    def _workflow_fail_state(self, construct_id: str) -> sfn.Fail:
+        return sfn.Fail(
+            self,
+            construct_id,
+            error="StockaraDailyWorkflowFailed",
+            cause=f"{construct_id} failed after retry/catch handling.",
+        )

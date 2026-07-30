@@ -306,9 +306,19 @@ def test_daily_pipeline_state_machine_is_created_in_shadow_mode():
         "CollectEvidence",
         "WaitForAnalysisWindow",
         "AnalyzeAndPublish",
+        "SyncStaticMetadataFailed",
+        "CollectNewsFailed",
+        "CollectCalendarsAndEvidenceFailed",
+        "AnalyzeAndPublishFailed",
     ]:
         assert state_name in definition
     assert "MaxAttempts" in definition
+    assert "Catch" in definition
+    assert "States.ALL" in definition
+    assert "ProviderThrottled" in definition
+    assert "CollectionManifestIncomplete" in definition
+    assert "OpenAITransientError" in definition
+    assert "ArtifactPublishFailed" in definition
     assert "Parallel" in definition
     assert "Give collectors time to finish before the 22:00 UTC analysis gate." in definition
     assert "repair_news" in definition
