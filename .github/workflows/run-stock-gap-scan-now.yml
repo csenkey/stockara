@@ -35,6 +35,15 @@ on:
         description: "Optional comma-separated tickers to scan"
         required: false
         default: ""
+      repair_after_scan:
+        description: "Invoke bounded repair_price_gaps tasks after scanning"
+        required: true
+        default: false
+        type: boolean
+      repair_max_tasks:
+        description: "Maximum gap repair invocations to run after scanning"
+        required: true
+        default: "10"
 
 concurrency:
   group: run-stock-gap-scan-now-${{ inputs.deployment_stage }}
@@ -57,10 +66,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if ! [[ "${{ inputs.lookback_days }}" =~ ^[0-9]+$ ]] || [[ "${{ inputs.lookback_days }}" -lt 1 ]]; then
-            echo "lookback_days must be a positive integer."
-            exit 1
-          fi
+          for value in "${{ inputs.lookback_days }}" "${{ inputs.repair_max_tasks }}"; do
+            if ! [[ "$value" =~ ^[0-9]+$ ]] || [[ "$value" -lt 1 ]]; then
+              echo "lookback_days and repair_max_tasks must be positive integers."
+              exit 1
+            fi
+          done
           for value in "${{ inputs.scan_start_date }}" "${{ inputs.scan_end_date }}" "${{ inputs.manifest_date }}"; do
             if [[ -n "$value" ]] && ! [[ "$value" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
               echo "Date inputs must use YYYY-MM-DD."
@@ -90,6 +101,7 @@ jobs:
           if [[ "$stage" == "prod" ]]; then
             echo "COLLECTION_DISTRIBUTOR_FN=stockara-collection-distributor" >> "$GITHUB_ENV"
             echo "STOCK_GAP_SCANNER_FN=stockara-stock-gap-scanner" >> "$GITHUB_ENV"
+            echo "STOCK_COLLECTOR_FN=stockara-stock-collector" >> "$GITHUB_ENV"
           else
             echo "Unsupported deployment stage: $stage"
             exit 1
@@ -218,3 +230,91 @@ jobs:
               f"gap_count={payload.get('gap_count')}"
           )
           PY
+
+      - name: Build bounded gap repair payloads
+        if: ${{ inputs.repair_after_scan }}
+        shell: bash
+        env:
+          REPAIR_MAX_TASKS: ${{ inputs.repair_max_tasks }}
+        run: |
+          set -euo pipefail
+          python - <<'PY' > gap-repair-payloads.jsonl
+          import json
+          import os
+
+          max_tasks = int(os.environ["REPAIR_MAX_TASKS"])
+          artifact = json.load(open("price-gaps-latest.json"))
+          emitted = 0
+          for row in artifact.get("by_ticker", []):
+              ticker = str(row.get("ticker", "")).strip().upper()
+              if not ticker:
+                  continue
+              for gap in row.get("gaps", []):
+                  start_date = gap.get("start_date")
+                  end_date = gap.get("end_date")
+                  if not start_date or not end_date:
+                      continue
+                  print(
+                      json.dumps(
+                          {
+                              "mode": "repair_price_gaps",
+                              "run_date": start_date,
+                              "price_backfill_start_date": start_date,
+                              "price_backfill_end_date": end_date,
+                              "tickers": [ticker],
+                              "max_tickers": 1,
+                              "provider_budget": {},
+                              "dry_run": False,
+                          }
+                      )
+                  )
+                  emitted += 1
+                  if emitted >= max_tasks:
+                      raise SystemExit(0)
+          PY
+          payload_count="$(wc -l < gap-repair-payloads.jsonl | tr -d ' ')"
+          echo "GAP_REPAIR_PAYLOAD_COUNT=$payload_count" >> "$GITHUB_ENV"
+          echo "Prepared $payload_count gap repair payload(s)."
+          cat gap-repair-payloads.jsonl
+
+      - name: Invoke bounded gap repairs
+        if: ${{ inputs.repair_after_scan && env.GAP_REPAIR_PAYLOAD_COUNT != '0' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          index=0
+          while IFS= read -r payload; do
+            echo "$payload" > "gap-repair-payload-${index}.json"
+            aws lambda invoke \
+              --function-name "$STOCK_COLLECTOR_FN" \
+              --payload "file://gap-repair-payload-${index}.json" \
+              --log-type Tail \
+              --cli-read-timeout 900 \
+              --cli-binary-format raw-in-base64-out \
+              "gap-repair-response-${index}.json" > "gap-repair-invoke-${index}.json"
+            python -c "import base64, json; meta=json.load(open('gap-repair-invoke-${index}.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
+            python -c "import json, sys; meta=json.load(open('gap-repair-invoke-${index}.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
+            cat "gap-repair-response-${index}.json"
+            python -m json.tool "gap-repair-response-${index}.json"
+            python - <<PY
+          import json
+          import sys
+
+          payload = json.load(open("gap-repair-response-${index}.json"))
+          if payload.get("statusCode") != 200:
+              print(f"Gap repair failed with statusCode={payload.get('statusCode')}")
+              sys.exit(1)
+          body = payload.get("body", {})
+          if body.get("mode") != "repair_price_gaps":
+              print(f"Unexpected gap repair mode: {body}")
+              sys.exit(1)
+          print(
+              "Gap repair summary: "
+              f"index={${index}} "
+              f"tickers={body.get('tickers')} "
+              f"records_inserted={body.get('records_inserted')} "
+              f"failed_tickers={body.get('failed_tickers')}"
+          )
+          PY
+            index=$((index + 1))
+          done < gap-repair-payloads.jsonl

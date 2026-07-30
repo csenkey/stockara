@@ -15,9 +15,9 @@
 
 - [x] Define a shared repair-mode input schema with `mode`, `run_date`, `tickers`, `max_tickers`, `provider_budget`, and `dry_run`.
 - [x] Implement `sync_static_metadata` as an operator-safe repair mode with no live collection field clobbering.
-- [ ] Implement `repair_price_gaps` and `repair_history` modes using existing price gap scanner and date-bounded manifest tasks.
+- [x] Implement `repair_price_gaps` and `repair_history` modes using existing price gap scanner and date-bounded manifest tasks.
   - [x] Add shared `repair_price_gaps` and `repair_history` mode aliases to the stock collector with dry-run support.
-  - [ ] Wire gap scanning output directly into bounded `repair_price_gaps` invocations.
+  - [x] Wire gap scanning output directly into bounded `repair_price_gaps` invocations.
 - [ ] Implement `repair_news` mode that respects NewsAPI/Finnhub/Alpha Vantage quota budgets and can target only shortlisted or missing-news tickers.
 - [ ] Implement `repair_calendars` mode for earnings/dividend retry and fallback providers.
 - [ ] Implement `repair_evidence` mode for SEC filing and analyst-action gaps.

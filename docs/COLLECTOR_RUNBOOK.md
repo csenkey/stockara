@@ -74,6 +74,11 @@ Stock collector repair modes currently supported:
 - `repair_price_gaps`: backfills a specific missing price date for selected
   tickers. When only `run_date` is provided, it repairs that single date.
 
+Use `Run Stock Gap Scan Now` with `repair_after_scan=true` to scan recent price
+history and immediately run a bounded number of `repair_price_gaps` invocations
+from `price-gaps/latest.json`. Keep `repair_max_tasks` small while provider
+health or quota state is uncertain.
+
 Expected summary fields:
 
 - `created`: active seed rows that were missing in DynamoDB and were inserted.
