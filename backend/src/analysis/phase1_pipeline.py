@@ -14,7 +14,12 @@ import structlog
 import yfinance as yf
 
 from src.db.connection import DatabasePool, store
-from src.models.schemas import CollectionManifest, collection_manifest_s3_key
+from src.models.schemas import (
+    CollectionManifest,
+    RepairMode,
+    RepairModeRequest,
+    collection_manifest_s3_key,
+)
 from src.services.secrets import get_openai_api_key
 
 logger = structlog.get_logger(__name__)
@@ -149,6 +154,10 @@ def run_phase1_pipeline(event: dict | None = None) -> dict[str, Any]:
             return _run_publish_phase(run_date)
         if mode == "daily":
             return _run_daily_orchestration_phase(event, run_date)
+        if mode == RepairMode.RETRY_AI_ANALYSIS:
+            return _run_retry_ai_analysis_phase(event)
+        if mode == RepairMode.RETRY_AI_REVIEW:
+            return _run_retry_ai_review_phase(event)
         if mode != "full":
             return {"statusCode": 400, "body": f"Unsupported Phase 1 mode: {mode}"}
         return _run_full_phase(run_date)
@@ -300,6 +309,145 @@ def _run_analyze_batch_phase(event: dict[str, Any], run_date: date) -> dict[str,
             "analyzed_tickers": [analysis["ticker"] for analysis in analyses],
         },
     }
+
+
+def _run_retry_ai_analysis_phase(event: dict[str, Any]) -> dict[str, Any]:
+    request = RepairModeRequest.model_validate(event)
+    run_date = request.run_date or date.today()
+    scores = store.candidate_scores_for_date(run_date)
+    if not scores:
+        return {
+            "statusCode": 200,
+            "body": {
+                "mode": RepairMode.RETRY_AI_ANALYSIS.value,
+                "run_date": run_date.isoformat(),
+                "status": "no_candidate_scores",
+                "analyzed_count": 0,
+            },
+        }
+
+    shortlist = select_shortlist(scores)
+    existing_analyses = store.candidate_analysis_for_date(run_date)
+    targets = _retryable_analysis_scores(
+        shortlist,
+        existing_analyses,
+        requested_tickers=set(request.tickers),
+    )
+    if request.max_tickers is not None:
+        targets = targets[: request.max_tickers]
+    body = {
+        "mode": RepairMode.RETRY_AI_ANALYSIS.value,
+        "run_date": run_date.isoformat(),
+        "target_count": len(targets),
+        "targeted_tickers": [score["ticker"] for score in targets],
+    }
+    if request.dry_run:
+        return {"statusCode": 200, "body": {**body, "status": "dry_run", "analyzed_count": 0}}
+    if not targets:
+        return {"statusCode": 200, "body": {**body, "status": "success", "analyzed_count": 0}}
+
+    stocks = store.active_stock_metadata()
+    analyses = analyze_shortlist(targets, stocks, run_date)
+    _emit_metric("ai_analysis_retries_completed", len(analyses))
+    return {
+        "statusCode": 200,
+        "body": {
+            **body,
+            "status": "success",
+            "analyzed_count": len(analyses),
+            "analyzed_tickers": [analysis["ticker"] for analysis in analyses],
+        },
+    }
+
+
+def _run_retry_ai_review_phase(event: dict[str, Any]) -> dict[str, Any]:
+    request = RepairModeRequest.model_validate(event)
+    run_date = request.run_date or date.today()
+    analyses = store.candidate_analysis_for_date(run_date)
+    requested_tickers = set(request.tickers)
+    targets = [
+        analysis
+        for analysis in analyses
+        if _is_retryable_review_analysis(analysis, requested_tickers=requested_tickers)
+    ]
+    if request.max_tickers is not None:
+        targets = targets[: request.max_tickers]
+    body = {
+        "mode": RepairMode.RETRY_AI_REVIEW.value,
+        "run_date": run_date.isoformat(),
+        "target_count": len(targets),
+        "targeted_tickers": [analysis["ticker"] for analysis in targets],
+    }
+    if request.dry_run:
+        return {"statusCode": 200, "body": {**body, "status": "dry_run", "reviewed_count": 0}}
+    if not targets:
+        return {"statusCode": 200, "body": {**body, "status": "success", "reviewed_count": 0}}
+
+    stock_map = {stock["ticker"]: stock for stock in store.active_stock_metadata()}
+    client = _build_openai_client()
+    reviewed: list[dict[str, Any]] = []
+    failed_tickers: list[str] = []
+    for analysis in targets:
+        ticker = analysis["ticker"]
+        stock = stock_map.get(ticker)
+        if not stock:
+            failed_tickers.append(ticker)
+            continue
+        reviewed_analysis = _review_candidate_analysis(
+            client,
+            stock,
+            {**analysis, "publication_allowed": True},
+        )
+        store.put_candidate_analysis(reviewed_analysis)
+        reviewed.append(reviewed_analysis)
+    _emit_metric("ai_review_retries_completed", len(reviewed))
+    return {
+        "statusCode": 200,
+        "body": {
+            **body,
+            "status": "partial" if failed_tickers else "success",
+            "reviewed_count": len(reviewed),
+            "reviewed_tickers": [analysis["ticker"] for analysis in reviewed],
+            "failed_tickers": failed_tickers,
+        },
+    }
+
+
+def _retryable_analysis_scores(
+    shortlist: list[dict[str, Any]],
+    analyses: list[dict[str, Any]],
+    *,
+    requested_tickers: set[str],
+) -> list[dict[str, Any]]:
+    analysis_by_ticker = {analysis.get("ticker"): analysis for analysis in analyses}
+    targets: list[dict[str, Any]] = []
+    for score in shortlist:
+        ticker = score.get("ticker")
+        if requested_tickers and ticker not in requested_tickers:
+            continue
+        analysis = analysis_by_ticker.get(ticker)
+        if analysis is None or analysis.get("analysis_method") == "fallback_heuristic":
+            targets.append(score)
+    return targets
+
+
+def _is_retryable_review_analysis(
+    analysis: dict[str, Any],
+    *,
+    requested_tickers: set[str],
+) -> bool:
+    ticker = str(analysis.get("ticker") or "")
+    if requested_tickers and ticker not in requested_tickers:
+        return False
+    if analysis.get("analysis_method") != "ai":
+        return False
+    if analysis.get("recommendation") not in {"BUY", "SELL"}:
+        return False
+    review = analysis.get("ai_review") or {}
+    status = review.get("status")
+    if requested_tickers:
+        return not bool(review.get("approved", False))
+    return status in {None, "error", "unavailable"}
 
 
 def _run_daily_orchestration_phase(

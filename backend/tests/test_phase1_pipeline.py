@@ -2601,6 +2601,141 @@ def test_run_phase1_publish_mode_uses_stored_scores_and_analyses():
     publish_payload.assert_called_once_with(payload, date(2026, 6, 17))
 
 
+def test_run_phase1_retry_ai_analysis_dry_run_targets_fallback_and_missing():
+    scores = [
+        _candidate_score("AAPL", opportunity_score=80, negative_score=0),
+        _candidate_score("MSFT", opportunity_score=70, negative_score=0),
+        _candidate_score("NVDA", opportunity_score=60, negative_score=0),
+    ]
+    analyses = [
+        {"ticker": "AAPL", "analysis_method": "fallback_heuristic"},
+        {"ticker": "MSFT", "analysis_method": "ai"},
+    ]
+
+    with (
+        patch("src.analysis.phase1_pipeline.DatabasePool"),
+        patch(
+            "src.analysis.phase1_pipeline.store.candidate_scores_for_date",
+            return_value=scores,
+        ),
+        patch(
+            "src.analysis.phase1_pipeline.store.candidate_analysis_for_date",
+            return_value=analyses,
+        ),
+        patch("src.analysis.phase1_pipeline.select_shortlist", return_value=scores),
+        patch("src.analysis.phase1_pipeline.analyze_shortlist") as analyze,
+        patch.object(phase1_pipeline, "date", _fixed_date(date(2026, 6, 17))),
+    ):
+        result = run_phase1_pipeline(
+            {
+                "mode": "retry_ai_analysis",
+                "run_date": "2026-06-17",
+                "max_tickers": 1,
+                "dry_run": True,
+            }
+        )
+
+    assert result["statusCode"] == 200
+    assert result["body"]["status"] == "dry_run"
+    assert result["body"]["mode"] == "retry_ai_analysis"
+    assert result["body"]["targeted_tickers"] == ["AAPL"]
+    analyze.assert_not_called()
+
+
+def test_run_phase1_retry_ai_analysis_reanalyzes_stored_scores():
+    stocks = [
+        {"ticker": "AAPL", "company_name": "Apple", "sector": "Technology"},
+        {"ticker": "MSFT", "company_name": "Microsoft", "sector": "Technology"},
+    ]
+    scores = [
+        _candidate_score("AAPL", opportunity_score=80, negative_score=0),
+        _candidate_score("MSFT", opportunity_score=70, negative_score=0),
+    ]
+    analyses = [{"ticker": "AAPL", "analysis_method": "fallback_heuristic"}]
+    retried = [{"ticker": "AAPL", "analysis_method": "ai"}]
+
+    with (
+        patch("src.analysis.phase1_pipeline.DatabasePool"),
+        patch(
+            "src.analysis.phase1_pipeline.store.candidate_scores_for_date",
+            return_value=scores,
+        ),
+        patch(
+            "src.analysis.phase1_pipeline.store.candidate_analysis_for_date",
+            return_value=analyses,
+        ),
+        patch("src.analysis.phase1_pipeline.select_shortlist", return_value=scores),
+        patch("src.analysis.phase1_pipeline.store.active_stock_metadata", return_value=stocks),
+        patch(
+            "src.analysis.phase1_pipeline.analyze_shortlist",
+            return_value=retried,
+        ) as analyze,
+        patch("src.analysis.phase1_pipeline._emit_metric"),
+        patch.object(phase1_pipeline, "date", _fixed_date(date(2026, 6, 17))),
+    ):
+        result = run_phase1_pipeline(
+            {"mode": "retry_ai_analysis", "run_date": "2026-06-17"}
+        )
+
+    assert result["statusCode"] == 200
+    assert result["body"]["status"] == "success"
+    assert result["body"]["analyzed_tickers"] == ["AAPL"]
+    assert analyze.call_args.args[0] == scores
+
+
+def test_run_phase1_retry_ai_review_reviews_error_results():
+    analyses = [
+        {
+            "ticker": "AAPL",
+            "analysis_method": "ai",
+            "recommendation": "BUY",
+            "confidence_score": 70,
+            "publication_allowed": False,
+            "signals": [],
+            "ai_review": {"status": "error", "approved": False},
+        },
+        {
+            "ticker": "MSFT",
+            "analysis_method": "ai",
+            "recommendation": "HOLD",
+            "confidence_score": 50,
+        },
+    ]
+    stocks = [{"ticker": "AAPL", "company_name": "Apple", "sector": "Technology"}]
+    reviewed = {
+        **analyses[0],
+        "publication_allowed": True,
+        "ai_review": {"status": "approved", "approved": True, "model": "review"},
+    }
+
+    with (
+        patch("src.analysis.phase1_pipeline.DatabasePool"),
+        patch(
+            "src.analysis.phase1_pipeline.store.candidate_analysis_for_date",
+            return_value=analyses,
+        ),
+        patch("src.analysis.phase1_pipeline.store.active_stock_metadata", return_value=stocks),
+        patch("src.analysis.phase1_pipeline._build_openai_client", return_value=object()),
+        patch(
+            "src.analysis.phase1_pipeline._review_candidate_analysis",
+            return_value=reviewed,
+        ) as review,
+        patch("src.analysis.phase1_pipeline.store.put_candidate_analysis") as put_analysis,
+        patch("src.analysis.phase1_pipeline._emit_metric"),
+        patch.object(phase1_pipeline, "date", _fixed_date(date(2026, 6, 17))),
+    ):
+        result = run_phase1_pipeline(
+            {"mode": "retry_ai_review", "run_date": "2026-06-17"}
+        )
+
+    assert result["statusCode"] == 200
+    assert result["body"]["status"] == "success"
+    assert result["body"]["reviewed_tickers"] == ["AAPL"]
+    review.assert_called_once()
+    assert review.call_args.args[2]["publication_allowed"] is True
+    put_analysis.assert_called_once_with(reviewed)
+
+
 def _stock_rows(
     ticker: str, start_date: date, count: int, include_provenance: bool = True
 ) -> list[dict]:

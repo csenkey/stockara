@@ -1,0 +1,156 @@
+name: Run AI Retry Now
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_stage:
+        description: "Deployment stage to run"
+        required: true
+        default: "prod"
+        type: choice
+        options:
+          - prod
+      mode:
+        description: "AI repair mode to run"
+        required: true
+        default: "retry_ai_analysis"
+        type: choice
+        options:
+          - retry_ai_analysis
+          - retry_ai_review
+      run_date:
+        description: "Optional analysis date to repair, YYYY-MM-DD; empty means today"
+        required: false
+        default: ""
+      ticker_csv:
+        description: "Optional comma-separated ticker subset"
+        required: false
+        default: ""
+      max_tickers:
+        description: "Maximum retry targets"
+        required: true
+        default: "10"
+      dry_run:
+        description: "Report selected retry targets without calling AI or writing results"
+        required: true
+        default: true
+        type: boolean
+
+concurrency:
+  group: run-ai-retry-now-${{ inputs.deployment_stage }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+jobs:
+  retry:
+    name: Invoke deployed analyzer retry mode
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check AWS OIDC role configuration
+        run: |
+          if [[ -z "${{ secrets.AWS_ROLE_TO_ASSUME }}" ]]; then
+            echo "Missing GitHub secret AWS_ROLE_TO_ASSUME."
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: stockara-ai-retry-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve function
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="${{ inputs.deployment_stage }}"
+          if [[ "$stage" == "prod" ]]; then
+            echo "PUBLISHER_FN=stockara-phase1-analyzer-publisher" >> "$GITHUB_ENV"
+          else
+            echo "Unsupported deployment stage: $stage"
+            exit 1
+          fi
+
+      - name: Build retry payload
+        shell: bash
+        env:
+          MODE: ${{ inputs.mode }}
+          RUN_DATE: ${{ inputs.run_date }}
+          TICKER_CSV: ${{ inputs.ticker_csv }}
+          MAX_TICKERS: ${{ inputs.max_tickers }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          python - <<'PY' > ai-retry-payload.json
+          import json
+          import os
+
+          max_tickers = int(os.environ["MAX_TICKERS"])
+          if max_tickers < 1:
+              raise SystemExit("max_tickers must be a positive integer.")
+          payload = {
+              "mode": os.environ["MODE"],
+              "max_tickers": max_tickers,
+              "provider_budget": {},
+              "dry_run": os.environ["DRY_RUN"].lower() == "true",
+          }
+          run_date = os.environ["RUN_DATE"].strip()
+          if run_date:
+              payload["run_date"] = run_date
+          tickers = [
+              ticker.strip().upper()
+              for ticker in os.environ["TICKER_CSV"].split(",")
+              if ticker.strip()
+          ]
+          if tickers:
+              payload["tickers"] = tickers
+          print(json.dumps(payload))
+          PY
+          cat ai-retry-payload.json
+
+      - name: Invoke analyzer retry mode
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws lambda invoke \
+            --function-name "$PUBLISHER_FN" \
+            --payload file://ai-retry-payload.json \
+            --log-type Tail \
+            --cli-read-timeout 900 \
+            --cli-binary-format raw-in-base64-out \
+            ai-retry-response.json > ai-retry-invoke.json
+          python -c "import base64, json; meta=json.load(open('ai-retry-invoke.json')); print(base64.b64decode(meta.get('LogResult','')).decode() if meta.get('LogResult') else '')"
+          python -c "import json, sys; meta=json.load(open('ai-retry-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
+          cat ai-retry-response.json
+          python -m json.tool ai-retry-response.json
+          python - <<'PY'
+          import json
+          import sys
+
+          payload = json.load(open("ai-retry-response.json"))
+          if payload.get("statusCode") != 200:
+              print(f"AI retry failed with statusCode={payload.get('statusCode')}")
+              sys.exit(1)
+          body = payload.get("body", {})
+          if isinstance(body, str):
+              print(body)
+              sys.exit(0)
+          if body.get("status") not in {"success", "partial", "dry_run", "no_candidate_scores"}:
+              print(f"AI retry failed: {body}")
+              sys.exit(1)
+          print(
+              "AI retry summary: "
+              f"mode={body.get('mode')} "
+              f"status={body.get('status')} "
+              f"target_count={body.get('target_count')} "
+              f"targeted_tickers={body.get('targeted_tickers')}"
+          )
+          PY
