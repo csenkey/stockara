@@ -18,6 +18,7 @@ import structlog
 import yfinance as yf
 
 from src.db.connection import DatabasePool, store
+from src.models.schemas import RepairMode, RepairModeRequest
 from src.services.secrets import get_provider_api_key
 
 logger = structlog.get_logger(__name__)
@@ -106,15 +107,26 @@ NEGATIVE_EARNINGS_KEYWORDS = (
 def collect_evidence(
     tickers: list[str] | None = None,
     max_tickers: int | None = None,
+    provider_budget: dict[str, int] | None = None,
+    dry_run: bool = False,
+    operation_mode: str = "evidence_collection",
 ) -> dict[str, Any]:
     """Collect SEC filing and analyst-action signals for active tickers."""
     stocks = _target_stocks(tickers, max_tickers)
-    sec_ticker_map = _load_sec_ticker_map()
+    provider_budget = {
+        str(provider).strip().lower(): max(int(budget), 0)
+        for provider, budget in (provider_budget or {}).items()
+    }
+    sec_limit = _provider_ticker_limit("sec", provider_budget, len(stocks))
+    finnhub_limit = _provider_ticker_limit("finnhub", provider_budget, len(stocks))
+    yfinance_enabled = _provider_enabled("yfinance", provider_budget)
 
     result = {
         "status": "success",
+        "mode": operation_mode,
         "tickers_requested": len(stocks),
         "tickers_processed": 0,
+        "provider_budget": provider_budget,
         "sec_signals_written": 0,
         "analyst_signals_written": 0,
         "analyst_rating_signals_written": 0,
@@ -125,48 +137,64 @@ def collect_evidence(
         "macro_context_signals_written": 0,
         "failed_tickers": [],
     }
-    sector_context = _sector_context_by_sector(stocks)
-    macro_context = _macro_context()
+    if dry_run:
+        return {
+            **result,
+            "status": "dry_run",
+            "selected_tickers": [stock["ticker"] for stock in stocks],
+            "planned_provider_calls": {
+                "sec_tickers": sec_limit,
+                "finnhub_tickers": finnhub_limit,
+                "yfinance_context": 1 if yfinance_enabled and stocks else 0,
+            },
+        }
 
-    for stock in stocks:
+    sec_ticker_map = _load_sec_ticker_map() if sec_limit > 0 else {}
+    sector_context = _sector_context_by_sector(stocks) if yfinance_enabled else {}
+    macro_context = _macro_context() if yfinance_enabled else None
+
+    for index, stock in enumerate(stocks):
         ticker = stock["ticker"]
         try:
-            sector_signal = _sector_context_signal(stock, sector_context)
-            if sector_signal:
-                store.put_market_signal(sector_signal)
-                result["sector_context_signals_written"] += 1
+            if yfinance_enabled:
+                sector_signal = _sector_context_signal(stock, sector_context)
+                if sector_signal:
+                    store.put_market_signal(sector_signal)
+                    result["sector_context_signals_written"] += 1
 
-            macro_signal = _macro_context_signal(ticker, macro_context)
-            if macro_signal:
-                store.put_market_signal(macro_signal)
-                result["macro_context_signals_written"] += 1
+                macro_signal = _macro_context_signal(ticker, macro_context)
+                if macro_signal:
+                    store.put_market_signal(macro_signal)
+                    result["macro_context_signals_written"] += 1
 
-            sec_signal = _sec_filing_signal(ticker, sec_ticker_map)
-            if sec_signal:
-                store.put_market_signal(sec_signal)
-                result["sec_signals_written"] += 1
+            if index < sec_limit:
+                sec_signal = _sec_filing_signal(ticker, sec_ticker_map)
+                if sec_signal:
+                    store.put_market_signal(sec_signal)
+                    result["sec_signals_written"] += 1
 
-            analyst_signal = _analyst_action_signal(ticker)
-            if analyst_signal:
-                store.put_market_signal(analyst_signal)
-                result["analyst_signals_written"] += 1
+            if index < finnhub_limit:
+                analyst_signal = _analyst_action_signal(ticker)
+                if analyst_signal:
+                    store.put_market_signal(analyst_signal)
+                    result["analyst_signals_written"] += 1
 
-            analyst_rating_signal = _finnhub_rating_signal(ticker)
-            if analyst_rating_signal:
-                store.put_market_signal(analyst_rating_signal)
-                result["analyst_rating_signals_written"] += 1
+                analyst_rating_signal = _finnhub_rating_signal(ticker)
+                if analyst_rating_signal:
+                    store.put_market_signal(analyst_rating_signal)
+                    result["analyst_rating_signals_written"] += 1
 
-            price_target_signal = _finnhub_price_target_signal(ticker)
-            if price_target_signal:
-                store.put_market_signal(price_target_signal)
-                result["price_target_signals_written"] += 1
+                price_target_signal = _finnhub_price_target_signal(ticker)
+                if price_target_signal:
+                    store.put_market_signal(price_target_signal)
+                    result["price_target_signals_written"] += 1
 
-            for earnings_signal in _finnhub_earnings_content_signals(ticker):
-                store.put_market_signal(earnings_signal)
-                if earnings_signal["signal_type"] == "earnings_release":
-                    result["earnings_release_signals_written"] += 1
-                elif earnings_signal["signal_type"] == "earnings_transcript":
-                    result["earnings_transcript_signals_written"] += 1
+                for earnings_signal in _finnhub_earnings_content_signals(ticker):
+                    store.put_market_signal(earnings_signal)
+                    if earnings_signal["signal_type"] == "earnings_release":
+                        result["earnings_release_signals_written"] += 1
+                    elif earnings_signal["signal_type"] == "earnings_transcript":
+                        result["earnings_transcript_signals_written"] += 1
 
             result["tickers_processed"] += 1
         except Exception as exc:
@@ -177,6 +205,20 @@ def collect_evidence(
         result["status"] = "partial"
 
     return result
+
+
+def _provider_enabled(provider: str, provider_budget: dict[str, int]) -> bool:
+    return provider_budget.get(provider, 1) > 0
+
+
+def _provider_ticker_limit(
+    provider: str,
+    provider_budget: dict[str, int],
+    selected_count: int,
+) -> int:
+    if provider not in provider_budget:
+        return selected_count
+    return min(provider_budget[provider], selected_count)
 
 
 def _target_stocks(
@@ -1069,12 +1111,28 @@ def _event_tickers(event: dict[str, Any]) -> list[str] | None:
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     event = event or {}
+    repair_request = _repair_evidence_request(event)
     logger.info("Evidence collector Lambda invoked", lambda_event=event)
     DatabasePool.initialize()
     try:
         result = collect_evidence(
-            tickers=_event_tickers(event),
-            max_tickers=int(event.get("max_tickers") or 0) or None,
+            tickers=repair_request.tickers if repair_request else _event_tickers(event),
+            max_tickers=(
+                repair_request.max_tickers
+                if repair_request
+                else int(event.get("max_tickers") or 0) or None
+            ),
+            provider_budget=(
+                repair_request.provider_budget
+                if repair_request
+                else event.get("provider_budget") or None
+            ),
+            dry_run=repair_request.dry_run if repair_request else bool(event.get("dry_run")),
+            operation_mode=(
+                RepairMode.REPAIR_EVIDENCE.value
+                if repair_request
+                else "evidence_collection"
+            ),
         )
         return {"statusCode": 200, "body": result}
     except Exception as exc:
@@ -1082,3 +1140,9 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return {"statusCode": 500, "body": {"status": "error", "message": str(exc)}}
     finally:
         DatabasePool.close()
+
+
+def _repair_evidence_request(event: dict[str, Any]) -> RepairModeRequest | None:
+    if event.get("mode") != RepairMode.REPAIR_EVIDENCE:
+        return None
+    return RepairModeRequest.model_validate(event)

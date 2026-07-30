@@ -18,6 +18,15 @@ on:
         description: "Maximum active tickers to scan when tickers_csv is empty"
         required: true
         default: "100"
+      provider_budget_json:
+        description: "Optional provider request budgets, for example {\"sec\":25,\"finnhub\":25,\"yfinance\":1}"
+        required: false
+        default: "{}"
+      dry_run:
+        description: "Build and validate repair payload without fetching or writing evidence"
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
   group: run-evidence-collection-now-${{ inputs.deployment_stage }}
@@ -67,6 +76,8 @@ jobs:
         env:
           TICKERS_CSV: ${{ inputs.tickers_csv }}
           MAX_TICKERS: ${{ inputs.max_tickers }}
+          PROVIDER_BUDGET_JSON: ${{ inputs.provider_budget_json }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
           python - <<'PY' > evidence-payload.json
@@ -79,7 +90,21 @@ jobs:
               if ticker.strip()
           ]
           max_tickers = int(os.environ["MAX_TICKERS"])
-          payload = {"tickers": tickers} if tickers else {"max_tickers": max_tickers}
+          provider_budget = json.loads(os.environ["PROVIDER_BUDGET_JSON"] or "{}")
+          if not isinstance(provider_budget, dict) or any(
+              int(budget) < 0 for budget in provider_budget.values()
+          ):
+              raise SystemExit("provider_budget_json must be a JSON object with non-negative integer values.")
+          payload = {
+              "mode": "repair_evidence",
+              "provider_budget": provider_budget,
+              "dry_run": os.environ["DRY_RUN"].lower() == "true",
+          }
+          if tickers:
+              payload["tickers"] = tickers
+              payload["max_tickers"] = len(tickers)
+          else:
+              payload["max_tickers"] = max_tickers
           print(json.dumps(payload))
           PY
           cat evidence-payload.json
@@ -108,7 +133,7 @@ jobs:
               print(f"Evidence collector failed with statusCode={payload.get('statusCode')}")
               sys.exit(1)
           body = payload.get("body", {})
-          if body.get("status") not in {"success", "partial"}:
+          if body.get("status") not in {"success", "partial", "dry_run"}:
               print(f"Evidence collector failed: {body}")
               sys.exit(1)
           print(

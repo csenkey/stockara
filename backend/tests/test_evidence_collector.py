@@ -132,6 +132,71 @@ def test_collect_evidence_writes_sec_and_analyst_signals():
     put_market_signal.assert_any_call(analyst_signal)
 
 
+def test_collect_evidence_dry_run_reports_repair_plan_without_provider_calls():
+    stocks = [{"ticker": "NVDA"}, {"ticker": "AAPL"}, {"ticker": "MSFT"}]
+
+    with (
+        patch.object(evidence_collector.store, "active_stock_metadata", return_value=stocks),
+        patch.object(evidence_collector, "_load_sec_ticker_map") as load_sec_ticker_map,
+        patch.object(evidence_collector, "_sector_context_by_sector") as sector_context,
+        patch.object(evidence_collector, "_macro_context") as macro_context,
+        patch.object(evidence_collector.store, "put_market_signal") as put_market_signal,
+    ):
+        result = evidence_collector.collect_evidence(
+            tickers=["msft", "nvda"],
+            max_tickers=1,
+            provider_budget={"sec": 2, "finnhub": 3, "yfinance": 0},
+            dry_run=True,
+            operation_mode="repair_evidence",
+        )
+
+    assert result["status"] == "dry_run"
+    assert result["mode"] == "repair_evidence"
+    assert result["selected_tickers"] == ["MSFT"]
+    assert result["planned_provider_calls"] == {
+        "sec_tickers": 1,
+        "finnhub_tickers": 1,
+        "yfinance_context": 0,
+    }
+    load_sec_ticker_map.assert_not_called()
+    sector_context.assert_not_called()
+    macro_context.assert_not_called()
+    put_market_signal.assert_not_called()
+
+
+def test_collect_evidence_respects_provider_budgets():
+    stocks = [{"ticker": "AAPL"}, {"ticker": "MSFT"}, {"ticker": "NVDA"}]
+
+    with (
+        patch.object(evidence_collector.store, "active_stock_metadata", return_value=stocks),
+        patch.object(evidence_collector.store, "put_market_signal"),
+        patch.object(evidence_collector, "_load_sec_ticker_map") as load_sec_ticker_map,
+        patch.object(evidence_collector, "_sec_filing_signal") as sec_filing_signal,
+        patch.object(evidence_collector, "_analyst_action_signal") as analyst_signal,
+        patch.object(evidence_collector, "_finnhub_rating_signal") as rating_signal,
+        patch.object(evidence_collector, "_finnhub_price_target_signal") as price_target_signal,
+        patch.object(evidence_collector, "_finnhub_earnings_content_signals") as earnings_signals,
+        patch.object(evidence_collector, "_sector_context_by_sector", return_value={}),
+        patch.object(evidence_collector, "_macro_context", return_value=None),
+        patch.object(evidence_collector, "_sector_context_signal", return_value=None),
+        patch.object(evidence_collector, "_macro_context_signal", return_value=None),
+    ):
+        result = evidence_collector.collect_evidence(
+            max_tickers=3,
+            provider_budget={"sec": 0, "finnhub": 1},
+            operation_mode="repair_evidence",
+        )
+
+    assert result["status"] == "success"
+    assert result["tickers_processed"] == 3
+    load_sec_ticker_map.assert_not_called()
+    sec_filing_signal.assert_not_called()
+    analyst_signal.assert_called_once_with("AAPL")
+    rating_signal.assert_called_once_with("AAPL")
+    price_target_signal.assert_called_once_with("AAPL")
+    earnings_signals.assert_called_once_with("AAPL")
+
+
 def test_sec_filing_signal_maps_submission_to_market_signal():
     company_response = MagicMock()
     company_response.raise_for_status.return_value = None

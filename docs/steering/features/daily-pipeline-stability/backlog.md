@@ -22,13 +22,16 @@
 - [x] Implement `repair_calendars` mode for earnings/dividend retry and fallback providers.
   - [x] Add shared `repair_calendars` mode aliases to earnings and dividend collectors with dry-run support.
   - [x] Update calendar manual backfill and Phase 1 workflows to use repair payloads with provider budget inputs.
-- [ ] Implement `repair_evidence` mode for SEC filing and analyst-action gaps.
+- [x] Implement `repair_evidence` mode for SEC filing and analyst-action gaps.
+  - [x] Add shared `repair_evidence` mode alias to the evidence collector with `sec`, `finnhub`, and `yfinance` provider budgets.
+  - [x] Update `Run Evidence Collection Now` to use `repair_evidence` with provider budget and dry-run inputs.
 - [ ] Implement `retry_ai_analysis` and `retry_ai_review` modes that reuse stored candidate scores/evidence and publish clear model/error provenance.
 - [ ] Update GitHub Actions manual workflows to call repair modes instead of bespoke one-off Lambda payloads where practical.
   - [x] Update `Sync Watchlist Metadata Now` to use the shared repair-mode payload shape.
   - [x] Update `Run Phase 1 Pipeline Now` metadata sync and historical repair payloads to use shared repair-mode names.
   - [x] Update `Run News Collection Now` to use `repair_news` with provider budget and dry-run inputs.
   - [x] Update `Run Calendar Backfill Now` and Phase 1 calendar collector calls to use `repair_calendars`.
+  - [x] Update `Run Evidence Collection Now` to use `repair_evidence`.
 
 ## Milestone 3: Publish Useful Degraded Suggestions
 
