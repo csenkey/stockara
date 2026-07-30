@@ -157,7 +157,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          aws s3 cp "s3://$FRONTEND_BUCKET/workflow/latest.json" workflow-latest.json
+          if ! aws s3 cp "s3://$FRONTEND_BUCKET/workflow/latest.json" workflow-latest.json; then
+            if [[ "$SELECTED_EXECUTION_STATUS" == "RUNNING" ]]; then
+              echo "workflow/latest.json is not published yet; selected execution is still RUNNING."
+              exit 0
+            fi
+            echo "workflow/latest.json is missing after selected execution status=$SELECTED_EXECUTION_STATUS."
+            exit 1
+          fi
           python - <<'PY'
           import json
 
