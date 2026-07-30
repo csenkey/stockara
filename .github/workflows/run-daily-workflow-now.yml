@@ -103,9 +103,15 @@ jobs:
           aws stepfunctions describe-execution \
             --execution-arn "$EXECUTION_ARN" \
             --query "{status:status,startDate:startDate,stopDate:stopDate,name:name}" \
-            --output json
+            --output json > execution-status.json
+          cat execution-status.json
           aws stepfunctions get-execution-history \
             --execution-arn "$EXECUTION_ARN" \
-            --max-items 20 \
-            --query "events[].{id:id,type:type,state:stateEnteredEventDetails.name,stateExited:stateExitedEventDetails.name,lambda:lambdaFunctionScheduledEventDetails.resource}" \
+            --max-items 30 \
+            --query "events[].{id:id,type:type,state:stateEnteredEventDetails.name,stateExited:stateExitedEventDetails.name,error:taskFailedEventDetails.error,cause:taskFailedEventDetails.cause,lambda:lambdaFunctionScheduledEventDetails.resource}" \
             --output table
+          status="$(python -c "import json; print(json.load(open('execution-status.json'))['status'])")"
+          if [[ "$status" == "FAILED" || "$status" == "TIMED_OUT" || "$status" == "ABORTED" ]]; then
+            echo "Step Functions execution ended with terminal status: $status"
+            exit 1
+          fi

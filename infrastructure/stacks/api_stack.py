@@ -687,7 +687,12 @@ class ApiStack(Stack):
         sync_static_metadata = self._lambda_workflow_step(
             "SyncStaticMetadata",
             self.watchlist_seed_fn,
-            {"mode": "sync_static_metadata"},
+            {
+                "mode": "sync_static_metadata",
+                "tickers": [],
+                "provider_budget": {},
+                "dry_run": False,
+            },
             "$.sync_static_metadata",
         )
         create_or_refresh_manifest = self._lambda_workflow_step(
