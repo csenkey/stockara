@@ -68,10 +68,12 @@ The project also includes a public demo-trading feature: 100 superhero-named sim
 
 ## Scheduling And Deployment Expectations
 
-- Stock collector: bounded EventBridge collection during the day in the current manifest foundation; the daily workflow should own final pre-analysis price readiness.
-- News collector: EventBridge three times per day during development/testing, with the daily workflow expected to own final pre-analysis news readiness.
-- AI analyzer: EventBridge daily at 22:00 UTC.
+- Daily production workflow: Step Functions state machine `stockara-daily-pipeline`, started once daily before the analysis window, is the source of truth for static metadata sync, manifest dispatch, final price readiness, gap repair, news readiness, calendar/evidence collection, AI analysis/review, publication, and workflow status.
+- Stock collector: frequent standalone EventBridge collection is disabled as a rollback path; the daily workflow owns final pre-analysis price readiness.
+- News collector: EventBridge runs three times per day during development/testing as quota-conscious prefetching; the daily workflow owns final pre-analysis news readiness.
+- AI analyzer: invoked by the daily workflow, not by an independent production schedule.
+- Stock gap scan: runs at 23:15 UTC as separate after-market maintenance and must not be treated as the same-day publication gate.
 - Demo trade executor: EventBridge daily at 22:30 UTC, after AI analysis.
 - Backend Lambdas should emit structured JSON logs and useful custom metrics.
-- The health endpoint should report component status and last successful batch timestamps.
+- The health endpoint should report component status and last successful batch timestamps; daily operational diagnosis should start from Step Functions execution status plus `workflow/latest.json`.
 - Infrastructure should stay serverless-first and cost-conscious for roughly 10-100 users.

@@ -1,25 +1,60 @@
 # Daily Pipeline Stability Design
 
-## Proposed AWS Shape
+## Current AWS Shape
 
-Use AWS Step Functions Standard Workflows as the daily organizer.
+Use AWS Step Functions Standard Workflows as the daily organizer and source of
+daily operational truth.
 
-The state machine should coordinate existing Lambdas instead of replacing them:
+The production state machine is `stockara-daily-pipeline`. It coordinates
+existing Lambdas instead of replacing them:
 
 1. `SyncStaticMetadata`
 2. `CreateOrRefreshManifest`
-3. `CollectPrices`
-4. `RepairPriceGaps`
-5. `CollectNews`
-6. `CollectCalendarsAndEvidence`
-7. `BuildReadinessReport`
-8. `DecidePublicationTier`
-9. `AnalyzeShortlist`
-10. `ReviewActionableCalls`
-11. `PublishArtifacts`
-12. `PublishWorkflowSummary`
+3. `DispatchManifestTasks`
+4. `WaitForManifestDispatch`
+5. `CollectPrices`
+6. `RepairPriceGaps`
+7. `CollectNews`
+8. `CollectCalendarsAndEvidence`
+9. `BuildReadinessReport`
+10. `DecidePublicationTier`
+11. `AnalyzeShortlist`
+12. `ReviewActionableCalls`
+13. `PublishArtifacts`
+14. `PublishWorkflowStatus`
 
 Keep per-ticker fanout inside bounded worker Lambdas and manifest tasks. Do not model 900 tickers as individual Step Functions states in the first version; that would add noise, cost, and complexity without improving reliability.
+
+## Operational Source Of Truth
+
+Daily production status should be read from the Step Functions execution and the
+published workflow artifacts:
+
+- State machine: `stockara-daily-pipeline`.
+- Automatic schedule: one EventBridge trigger before the daily analysis window.
+- Manual runbook: `.github/workflows/run-daily-workflow-now.yml`.
+- Latest status artifact: `workflow/latest.json`.
+- Dated status artifact: `workflow/history/{date}.json`.
+
+The deploy smoke test validates `workflow/latest.json` when it exists. A missing
+workflow artifact is acceptable only before the first workflow publication in a
+new environment; after that, stale or malformed workflow status should be
+treated as the first operational clue before checking individual Lambdas.
+
+The old high-frequency EventBridge rules are rollback paths, not the normal
+production path:
+
+- `Phase1PublishSchedule`: disabled.
+- `CollectionDistributorSchedule`: disabled.
+- `StockCollectionSchedule`: disabled.
+
+The remaining independent schedules are intentional supporting jobs:
+
+- News collection runs three times per day as quota-conscious prefetching.
+- Calendar and evidence collectors run once daily to keep optional evidence warm.
+- Stock gap scan runs at 23:15 UTC as after-market maintenance; same-day
+  publication readiness is owned by the workflow's manifest dispatch and
+  `repair_price_gaps` steps.
 
 ## Why Step Functions
 
@@ -88,11 +123,13 @@ metadata as `active_not_in_seed`, `missing_required_metadata`, or
 `metadata_seed_mismatch`, and point to `sync_static_metadata` as the repair
 mode.
 
-## Migration Path
+## Migration Status
 
-First version should keep existing EventBridge schedules mostly intact while adding the workflow in shadow/manual mode. After the workflow proves stable:
+The workflow has moved past shadow/manual mode and owns daily publication. The
+retired schedules are intentionally kept in CDK as disabled rollback paths:
 
-- Disable the 5-minute `Phase1PublishSchedule`.
-- Disable or narrow the 5-minute `CollectionDistributorSchedule`.
-- Keep low-frequency news collection only if it refreshes optional articles outside the daily workflow.
-- Keep gap scanning as either a workflow step or a separate after-market maintenance job, but ensure it cannot affect publication gates for the same day unless explicitly counted.
+- Disabled: 5-minute `Phase1PublishSchedule`.
+- Disabled: 5-minute `CollectionDistributorSchedule`.
+- Disabled: frequent `StockCollectionSchedule`.
+- Retained: low-frequency news prefetching.
+- Retained: after-market stock gap scan maintenance.

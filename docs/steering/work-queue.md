@@ -16,7 +16,7 @@ Other backlog-like files are reference material unless this file links to them a
 
 ### 1. Daily Pipeline Stability
 
-Status: Active planning/next implementation priority as of 2026-07-29.
+Status: Active implementation priority as of 2026-07-29. Core stability workflow is implemented and scheduling retirement is in progress.
 
 Goal: Make the once-daily Stockara publication stable, explainable, and useful even when optional data is degraded, by replacing independent schedule timing assumptions with one observable daily workflow.
 
@@ -26,18 +26,20 @@ Canonical feature docs:
 - `docs/steering/features/daily-pipeline-stability/design.md`
 - `docs/steering/features/daily-pipeline-stability/backlog.md`
 
-First milestone:
+Completed stability work:
 
 - Done: publish a daily data-readiness artifact that identifies exactly which tickers/data types are missing or degraded and why.
 - Done: detect production metadata drift, especially when DynamoDB active metadata disagrees with the clean repository seed/audit.
 - Done: keep empty daily publications explainable from the public dashboard without needing CloudWatch access.
-- In progress: provide operator-safe repair workflows for the detected missing or degraded data.
+- Done: provide operator-safe repair workflows for the detected missing or degraded data.
+- Done: publish lower-confidence and fallback-preview suggestions separately from decision-grade picks.
+- Done: make `stockara-daily-pipeline` the daily Step Functions orchestrator for publication.
 
 Next executable items:
 
-- Implement price/history repair modes using the shared repair-mode input schema.
-- Add degraded publication tiers: `decision_grade`, `reduced_confidence`, `fallback_preview`, and `blocked`.
-- Add a Step Functions daily workflow in shadow/manual mode before retiring independent schedules.
+- Finish the final documentation, smoke-test, and backlog cleanup for treating Step Functions as the daily operational source of truth.
+- Monitor at least one scheduled daily workflow after the schedule-retirement commits are deployed.
+- Keep observing provider/data readiness warnings and tune repair thresholds only from workflow/readiness evidence.
 
 Why this matters:
 

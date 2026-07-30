@@ -64,6 +64,7 @@
 - [x] Disable the 5-minute analyzer publisher schedule after the Step Functions workflow is responsible for daily publication.
 - [x] Disable or narrow the 5-minute collection distributor schedule after the workflow can create, dispatch, wait, and repair the daily manifest.
 - [x] Disable or narrow the frequent bounded stock collector schedule after the workflow owns final price readiness and gap repair.
-- [ ] Keep the 3-times-per-day global news schedule only if it provides useful prefetching within free quota; otherwise fold news collection fully into the daily workflow.
-- [ ] Decide whether stock gap scan remains a separate after-market maintenance job or becomes a workflow step.
-- [ ] Update runbooks, architecture docs, and smoke tests to treat the Step Functions execution as the source of daily operational truth.
+- [x] Keep the 3-times-per-day global news schedule only if it provides useful prefetching within free quota; otherwise fold news collection fully into the daily workflow.
+- [x] Decide whether stock gap scan remains a separate after-market maintenance job or becomes a workflow step.
+  - Decision: keep the 23:15 UTC stock gap scan as separate after-market maintenance; the daily workflow owns same-day price readiness through manifest dispatch and `repair_price_gaps`.
+- [x] Update runbooks, architecture docs, and smoke tests to treat the Step Functions execution as the source of daily operational truth.

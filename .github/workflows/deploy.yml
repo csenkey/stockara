@@ -185,4 +185,37 @@ jobs:
               echo "$key not published yet; skipping validation."
             fi
           done
+
+          if aws s3api head-object --bucket "$bucket" --key workflow/latest.json >/dev/null 2>&1; then
+            aws s3 cp "s3://$bucket/workflow/latest.json" workflow-latest.json
+            python -m json.tool workflow-latest.json >/dev/null
+            python - <<'PY'
+          import json
+
+          payload = json.load(open("workflow-latest.json"))
+          required = {
+              "artifact_type": "daily_workflow_status",
+              "run_date": str,
+              "generated_at": str,
+              "status": str,
+              "decision": str,
+              "artifacts": dict,
+          }
+          for key, expected_type in required.items():
+              value = payload.get(key)
+              if not isinstance(value, expected_type):
+                  raise SystemExit(
+                      f"workflow/latest.json missing or invalid required field: {key}"
+                  )
+          if payload["status"] not in {"success", "degraded", "waiting", "blocked"}:
+              raise SystemExit(f"Unexpected workflow status: {payload['status']}")
+          print(
+              "Validated workflow/latest.json "
+              f"status={payload['status']} decision={payload['decision']} "
+              f"run_date={payload['run_date']}"
+          )
+          PY
+          else
+            echo "workflow/latest.json not published yet; skipping validation."
+          fi
         working-directory: infrastructure
