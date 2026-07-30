@@ -100,7 +100,27 @@ interface NeededEvidence {
   source_candidates: string[];
 }
 
-interface TopPick {
+type PublicationTier =
+  | "decision_grade"
+  | "reduced_confidence"
+  | "fallback_preview"
+  | "blocked";
+
+interface ConfidenceAdjustment {
+  reason: string;
+  adjustment: number;
+  detail?: string;
+}
+
+interface RecommendationQuality {
+  analysis_method?: string;
+  publication_tier?: PublicationTier | string;
+  missing_evidence?: string[];
+  confidence_adjustments?: ConfidenceAdjustment[];
+  ai_review?: AiReview | null;
+}
+
+interface TopPick extends RecommendationQuality {
   rank: number;
   ticker: string;
   company_name: string;
@@ -121,7 +141,7 @@ interface TopPick {
   upcoming_events?: UpcomingTickerEvent[];
 }
 
-interface SellAlert {
+interface SellAlert extends RecommendationQuality {
   rank: number;
   ticker: string;
   company_name: string;
@@ -138,6 +158,30 @@ interface SellAlert {
   price_chart?: PriceChart | null;
   related_news?: RelatedNewsArticle[];
   upcoming_events?: UpcomingTickerEvent[];
+}
+
+interface FallbackPreview extends RecommendationQuality {
+  rank: number;
+  ticker: string;
+  company_name: string;
+  sector: string;
+  logo_url?: string | null;
+  company_info?: CompanyInfo;
+  recommendation: "BUY" | "SELL";
+  risk_level: "LOW" | "MEDIUM" | "HIGH";
+  confidence_score: number;
+  confidence_cap?: number;
+  catalyst: string;
+  expected_timeframe?: string;
+  rationale: string;
+  invalidation_criteria?: string | null;
+  supporting_evidence: string[];
+  source_traceability: SignalSource[];
+  price_chart?: PriceChart | null;
+  related_news?: RelatedNewsArticle[];
+  upcoming_events?: UpcomingTickerEvent[];
+  preview_warning?: string;
+  automated_trading_excluded?: boolean;
 }
 
 interface ReviewRejection {
@@ -179,6 +223,7 @@ interface TopPicksPayload {
   suppression_reason?: string;
   top_picks: TopPick[];
   sell_alerts: SellAlert[];
+  fallback_previews?: FallbackPreview[];
   review_rejections?: ReviewRejection[];
   candidate_count: number;
   analyzed_count: number;
@@ -301,6 +346,7 @@ function createDemoPayload(): TopPicksPayload {
             "Founded in 1976; headquartered in Cupertino, California; IPO in 1980.",
         },
         recommendation: "BUY",
+        publication_tier: "decision_grade",
         risk_level: "MEDIUM",
         confidence_score: 78,
         catalyst: "Improving demand checks and analyst support",
@@ -358,6 +404,40 @@ function createDemoPayload(): TopPicksPayload {
           },
         ],
       },
+      {
+        rank: 2,
+        ticker: "MSFT",
+        company_name: "Microsoft Corporation",
+        sector: "Technology",
+        recommendation: "BUY",
+        publication_tier: "reduced_confidence",
+        missing_evidence: ["earnings_calendar", "source_evidence"],
+        confidence_adjustments: [
+          {
+            reason: "optional_evidence_gap",
+            adjustment: -10,
+            detail: "Calendar and source-evidence signals were incomplete.",
+          },
+        ],
+        risk_level: "MEDIUM",
+        confidence_score: 68,
+        catalyst: "Cloud and AI platform momentum remains constructive",
+        expected_timeframe: "1-30 days",
+        rationale:
+          "The core setup is constructive, but optional evidence is incomplete, so the confidence is reduced until the repair workflow fills the gaps.",
+        invalidation_criteria:
+          "A failed breakout or weaker cloud commentary would invalidate the setup.",
+        supporting_evidence: [
+          "Price and history gates are fresh enough for analysis.",
+          "Optional calendar and source-evidence signals were unavailable.",
+        ],
+        source_traceability: [
+          { provider: "demo_price_data", observed_at: "2026-07-02T17:00:00Z" },
+        ],
+        price_chart,
+        related_news: [],
+        upcoming_events: [],
+      },
     ],
     sell_alerts: [
       {
@@ -384,6 +464,7 @@ function createDemoPayload(): TopPicksPayload {
             "Founded in 2003; headquartered in Austin, Texas; IPO in 2010.",
         },
         severity: "high",
+        publication_tier: "decision_grade",
         risk_level: "HIGH",
         confidence_score: 66,
         negative_catalyst: "Weak delivery narrative and elevated volatility",
@@ -418,6 +499,38 @@ function createDemoPayload(): TopPicksPayload {
             details: { time_of_day: "after_market" },
           },
         ],
+      },
+    ],
+    fallback_previews: [
+      {
+        rank: 1,
+        ticker: "NVDA",
+        company_name: "NVIDIA Corporation",
+        sector: "Technology",
+        recommendation: "BUY",
+        publication_tier: "fallback_preview",
+        analysis_method: "fallback_heuristic",
+        risk_level: "HIGH",
+        confidence_score: 55,
+        confidence_cap: 55,
+        catalyst: "Heuristic momentum setup needs AI confirmation",
+        expected_timeframe: "1-30 days",
+        rationale:
+          "The fallback scorer found an actionable setup, but AI analysis or review was unavailable, so this remains a preview-only candidate.",
+        invalidation_criteria:
+          "Loss of momentum or failed AI review should keep this out of publication.",
+        supporting_evidence: [
+          "Heuristic price and catalyst signals crossed preview thresholds.",
+        ],
+        source_traceability: [
+          { provider: "demo_price_data", observed_at: "2026-07-02T17:00:00Z" },
+        ],
+        price_chart,
+        related_news: [],
+        upcoming_events: [],
+        preview_warning:
+          "Heuristic fallback preview only; AI analysis did not complete. Human review required.",
+        automated_trading_excluded: true,
       },
     ],
     review_rejections: [
@@ -649,6 +762,19 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
     return formatDate(payload.generated_at);
   }, [payload]);
   const reviewRejections = payload?.review_rejections ?? [];
+  const fallbackPreviews = payload?.fallback_previews ?? [];
+  const reviewedTopPicks = (payload?.top_picks ?? []).filter(
+    (pick) => publicationTier(pick) === "decision_grade",
+  );
+  const lowerConfidencePicks = (payload?.top_picks ?? []).filter(
+    (pick) => publicationTier(pick) === "reduced_confidence",
+  );
+  const reviewedSellAlerts = (payload?.sell_alerts ?? []).filter(
+    (alert) => publicationTier(alert) === "decision_grade",
+  );
+  const lowerConfidenceSellAlerts = (payload?.sell_alerts ?? []).filter(
+    (alert) => publicationTier(alert) === "reduced_confidence",
+  );
   const statusIsForDisplayedPublication =
     statusPayload?.publication_date === payload?.publication_date;
   const currentStatusWarnings =
@@ -700,13 +826,13 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
         <Metric marker="time" label="Generated" value={generatedLabel} />
         <Metric
           marker="picks"
-          label="Top Picks"
-          value={String(payload?.top_picks.length ?? 0)}
+          label="Reviewed Picks"
+          value={String(reviewedTopPicks.length)}
         />
         <Metric
           marker="risk"
           label="Sell Alerts"
-          value={String(payload?.sell_alerts.length ?? 0)}
+          value={String(reviewedSellAlerts.length)}
         />
         <Metric
           marker="scan"
@@ -752,34 +878,61 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
             )}
 
             <section>
-              <h2 className="mb-3 text-lg font-semibold">Top Picks</h2>
-              {payload.top_picks.length === 0 ? (
+              <h2 className="mb-3 text-lg font-semibold">Reviewed Top Picks</h2>
+              {reviewedTopPicks.length === 0 ? (
                 <div className="border border-slate-800 bg-slate-900 p-5 text-sm text-slate-300">
                   No BUY recommendations passed the review gate for this publication.
                 </div>
               ) : (
                 <div className="grid gap-4 lg:grid-cols-2">
-                  {payload.top_picks.map((pick) => (
+                  {reviewedTopPicks.map((pick) => (
                     <PickRow key={pick.ticker} pick={pick} />
                   ))}
                 </div>
               )}
             </section>
 
+            {(lowerConfidencePicks.length > 0 || lowerConfidenceSellAlerts.length > 0) && (
+              <section>
+                <h2 className="mb-3 text-lg font-semibold">
+                  Lower-Confidence Suggestions
+                </h2>
+                <div className="grid gap-4 lg:grid-cols-2">
+                  {lowerConfidencePicks.map((pick) => (
+                    <PickRow key={pick.ticker} pick={pick} />
+                  ))}
+                  {lowerConfidenceSellAlerts.map((alert) => (
+                    <SellAlertRow key={alert.ticker} alert={alert} />
+                  ))}
+                </div>
+              </section>
+            )}
+
             <section>
               <h2 className="mb-3 text-lg font-semibold">Urgent Sell Alerts</h2>
-              {payload.sell_alerts.length === 0 ? (
+              {reviewedSellAlerts.length === 0 ? (
                 <div className="border border-slate-800 bg-slate-900 p-5 text-sm text-slate-300">
                   No urgent sell alerts crossed the configured threshold.
                 </div>
               ) : (
                 <div className="grid gap-4 lg:grid-cols-2">
-                  {payload.sell_alerts.map((alert) => (
+                  {reviewedSellAlerts.map((alert) => (
                     <SellAlertRow key={alert.ticker} alert={alert} />
                   ))}
                 </div>
               )}
             </section>
+
+            {fallbackPreviews.length > 0 && (
+              <section>
+                <h2 className="mb-3 text-lg font-semibold">Fallback Previews</h2>
+                <div className="grid gap-4 lg:grid-cols-2">
+                  {fallbackPreviews.map((preview) => (
+                    <FallbackPreviewRow key={preview.ticker} preview={preview} />
+                  ))}
+                </div>
+              </section>
+            )}
 
             {payload.data_warnings.length > 0 && (
               <section>
@@ -794,6 +947,8 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
                 </div>
               </section>
             )}
+
+            <BlockedDataIssues dataQuality={payload.data_quality} />
 
             {reviewRejections.length > 0 && (
               <section>
@@ -835,6 +990,38 @@ function FreshnessSummary({ dataQuality }: { dataQuality?: DataQuality }) {
         ))}
       </div>
     </div>
+  );
+}
+
+function BlockedDataIssues({ dataQuality }: { dataQuality?: DataQuality }) {
+  const entries = Object.entries(dataQuality?.exclusion_reason_counts ?? {}).sort(
+    (a, b) => b[1] - a[1],
+  );
+  if (entries.length === 0) return null;
+  return (
+    <section>
+      <h2 className="mb-3 text-lg font-semibold">Blocked Data Issues</h2>
+      <div className="border border-slate-800 bg-slate-900 p-4">
+        <div className="grid gap-3 text-sm md:grid-cols-3">
+          <Fact
+            label="Excluded"
+            value={String(dataQuality?.excluded_ticker_count ?? totalReasonCount(entries))}
+          />
+          <Fact label="Eligible" value={String(dataQuality?.eligible_ticker_count ?? "n/a")} />
+          <Fact label="Coverage" value={dataQuality?.coverage_status ?? "unknown"} />
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {entries.map(([reason, count]) => (
+            <span
+              key={reason}
+              className="border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-200"
+            >
+              {reason}: {count}
+            </span>
+          ))}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -939,8 +1126,15 @@ function Metric({
 }
 
 function PickRow({ pick }: { pick: TopPick }) {
+  const isReducedConfidence = publicationTier(pick) === "reduced_confidence";
   return (
-    <article className="border border-slate-800 bg-slate-900 p-5">
+    <article
+      className={`border p-5 ${
+        isReducedConfidence
+          ? "border-amber-800 bg-slate-900"
+          : "border-slate-800 bg-slate-900"
+      }`}
+    >
       <div className="flex items-start justify-between gap-4">
         <div className="flex min-w-0 items-start gap-3">
           <TickerLogo ticker={pick.ticker} companyName={pick.company_name} logoUrl={pick.logo_url} />
@@ -953,6 +1147,7 @@ function PickRow({ pick }: { pick: TopPick }) {
           </div>
         </div>
         <div className="flex flex-wrap justify-end gap-2">
+          <PublicationTierBadge tier={publicationTier(pick)} />
           <span className="border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">
             {pick.recommendation}
           </span>
@@ -964,6 +1159,7 @@ function PickRow({ pick }: { pick: TopPick }) {
       <CompanyInfoPanel companyName={pick.company_name} info={pick.company_info} tone="slate" />
       <p className="mt-4 text-sm font-medium text-slate-100">{pick.catalyst}</p>
       <p className="mt-2 text-sm leading-6 text-slate-300">{pick.rationale}</p>
+      <RecommendationQualityPanel row={pick} tone="slate" />
       <PriceChartPanel chart={pick.price_chart} tone="slate" />
       <div className="mt-4 grid gap-3 text-sm md:grid-cols-2">
         <Fact label="Confidence" value={`${pick.confidence_score}%`} />
@@ -977,8 +1173,15 @@ function PickRow({ pick }: { pick: TopPick }) {
 }
 
 function SellAlertRow({ alert }: { alert: SellAlert }) {
+  const isReducedConfidence = publicationTier(alert) === "reduced_confidence";
   return (
-    <article className="border border-red-900 bg-red-950 p-5">
+    <article
+      className={`border p-5 ${
+        isReducedConfidence
+          ? "border-amber-800 bg-red-950"
+          : "border-red-900 bg-red-950"
+      }`}
+    >
       <div className="flex items-start justify-between gap-4">
         <div className="flex min-w-0 items-start gap-3">
           <TickerLogo
@@ -995,15 +1198,19 @@ function SellAlertRow({ alert }: { alert: SellAlert }) {
             </p>
           </div>
         </div>
-        <span className={`border px-2 py-1 text-xs ${badgeClass(alert.severity)}`}>
-          {alert.severity}
-        </span>
+        <div className="flex flex-wrap justify-end gap-2">
+          <PublicationTierBadge tier={publicationTier(alert)} />
+          <span className={`border px-2 py-1 text-xs ${badgeClass(alert.severity)}`}>
+            {alert.severity}
+          </span>
+        </div>
       </div>
       <CompanyInfoPanel companyName={alert.company_name} info={alert.company_info} tone="red" />
       <p className="mt-4 text-sm font-medium text-red-50">
         {alert.negative_catalyst}
       </p>
       <p className="mt-2 text-sm leading-6 text-red-100">{alert.rationale}</p>
+      <RecommendationQualityPanel row={alert} tone="red" />
       <PriceChartPanel chart={alert.price_chart} tone="red" />
       <div className="mt-4 grid gap-3 text-sm md:grid-cols-2">
         <Fact label="Confidence" value={`${alert.confidence_score}%`} />
@@ -1013,6 +1220,137 @@ function SellAlertRow({ alert }: { alert: SellAlert }) {
       <RelatedNews items={alert.related_news ?? []} tone="red" />
       <UpcomingEvents items={alert.upcoming_events ?? []} tone="red" />
     </article>
+  );
+}
+
+function FallbackPreviewRow({ preview }: { preview: FallbackPreview }) {
+  const tone = preview.recommendation === "SELL" ? "red" : "slate";
+  const articleClass =
+    preview.recommendation === "SELL"
+      ? "border border-amber-700 bg-red-950 p-5"
+      : "border border-amber-700 bg-slate-900 p-5";
+  const titleClass = preview.recommendation === "SELL" ? "text-red-50" : "text-slate-100";
+  const textClass = preview.recommendation === "SELL" ? "text-red-100" : "text-slate-300";
+  const mutedClass = preview.recommendation === "SELL" ? "text-red-200" : "text-slate-400";
+
+  return (
+    <article className={articleClass}>
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex min-w-0 items-start gap-3">
+          <TickerLogo
+            ticker={preview.ticker}
+            companyName={preview.company_name}
+            logoUrl={preview.logo_url}
+            tone={tone}
+          />
+          <div className="min-w-0">
+            <div className={`text-xs ${mutedClass}`}>#{preview.rank}</div>
+            <h3 className={`mt-1 text-xl font-semibold leading-tight ${titleClass}`}>
+              {preview.company_name}
+            </h3>
+            <p className={`mt-1 text-sm ${mutedClass}`}>
+              {preview.ticker} · {preview.sector}
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-wrap justify-end gap-2">
+          <PublicationTierBadge tier="fallback_preview" />
+          <span
+            className={`border px-2 py-1 text-xs font-semibold ${
+              preview.recommendation === "SELL"
+                ? "border-red-300 bg-red-50 text-red-700"
+                : "border-emerald-300 bg-emerald-50 text-emerald-700"
+            }`}
+          >
+            {preview.recommendation}
+          </span>
+          <span className={`border px-2 py-1 text-xs ${badgeClass(preview.risk_level)}`}>
+            {preview.risk_level}
+          </span>
+        </div>
+      </div>
+      {preview.preview_warning && (
+        <p className="mt-4 border border-amber-700 bg-amber-950 p-3 text-sm font-medium text-amber-100">
+          {preview.preview_warning}
+        </p>
+      )}
+      <CompanyInfoPanel companyName={preview.company_name} info={preview.company_info} tone={tone} />
+      <p className={`mt-4 text-sm font-medium ${titleClass}`}>{preview.catalyst}</p>
+      <p className={`mt-2 text-sm leading-6 ${textClass}`}>{preview.rationale}</p>
+      <RecommendationQualityPanel row={preview} tone={tone} />
+      <PriceChartPanel chart={preview.price_chart} tone={tone} />
+      <div className="mt-4 grid gap-3 text-sm md:grid-cols-3">
+        <Fact label="Confidence" value={`${preview.confidence_score}%`} />
+        <Fact
+          label="Confidence cap"
+          value={preview.confidence_cap == null ? "n/a" : `${preview.confidence_cap}%`}
+        />
+        <Fact
+          label="Automation"
+          value={preview.automated_trading_excluded ? "excluded" : "manual only"}
+        />
+      </div>
+      <Evidence items={preview.supporting_evidence} />
+      <RelatedNews items={preview.related_news ?? []} tone={tone} />
+      <UpcomingEvents items={preview.upcoming_events ?? []} tone={tone} />
+      <SourceTraceability items={preview.source_traceability ?? []} tone={tone} />
+    </article>
+  );
+}
+
+function PublicationTierBadge({ tier }: { tier: string }) {
+  const label = publicationTierLabel(tier);
+  const classes =
+    tier === "reduced_confidence"
+      ? "border-amber-500 bg-amber-950 text-amber-100"
+      : tier === "fallback_preview"
+        ? "border-amber-500 bg-slate-950 text-amber-100"
+        : tier === "blocked"
+          ? "border-red-500 bg-red-950 text-red-100"
+          : "border-sky-500 bg-sky-950 text-sky-100";
+  return <span className={`border px-2 py-1 text-xs font-semibold ${classes}`}>{label}</span>;
+}
+
+function RecommendationQualityPanel({
+  row,
+  tone,
+}: {
+  row: RecommendationQuality;
+  tone: "slate" | "red";
+}) {
+  const missingEvidence = row.missing_evidence ?? [];
+  const adjustments = row.confidence_adjustments ?? [];
+  if (missingEvidence.length === 0 && adjustments.length === 0) return null;
+
+  const border = tone === "red" ? "border-red-900" : "border-slate-800";
+  const muted = tone === "red" ? "text-red-200" : "text-slate-400";
+  const text = tone === "red" ? "text-red-100" : "text-slate-300";
+  return (
+    <section className={`mt-4 border-t ${border} pt-4`}>
+      <h4 className={`text-xs font-semibold uppercase ${muted}`}>Confidence context</h4>
+      {missingEvidence.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {missingEvidence.map((item) => (
+            <span
+              key={item}
+              className="border border-amber-700 bg-amber-950 px-2 py-1 text-xs text-amber-100"
+            >
+              missing {item}
+            </span>
+          ))}
+        </div>
+      )}
+      {adjustments.length > 0 && (
+        <div className={`mt-3 space-y-1 text-sm ${text}`}>
+          {adjustments.map((adjustment) => (
+            <p key={`${adjustment.reason}-${adjustment.adjustment}-${adjustment.detail ?? ""}`}>
+              {adjustment.reason}: {formatSignedNumber(adjustment.adjustment)}
+              {adjustment.detail ? ` · ${adjustment.detail}` : ""}
+            </p>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -1610,6 +1948,31 @@ function formatMarketCap(value: number | string) {
   if (numeric >= 1_000_000_000) return `$${(numeric / 1_000_000_000).toFixed(1)}B`;
   if (numeric >= 1_000_000) return `$${(numeric / 1_000_000).toFixed(1)}M`;
   return `$${numeric.toLocaleString()}`;
+}
+
+function publicationTier(row: RecommendationQuality) {
+  return row.publication_tier ?? "decision_grade";
+}
+
+function publicationTierLabel(tier: string) {
+  switch (tier) {
+    case "reduced_confidence":
+      return "lower confidence";
+    case "fallback_preview":
+      return "preview only";
+    case "blocked":
+      return "blocked";
+    default:
+      return "reviewed";
+  }
+}
+
+function formatSignedNumber(value: number) {
+  return `${value > 0 ? "+" : ""}${value}`;
+}
+
+function totalReasonCount(entries: Array<[string, number]>) {
+  return entries.reduce((total, [, count]) => total + count, 0);
 }
 
 function Fact({ label, value }: { label: string; value: string }) {
