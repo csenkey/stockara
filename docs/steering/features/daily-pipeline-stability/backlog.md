@@ -39,11 +39,11 @@
 ## Milestone 3: Publish Useful Degraded Suggestions
 
 - [x] Add recommendation `publication_tier` values: `decision_grade`, `reduced_confidence`, `fallback_preview`, and `blocked`.
-- [ ] Keep `blocked` strict for unresolved metadata, stale/missing price data, and insufficient analysis history.
-- [ ] Allow `reduced_confidence` suggestions when optional news/calendar/evidence is missing but fresh price/history and metadata are present.
+- [x] Keep `blocked` strict for unresolved metadata, stale/missing price data, and insufficient analysis history.
+- [x] Allow `reduced_confidence` suggestions when optional news/calendar/evidence is missing but fresh price/history and metadata are present.
 - [ ] Allow `fallback_preview` output for heuristic or review-unavailable BUY/SELL candidates with confidence caps, visible warnings, and exclusion from any automated trading consumers.
-- [ ] Add `missing_evidence` and `confidence_adjustments` arrays to recommendation rows.
-- [ ] Update ranking so decision-grade picks rank first, reduced-confidence suggestions rank separately, and fallback previews do not silently replace reviewed picks.
+- [x] Add `missing_evidence` and `confidence_adjustments` arrays to recommendation rows.
+- [x] Update ranking so decision-grade picks rank first, reduced-confidence suggestions rank separately, and fallback previews do not silently replace reviewed picks.
 - [ ] Add frontend sections for reviewed picks, lower-confidence suggestions, fallback previews, blocked data issues, and withheld review rejections.
 - [ ] Add tests for publication tier assignment, confidence downgrades, ranking, and artifact compatibility.
 

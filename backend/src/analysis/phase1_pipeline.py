@@ -137,6 +137,17 @@ STORED_SIGNAL_TYPES = {
     "sector_context",
     "macro_context",
 }
+OPTIONAL_EVIDENCE_SIGNAL_TYPES = {
+    "sec_filing",
+    "analyst_action",
+    "analyst_rating",
+    "price_target",
+    "earnings_release",
+    "earnings_transcript",
+}
+REDUCED_CONFIDENCE_PENALTY = int(
+    os.environ.get("PHASE1_REDUCED_CONFIDENCE_PENALTY", "10")
+)
 
 
 def run_phase1_pipeline(event: dict | None = None) -> dict[str, Any]:
@@ -1700,15 +1711,20 @@ def build_publication_payload(
 ) -> dict[str, Any]:
     stock_map = {stock["ticker"]: stock for stock in stocks}
     sell_watch = set(store.sell_alert_tickers())
+    optional_gaps = _global_optional_evidence_gaps(scores, data_quality or {})
+    publishable_analyses = [
+        _with_publication_tier_metadata(row, optional_gaps) for row in analyses
+    ]
 
     buy_candidates = [
         row
-        for row in analyses
+        for row in publishable_analyses
         if row["recommendation"] == "BUY" and row["opportunity_score"] > 0
         and _is_publication_allowed(row)
     ]
     buy_candidates.sort(
         key=lambda row: (
+            _publication_tier_rank(row),
             row["confidence_score"],
             row["opportunity_score"],
             -_risk_weight(row["risk_level"]),
@@ -1730,6 +1746,8 @@ def build_publication_payload(
                     "company_info": _company_info(stock),
                     "analysis_method": row.get("analysis_method", "ai"),
                     "publication_tier": _publication_tier(row),
+                    "missing_evidence": row.get("missing_evidence", []),
+                    "confidence_adjustments": row.get("confidence_adjustments", []),
                     "recommendation": row["recommendation"],
                     "risk_level": row["risk_level"],
                     "confidence_score": row["confidence_score"],
@@ -1748,13 +1766,18 @@ def build_publication_payload(
 
     sell_candidates = [
         row
-        for row in analyses
+        for row in publishable_analyses
         if row["negative_score"] >= 40
         and (row["ticker"] in sell_watch or row["recommendation"] == "SELL")
         and _is_publication_allowed(row)
     ]
     sell_candidates.sort(
-        key=lambda row: (row["negative_score"], row["confidence_score"]), reverse=True
+        key=lambda row: (
+            _publication_tier_rank(row),
+            row["negative_score"],
+            row["confidence_score"],
+        ),
+        reverse=True,
     )
 
     sell_alerts = []
@@ -1771,6 +1794,8 @@ def build_publication_payload(
                     "company_info": _company_info(stock),
                     "analysis_method": row.get("analysis_method", "ai"),
                     "publication_tier": _publication_tier(row),
+                    "missing_evidence": row.get("missing_evidence", []),
+                    "confidence_adjustments": row.get("confidence_adjustments", []),
                     "severity": "critical" if row["negative_score"] >= 80 else "high",
                     "risk_level": row["risk_level"],
                     "confidence_score": row["confidence_score"],
@@ -1788,8 +1813,12 @@ def build_publication_payload(
     data_warnings = _source_warnings(scores)
     if data_quality:
         data_warnings.extend(data_quality.get("warnings", []))
-    fallback_policy = _fallback_policy_summary(analyses)
-    publication_tiers = _publication_tier_summary(top_picks, sell_alerts, analyses)
+    fallback_policy = _fallback_policy_summary(publishable_analyses)
+    publication_tiers = _publication_tier_summary(
+        top_picks,
+        sell_alerts,
+        publishable_analyses,
+    )
     if fallback_policy["fallback_analysis_count"]:
         data_warnings.append(
             f"{fallback_policy['fallback_analysis_count']} candidate analysis result(s) used "
@@ -1804,7 +1833,7 @@ def build_publication_payload(
             "fallback_publication_suppressed",
             fallback_policy["suppressed_fallback_count"],
         )
-    review_policy = _review_policy_summary(analyses)
+    review_policy = _review_policy_summary(publishable_analyses)
     if review_policy["review_suppressed_count"]:
         data_warnings.append(
             f"{review_policy['review_suppressed_count']} AI-generated actionable "
@@ -1821,7 +1850,11 @@ def build_publication_payload(
         "fallback_policy": fallback_policy,
         "publication_tiers": publication_tiers,
         "review_policy": review_policy,
-        "review_rejections": _review_rejection_audit(analyses, stock_map, run_date),
+        "review_rejections": _review_rejection_audit(
+            publishable_analyses,
+            stock_map,
+            run_date,
+        ),
         "top_picks": top_picks,
         "sell_alerts": sell_alerts,
         "upcoming_earnings": upcoming_earnings or [],
@@ -3513,6 +3546,77 @@ def _publication_tier(analysis: dict[str, Any]) -> str:
     if not _is_publication_allowed(analysis):
         return "blocked"
     return "decision_grade"
+
+
+def _publication_tier_rank(analysis: dict[str, Any]) -> int:
+    return {
+        "blocked": 0,
+        "fallback_preview": 1,
+        "reduced_confidence": 2,
+        "decision_grade": 3,
+    }.get(_publication_tier(analysis), 0)
+
+
+def _with_publication_tier_metadata(
+    analysis: dict[str, Any],
+    optional_gaps: list[str],
+) -> dict[str, Any]:
+    missing_evidence = list(analysis.get("missing_evidence") or [])
+    confidence_adjustments = list(analysis.get("confidence_adjustments") or [])
+    if (
+        optional_gaps
+        and analysis.get("analysis_method", "ai") == "ai"
+        and analysis.get("recommendation") in {"BUY", "SELL"}
+    ):
+        missing_evidence = sorted({*missing_evidence, *optional_gaps})
+        if not any(
+            isinstance(adjustment, dict)
+            and adjustment.get("reason") == "optional_evidence_gap"
+            for adjustment in confidence_adjustments
+        ):
+            confidence_adjustments.append(
+                {
+                    "reason": "optional_evidence_gap",
+                    "adjustment": -REDUCED_CONFIDENCE_PENALTY,
+                    "missing_evidence": missing_evidence,
+                }
+            )
+
+    updated = {
+        **analysis,
+        "missing_evidence": missing_evidence,
+        "confidence_adjustments": confidence_adjustments,
+    }
+    if missing_evidence and analysis.get("analysis_method", "ai") == "ai":
+        updated["publication_tier"] = "reduced_confidence"
+        updated["confidence_score"] = max(
+            0,
+            int(updated["confidence_score"]) - REDUCED_CONFIDENCE_PENALTY,
+        )
+    else:
+        updated["publication_tier"] = _publication_tier(updated)
+    return updated
+
+
+def _global_optional_evidence_gaps(
+    scores: list[dict[str, Any]],
+    data_quality: dict[str, Any],
+) -> list[str]:
+    signal_types = {
+        signal.get("signal_type")
+        for score in scores
+        for signal in score.get("signals", [])
+    }
+    gaps: list[str] = []
+    if data_quality.get("news_stale") or "news" not in signal_types:
+        gaps.append("news")
+    if "earnings" not in signal_types:
+        gaps.append("earnings_calendar")
+    if "dividend" not in signal_types:
+        gaps.append("dividend_calendar")
+    if not signal_types.intersection(OPTIONAL_EVIDENCE_SIGNAL_TYPES):
+        gaps.append("source_evidence")
+    return gaps
 
 
 def _publication_tier_summary(

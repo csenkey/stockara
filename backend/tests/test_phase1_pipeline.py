@@ -68,7 +68,17 @@ def test_build_publication_payload_splits_top_picks_and_sell_alerts():
         {"ticker": "TSLA", "company_name": "Tesla", "sector": "Consumer Discretionary"},
     ]
     scores = [
-        {"ticker": "NVDA", "opportunity_score": 80, "negative_score": 5, "signals": []},
+        {
+            "ticker": "NVDA",
+            "opportunity_score": 80,
+            "negative_score": 5,
+            "signals": [
+                {"signal_type": "news", "source": {"provider": "test"}},
+                {"signal_type": "earnings", "source": {"provider": "test"}},
+                {"signal_type": "dividend", "source": {"provider": "test"}},
+                {"signal_type": "sec_filing", "source": {"provider": "test"}},
+            ],
+        },
         {"ticker": "TSLA", "opportunity_score": 5, "negative_score": 90, "signals": []},
     ]
     analyses = [
@@ -1814,7 +1824,76 @@ def test_build_publication_payload_includes_ai_method_on_public_pick():
         payload = build_publication_payload(analyses, scores, stocks, date(2026, 6, 17))
 
     assert payload["top_picks"][0]["analysis_method"] == "ai"
-    assert payload["top_picks"][0]["publication_tier"] == "decision_grade"
+    assert payload["top_picks"][0]["publication_tier"] == "reduced_confidence"
+    assert payload["top_picks"][0]["missing_evidence"] == [
+        "dividend_calendar",
+        "earnings_calendar",
+        "news",
+        "source_evidence",
+    ]
+    assert payload["top_picks"][0]["confidence_score"] == 74
+
+
+def test_build_publication_payload_ranks_decision_grade_before_reduced_confidence():
+    stocks = [
+        {"ticker": "AAPL", "company_name": "Apple", "sector": "Technology"},
+        {"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology"},
+    ]
+    scores = [
+        {
+            "ticker": "AAPL",
+            "opportunity_score": 70,
+            "negative_score": 5,
+            "signals": [
+                {"signal_type": "news", "source": {"provider": "test"}},
+                {"signal_type": "earnings", "source": {"provider": "test"}},
+                {"signal_type": "dividend", "source": {"provider": "test"}},
+                {"signal_type": "sec_filing", "source": {"provider": "test"}},
+            ],
+        },
+        {"ticker": "NVDA", "opportunity_score": 95, "negative_score": 5, "signals": []},
+    ]
+    analyses = [
+        {
+            "ticker": "AAPL",
+            "analysis_method": "ai",
+            "publication_allowed": True,
+            "recommendation": "BUY",
+            "risk_level": "MEDIUM",
+            "confidence_score": 65,
+            "catalyst": "Reviewed setup",
+            "expected_timeframe": "1-30 days",
+            "reasoning": "Decision-grade reviewed pick.",
+            "invalidation_criteria": "Setup fades.",
+            "opportunity_score": 70,
+            "negative_score": 5,
+            "signals": [],
+        },
+        {
+            "ticker": "NVDA",
+            "analysis_method": "ai",
+            "publication_allowed": True,
+            "publication_tier": "reduced_confidence",
+            "missing_evidence": ["news"],
+            "recommendation": "BUY",
+            "risk_level": "LOW",
+            "confidence_score": 95,
+            "catalyst": "Strong but incomplete setup",
+            "expected_timeframe": "1-30 days",
+            "reasoning": "Reduced-confidence pick has higher raw confidence.",
+            "invalidation_criteria": "Setup fades.",
+            "opportunity_score": 95,
+            "negative_score": 5,
+            "signals": [],
+        },
+    ]
+
+    with patch("src.analysis.phase1_pipeline.store.sell_alert_tickers", return_value=[]):
+        payload = build_publication_payload(analyses, scores, stocks, date(2026, 6, 17))
+
+    assert [pick["ticker"] for pick in payload["top_picks"][:2]] == ["AAPL", "NVDA"]
+    assert payload["publication_tiers"]["published_counts"]["decision_grade"] == 1
+    assert payload["publication_tiers"]["published_counts"]["reduced_confidence"] == 1
 
 
 def test_publish_payload_writes_latest_and_history_artifacts():
