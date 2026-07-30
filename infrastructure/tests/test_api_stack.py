@@ -363,3 +363,86 @@ def test_daily_pipeline_state_machine_is_created_in_shadow_mode():
         ),
     )
     template.resource_count_is("AWS::Events::Rule", 9)
+
+
+def test_daily_pipeline_state_machine_iam_is_scoped_to_workflow_lambdas():
+    app = cdk.App()
+    stack = cdk.Stack(app, "Deps")
+    table = dynamodb.Table(
+        stack,
+        "DataTable",
+        partition_key=dynamodb.Attribute(
+            name="PK", type=dynamodb.AttributeType.STRING
+        ),
+        sort_key=dynamodb.Attribute(name="SK", type=dynamodb.AttributeType.STRING),
+    )
+    bucket = s3.Bucket(stack, "Artifacts")
+    code = lambda_.Code.from_inline("def handler(event, context): return {}")
+    with patch("stacks.api_stack._lambda.Code.from_asset", return_value=code):
+        api_stack = ApiStack(
+            app,
+            "ApiTest",
+            data_table=table,
+            artifact_bucket=bucket,
+            deployment_stage="codex-test",
+        )
+    template = assertions.Template.from_stack(api_stack)
+
+    template.has_resource_properties(
+        "AWS::IAM::Role",
+        {
+            "AssumeRolePolicyDocument": {
+                "Statement": assertions.Match.array_with(
+                    [
+                        assertions.Match.object_like(
+                            {
+                                "Action": "sts:AssumeRole",
+                                "Principal": {"Service": "states.amazonaws.com"},
+                            }
+                        )
+                    ]
+                )
+            }
+        },
+    )
+    resources = template.to_json()["Resources"]
+    workflow_policy = next(
+        resource
+        for resource in resources.values()
+        if resource["Type"] == "AWS::IAM::Policy"
+        and resource["Properties"]["PolicyName"].startswith(
+            "DailyPipelineWorkflowRoleDefaultPolicy"
+        )
+    )
+    invoked_lambda_ids = {
+        statement["Resource"][0]["Fn::GetAtt"][0]
+        for statement in workflow_policy["Properties"]["PolicyDocument"]["Statement"]
+        if statement.get("Action") == "lambda:InvokeFunction"
+    }
+    assert invoked_lambda_ids == {
+        "WatchlistSeedFunction5D4797FE",
+        "CollectionDistributorFunction304D7CC9",
+        "StockCollectorFunctionCA81C1AF",
+        "NewsCollectorFunctionC5829D81",
+        "EarningsCollectorFunctionDB794F40",
+        "DividendCollectorFunction8FB42B38",
+        "EvidenceCollectorFunctionE44F8DC8",
+        "Phase1AnalyzerPublisherFunction7EEB9A09",
+    }
+    template.has_resource_properties(
+        "AWS::IAM::Policy",
+        {
+            "PolicyDocument": {
+                "Statement": assertions.Match.array_with(
+                    [
+                        assertions.Match.object_like(
+                            {
+                                "Action": "states:StartExecution",
+                                "Resource": {"Ref": "DailyPipelineWorkflow331E993A"},
+                            }
+                        )
+                    ]
+                )
+            }
+        },
+    )
