@@ -38,7 +38,7 @@
 
 ## Milestone 3: Publish Useful Degraded Suggestions
 
-- [ ] Add recommendation `publication_tier` values: `decision_grade`, `reduced_confidence`, `fallback_preview`, and `blocked`.
+- [x] Add recommendation `publication_tier` values: `decision_grade`, `reduced_confidence`, `fallback_preview`, and `blocked`.
 - [ ] Keep `blocked` strict for unresolved metadata, stale/missing price data, and insufficient analysis history.
 - [ ] Allow `reduced_confidence` suggestions when optional news/calendar/evidence is missing but fresh price/history and metadata are present.
 - [ ] Allow `fallback_preview` output for heuristic or review-unavailable BUY/SELL candidates with confidence caps, visible warnings, and exclusion from any automated trading consumers.

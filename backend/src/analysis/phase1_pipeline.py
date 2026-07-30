@@ -1729,6 +1729,7 @@ def build_publication_payload(
                     "logo_url": _stock_logo_url(stock),
                     "company_info": _company_info(stock),
                     "analysis_method": row.get("analysis_method", "ai"),
+                    "publication_tier": _publication_tier(row),
                     "recommendation": row["recommendation"],
                     "risk_level": row["risk_level"],
                     "confidence_score": row["confidence_score"],
@@ -1769,6 +1770,7 @@ def build_publication_payload(
                     "logo_url": _stock_logo_url(stock),
                     "company_info": _company_info(stock),
                     "analysis_method": row.get("analysis_method", "ai"),
+                    "publication_tier": _publication_tier(row),
                     "severity": "critical" if row["negative_score"] >= 80 else "high",
                     "risk_level": row["risk_level"],
                     "confidence_score": row["confidence_score"],
@@ -1787,6 +1789,7 @@ def build_publication_payload(
     if data_quality:
         data_warnings.extend(data_quality.get("warnings", []))
     fallback_policy = _fallback_policy_summary(analyses)
+    publication_tiers = _publication_tier_summary(top_picks, sell_alerts, analyses)
     if fallback_policy["fallback_analysis_count"]:
         data_warnings.append(
             f"{fallback_policy['fallback_analysis_count']} candidate analysis result(s) used "
@@ -1816,6 +1819,7 @@ def build_publication_payload(
         "generated_at": datetime.utcnow().isoformat(),
         "publication_scope": "top_opportunities_among_eligible_tickers",
         "fallback_policy": fallback_policy,
+        "publication_tiers": publication_tiers,
         "review_policy": review_policy,
         "review_rejections": _review_rejection_audit(analyses, stock_map, run_date),
         "top_picks": top_picks,
@@ -3497,6 +3501,55 @@ def _is_publication_allowed(analysis: dict[str, Any]) -> bool:
     if analysis.get("analysis_method", "ai") == "fallback_heuristic":
         return bool(analysis.get("publication_allowed", False))
     return bool(analysis.get("publication_allowed", True))
+
+
+def _publication_tier(analysis: dict[str, Any]) -> str:
+    if analysis.get("publication_tier"):
+        return str(analysis["publication_tier"])
+    if analysis.get("analysis_method") == "fallback_heuristic":
+        return "fallback_preview"
+    if analysis.get("missing_evidence") or analysis.get("confidence_adjustments"):
+        return "reduced_confidence"
+    if not _is_publication_allowed(analysis):
+        return "blocked"
+    return "decision_grade"
+
+
+def _publication_tier_summary(
+    top_picks: list[dict[str, Any]],
+    sell_alerts: list[dict[str, Any]],
+    analyses: list[dict[str, Any]],
+) -> dict[str, Any]:
+    published_counts = {
+        "decision_grade": 0,
+        "reduced_confidence": 0,
+        "fallback_preview": 0,
+        "blocked": 0,
+    }
+    for row in [*top_picks, *sell_alerts]:
+        tier = str(row.get("publication_tier") or "decision_grade")
+        published_counts[tier] = published_counts.get(tier, 0) + 1
+
+    analysis_counts = {
+        "decision_grade": 0,
+        "reduced_confidence": 0,
+        "fallback_preview": 0,
+        "blocked": 0,
+    }
+    for analysis in analyses:
+        tier = _publication_tier(analysis)
+        analysis_counts[tier] = analysis_counts.get(tier, 0) + 1
+
+    return {
+        "supported_tiers": [
+            "decision_grade",
+            "reduced_confidence",
+            "fallback_preview",
+            "blocked",
+        ],
+        "published_counts": published_counts,
+        "analysis_counts": analysis_counts,
+    }
 
 
 def _fallback_policy_summary(analyses: list[dict[str, Any]]) -> dict[str, Any]:

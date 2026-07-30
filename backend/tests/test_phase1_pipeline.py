@@ -104,7 +104,10 @@ def test_build_publication_payload_splits_top_picks_and_sell_alerts():
         payload = build_publication_payload(analyses, scores, stocks, date(2026, 6, 15))
 
     assert payload["top_picks"][0]["ticker"] == "NVDA"
+    assert payload["top_picks"][0]["publication_tier"] == "decision_grade"
     assert payload["sell_alerts"][0]["ticker"] == "TSLA"
+    assert payload["sell_alerts"][0]["publication_tier"] == "decision_grade"
+    assert payload["publication_tiers"]["published_counts"]["decision_grade"] == 2
 
 
 def test_build_publication_payload_includes_static_price_chart_data():
@@ -1779,6 +1782,8 @@ def test_build_publication_payload_suppresses_fallback_buy_and_sell_by_default()
         "openai_client_unavailable": 1,
         "openai_error": 1,
     }
+    assert payload["publication_tiers"]["analysis_counts"]["fallback_preview"] == 2
+    assert payload["publication_tiers"]["published_counts"]["fallback_preview"] == 0
     assert "heuristic fallback" in payload["data_warnings"][-2]
     assert "withheld from public publication" in payload["data_warnings"][-1]
     emit_metric.assert_called_once_with("fallback_publication_suppressed", 2)
@@ -1809,6 +1814,7 @@ def test_build_publication_payload_includes_ai_method_on_public_pick():
         payload = build_publication_payload(analyses, scores, stocks, date(2026, 6, 17))
 
     assert payload["top_picks"][0]["analysis_method"] == "ai"
+    assert payload["top_picks"][0]["publication_tier"] == "decision_grade"
 
 
 def test_publish_payload_writes_latest_and_history_artifacts():
