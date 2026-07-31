@@ -36,6 +36,12 @@ published workflow artifacts:
 - Latest status artifact: `workflow/latest.json`.
 - Dated status artifact: `workflow/history/{date}.json`.
 
+The public dashboard reads `workflow/latest.json` as its primary daily-run
+summary, keeps the latest completed publication visible while a newer review is
+in progress, and leaves detailed warnings collapsed behind the data-health
+surface. Reduced-confidence and fallback-preview rows remain available for
+human research even when no decision-grade recommendation is published.
+
 The deploy smoke test validates `workflow/latest.json` when it exists. A missing
 workflow artifact is acceptable only before the first workflow publication in a
 new environment; after that, stale or malformed workflow status should be

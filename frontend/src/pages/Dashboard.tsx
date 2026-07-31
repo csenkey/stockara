@@ -243,10 +243,31 @@ interface PublicationStatusPayload {
   data_warnings: string[];
 }
 
+interface WorkflowStatusPayload {
+  artifact_type?: string;
+  run_date: string;
+  generated_at: string;
+  status: "success" | "degraded" | "waiting" | "blocked" | string;
+  decision?: string;
+  execution?: {
+    name?: string;
+    started_at?: string;
+  };
+  analyzer?: {
+    publication_date?: string;
+    publication_status?: string;
+    suppression_reason?: string;
+    top_picks_count?: number;
+    sell_alerts_count?: number;
+  };
+}
+
 const TOP_PICKS_URL =
   import.meta.env.VITE_TOP_PICKS_URL || "/top-picks/latest.json";
 const TOP_PICKS_STATUS_URL =
   import.meta.env.VITE_TOP_PICKS_STATUS_URL || statusUrlFor(TOP_PICKS_URL);
+const WORKFLOW_STATUS_URL =
+  import.meta.env.VITE_WORKFLOW_STATUS_URL || workflowUrlFor(TOP_PICKS_URL);
 const DEV_DEMO_PAYLOAD = createDemoPayload();
 const TRANSIENT_GATE_REASONS = new Set([
   "collection_manifest_missing",
@@ -256,6 +277,10 @@ const TRANSIENT_GATE_REASONS = new Set([
 
 function statusUrlFor(url: string) {
   return url.replace("/top-picks/latest.json", "/top-picks/status/latest.json");
+}
+
+function workflowUrlFor(url: string) {
+  return url.replace("/top-picks/latest.json", "/workflow/latest.json");
 }
 
 function historyUrlFor(publicationDate: string) {
@@ -702,6 +727,7 @@ interface DashboardProps {
 export default function Dashboard({ onNavigate }: DashboardProps) {
   const [payload, setPayload] = useState<TopPicksPayload | null>(null);
   const [statusPayload, setStatusPayload] = useState<PublicationStatusPayload | null>(null);
+  const [workflowStatus, setWorkflowStatus] = useState<WorkflowStatusPayload | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
 
@@ -723,6 +749,17 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
     return (await response.json()) as TopPicksPayload;
   }
 
+  async function loadOptionalWorkflowStatus() {
+    try {
+      const response = await fetch(WORKFLOW_STATUS_URL, { cache: "no-store" });
+      if (!response.ok) return null;
+      const status = (await response.json()) as WorkflowStatusPayload;
+      return status.artifact_type === "daily_workflow_status" ? status : null;
+    } catch {
+      return null;
+    }
+  }
+
   async function loadTopPicks() {
     setLoading(true);
     setError("");
@@ -732,7 +769,11 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
         throw new Error(`HTTP ${response.status}`);
       }
       const latestPayload = (await response.json()) as TopPicksPayload;
-      const latestStatus = await loadOptionalStatus();
+      const [latestStatus, latestWorkflowStatus] = await Promise.all([
+        loadOptionalStatus(),
+        loadOptionalWorkflowStatus(),
+      ]);
+      setWorkflowStatus(latestWorkflowStatus);
       if (isTransientGatePayload(latestPayload)) {
         const fallbackPayload = await loadPreviousCompletedPublication(latestPayload);
         setPayload(fallbackPayload ?? latestPayload);
@@ -745,6 +786,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
       if (import.meta.env.DEV) {
         setPayload(DEV_DEMO_PAYLOAD);
         setStatusPayload(null);
+        setWorkflowStatus(null);
         return;
       }
       setError("Daily top picks have not been published yet.");
@@ -788,11 +830,11 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
         <div className="mx-auto flex max-w-7xl flex-col gap-5 px-5 py-6 md:flex-row md:items-center md:justify-between">
           <div>
             <h1 className="text-2xl font-semibold tracking-normal">
-              Stockara Daily Top Picks
+              Stockara
             </h1>
             <p className="mt-2 max-w-3xl text-sm text-slate-300">
-              Catalyst-ranked opportunities and urgent risk alerts generated
-              from static Phase 1 artifacts.
+              Daily reviewed market opportunities, lower-confidence research
+              ideas, and urgent risk alerts.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -822,7 +864,20 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
         </div>
       </section>
 
-      <section className="mx-auto grid max-w-7xl gap-4 px-5 py-5 md:grid-cols-4">
+      {!loading && payload && (
+        <div className="mx-auto max-w-7xl px-5 pt-5">
+          <DailyRunSummary
+            workflowStatus={workflowStatus}
+            publicationStatus={statusPayload}
+            publication={payload}
+            onOpenDataHealth={
+              onNavigate ? () => onNavigate("data-health") : undefined
+            }
+          />
+        </div>
+      )}
+
+      <section className="mx-auto grid max-w-7xl grid-cols-2 gap-4 px-5 py-5 lg:grid-cols-4">
         <Metric marker="time" label="Generated" value={generatedLabel} />
         <Metric
           marker="picks"
@@ -857,40 +912,39 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
         {!loading && payload && (
           <div className="space-y-8">
             {statusPayload && !statusIsForDisplayedPublication && (
-              <section>
-                <h2 className="mb-3 text-lg font-semibold">
-                  Current Publication Status
-                </h2>
-                <div className="border border-amber-700 bg-amber-950 p-4 text-sm text-amber-100">
-                  <p className="font-medium">
-                    {statusPayload.publication_date} publication is still waiting.
-                    Showing the latest completed publication from {payload.publication_date}.
-                  </p>
-                  {currentStatusWarnings.length > 0 && (
-                    <ul className="mt-2 space-y-1">
-                      {currentStatusWarnings.map((warning, index) => (
-                        <li key={`${warning}-${index}`}>{warning}</li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              </section>
+              <div className="flex flex-col gap-2 border-l-2 border-amber-500 bg-amber-950/60 px-4 py-3 text-sm text-amber-100 md:flex-row md:items-center md:justify-between">
+                <p>
+                  <span className="font-medium">
+                    {statusPayload.publication_date} review is still in progress.
+                  </span>{" "}
+                  Showing the latest completed publication from {payload.publication_date}.
+                </p>
+                {currentStatusWarnings[0] && (
+                  <span className="text-xs text-amber-200">
+                    {currentStatusWarnings[0]}
+                  </span>
+                )}
+              </div>
             )}
 
-            <section>
-              <h2 className="mb-3 text-lg font-semibold">Reviewed Top Picks</h2>
-              {reviewedTopPicks.length === 0 ? (
+            {reviewedTopPicks.length === 0 && reviewedSellAlerts.length === 0 ? (
+              <section>
+                <h2 className="mb-3 text-lg font-semibold">Reviewed Calls</h2>
                 <div className="border border-slate-800 bg-slate-900 p-5 text-sm text-slate-300">
-                  No BUY recommendations passed the review gate for this publication.
+                  No BUY or urgent SELL recommendation passed the review gate
+                  for this publication.
                 </div>
-              ) : (
+              </section>
+            ) : (
+              <section>
+                <h2 className="mb-3 text-lg font-semibold">Reviewed Top Picks</h2>
                 <div className="grid gap-4 lg:grid-cols-2">
                   {reviewedTopPicks.map((pick) => (
                     <PickRow key={pick.ticker} pick={pick} />
                   ))}
                 </div>
-              )}
-            </section>
+              </section>
+            )}
 
             {(lowerConfidencePicks.length > 0 || lowerConfidenceSellAlerts.length > 0) && (
               <section>
@@ -908,20 +962,16 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
               </section>
             )}
 
-            <section>
-              <h2 className="mb-3 text-lg font-semibold">Urgent Sell Alerts</h2>
-              {reviewedSellAlerts.length === 0 ? (
-                <div className="border border-slate-800 bg-slate-900 p-5 text-sm text-slate-300">
-                  No urgent sell alerts crossed the configured threshold.
-                </div>
-              ) : (
+            {reviewedSellAlerts.length > 0 && (
+              <section>
+                <h2 className="mb-3 text-lg font-semibold">Urgent Sell Alerts</h2>
                 <div className="grid gap-4 lg:grid-cols-2">
                   {reviewedSellAlerts.map((alert) => (
                     <SellAlertRow key={alert.ticker} alert={alert} />
                   ))}
                 </div>
-              )}
-            </section>
+              </section>
+            )}
 
             {fallbackPreviews.length > 0 && (
               <section>
@@ -935,20 +985,21 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
             )}
 
             {payload.data_warnings.length > 0 && (
-              <section>
-                <h2 className="mb-3 text-lg font-semibold">Data Warnings</h2>
-                <div className="border border-amber-700 bg-amber-950 p-4 text-sm text-amber-100">
+              <details className="border border-slate-800 bg-slate-900 text-sm text-slate-200">
+                <summary className="cursor-pointer px-4 py-3 font-medium hover:bg-slate-800">
+                  Data quality details ({payload.data_warnings.length} warnings)
+                </summary>
+                <div className="border-t border-slate-800 px-4 py-4">
                   <ul className="space-y-1">
                     {payload.data_warnings.map((warning) => (
                       <li key={warning}>{warning}</li>
                     ))}
                   </ul>
                   <FreshnessSummary dataQuality={payload.data_quality} />
+                  <BlockedDataIssues dataQuality={payload.data_quality} />
                 </div>
-              </section>
+              </details>
             )}
-
-            <BlockedDataIssues dataQuality={payload.data_quality} />
 
             {reviewRejections.length > 0 && (
               <section>
@@ -966,6 +1017,80 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
         )}
       </div>
     </main>
+  );
+}
+
+function DailyRunSummary({
+  workflowStatus,
+  publicationStatus,
+  publication,
+  onOpenDataHealth,
+}: {
+  workflowStatus: WorkflowStatusPayload | null;
+  publicationStatus: PublicationStatusPayload | null;
+  publication: TopPicksPayload;
+  onOpenDataHealth?: () => void;
+}) {
+  const status =
+    workflowStatus?.status ?? publicationStatus?.publication_status ?? "unknown";
+  const runDate =
+    workflowStatus?.run_date ??
+    publicationStatus?.publication_date ??
+    publication.publication_date;
+  const updatedAt = workflowStatus?.generated_at ?? publicationStatus?.generated_at;
+  const statusLabel = {
+    success: "Completed",
+    degraded: "Completed with gaps",
+    waiting: "In progress",
+    blocked: "Needs attention",
+    suppressed: "Needs attention",
+  }[status] ?? "Status unavailable";
+  const statusTone =
+    status === "success"
+      ? "bg-emerald-400"
+      : status === "degraded" || status === "waiting"
+        ? "bg-amber-400"
+        : status === "blocked" || status === "suppressed"
+          ? "bg-red-400"
+          : "bg-slate-500";
+
+  return (
+    <section className="border-y border-slate-800 py-4">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-[1.2fr_1fr_1fr_1.4fr_auto] lg:items-center">
+        <div>
+          <div className="text-xs font-semibold uppercase text-slate-500">
+            Daily run
+          </div>
+          <div className="mt-1 flex items-center gap-2 text-sm font-medium">
+            <span className={`h-2 w-2 rounded-full ${statusTone}`} />
+            {statusLabel}
+          </div>
+        </div>
+        <RunFact label="Run date" value={runDate} />
+        <RunFact label="Latest publication" value={publication.publication_date} />
+        <RunFact
+          label="Status updated"
+          value={updatedAt ? formatDate(updatedAt) : "Awaiting first workflow report"}
+        />
+        {onOpenDataHealth && (
+          <button
+            onClick={onOpenDataHealth}
+            className="h-9 border border-slate-700 px-3 text-sm font-medium text-slate-200 hover:bg-slate-900"
+          >
+            View data health
+          </button>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function RunFact({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="text-xs uppercase text-slate-500">{label}</div>
+      <div className="mt-1 text-sm text-slate-200">{value}</div>
+    </div>
   );
 }
 
@@ -999,29 +1124,26 @@ function BlockedDataIssues({ dataQuality }: { dataQuality?: DataQuality }) {
   );
   if (entries.length === 0) return null;
   return (
-    <section>
-      <h2 className="mb-3 text-lg font-semibold">Blocked Data Issues</h2>
-      <div className="border border-slate-800 bg-slate-900 p-4">
-        <div className="grid gap-3 text-sm md:grid-cols-3">
-          <Fact
-            label="Excluded"
-            value={String(dataQuality?.excluded_ticker_count ?? totalReasonCount(entries))}
-          />
-          <Fact label="Eligible" value={String(dataQuality?.eligible_ticker_count ?? "n/a")} />
-          <Fact label="Coverage" value={dataQuality?.coverage_status ?? "unknown"} />
-        </div>
-        <div className="mt-4 flex flex-wrap gap-2">
-          {entries.map(([reason, count]) => (
-            <span
-              key={reason}
-              className="border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-200"
-            >
-              {reason}: {count}
-            </span>
-          ))}
-        </div>
+    <div className="mt-4 border-t border-slate-800 pt-4">
+      <div className="grid gap-3 text-sm md:grid-cols-3">
+        <Fact
+          label="Excluded"
+          value={String(dataQuality?.excluded_ticker_count ?? totalReasonCount(entries))}
+        />
+        <Fact label="Eligible" value={String(dataQuality?.eligible_ticker_count ?? "n/a")} />
+        <Fact label="Coverage" value={dataQuality?.coverage_status ?? "unknown"} />
       </div>
-    </section>
+      <div className="mt-4 flex flex-wrap gap-2">
+        {entries.map(([reason, count]) => (
+          <span
+            key={reason}
+            className="border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-200"
+          >
+            {reason}: {count}
+          </span>
+        ))}
+      </div>
+    </div>
   );
 }
 

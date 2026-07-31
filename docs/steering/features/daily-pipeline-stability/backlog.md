@@ -85,4 +85,4 @@ which allowed one worker to overwrite another worker's lease or completion.
 - [x] Keep optional news/calendar collection in its dedicated workflow states instead of duplicating it across 198 manifest tasks.
 - [x] Cap manifest worker concurrency and separate manifest creation from worker dispatch so terminal status publication cannot be starved.
 - [ ] Deploy and manually verify a complete production workflow plus current public artifacts.
-- [ ] Refine the dashboard so stale publication state is concise, current workflow freshness is prominent, and degraded suggestions remain usable.
+- [x] Refine the dashboard so stale publication state is concise, current workflow freshness is prominent, and degraded suggestions remain usable.
