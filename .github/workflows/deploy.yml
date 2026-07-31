@@ -210,7 +210,7 @@ jobs:
 
           payload = json.load(open("workflow-latest.json"))
           required = {
-              "artifact_type": "daily_workflow_status",
+              "artifact_type": str,
               "run_date": str,
               "generated_at": str,
               "status": str,
@@ -223,6 +223,10 @@ jobs:
                   raise SystemExit(
                       f"workflow/latest.json missing or invalid required field: {key}"
                   )
+          if payload["artifact_type"] != "daily_workflow_status":
+              raise SystemExit(
+                  f"Unexpected workflow artifact type: {payload['artifact_type']}"
+              )
           if payload["status"] not in {"success", "degraded", "waiting", "blocked"}:
               raise SystemExit(f"Unexpected workflow status: {payload['status']}")
           print(

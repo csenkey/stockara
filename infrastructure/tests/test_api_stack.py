@@ -365,6 +365,7 @@ def test_daily_pipeline_state_machine_is_created_for_daily_production_run():
     assert "dispatch_ready_for_analysis" in definition
     assert "dispatch_deadline_exceeded" in definition
     assert "analysis_not_before" in definition
+    assert "$.manifest.Payload.body.manifest_date" in definition
     assert "max_tasks_per_run" in definition
     assert '\\"max_tasks_per_run\\":0' in definition
     assert '\\"max_tasks_per_run\\":4' in definition

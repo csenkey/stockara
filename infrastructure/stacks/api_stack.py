@@ -738,6 +738,9 @@ class ApiStack(Stack):
             {
                 "mode": "repair_price_gaps",
                 "max_tickers": 50,
+                "run_date": sfn.JsonPath.string_at(
+                    "$.manifest.Payload.body.manifest_date"
+                ),
                 "workflow": "daily_step_functions",
             },
             "$.price_gap_repair",
