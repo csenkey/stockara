@@ -84,5 +84,20 @@ which allowed one worker to overwrite another worker's lease or completion.
 - [x] Prevent workflow retries from inheriting an expired dispatch window from an earlier same-day manifest.
 - [x] Keep optional news/calendar collection in its dedicated workflow states instead of duplicating it across 198 manifest tasks.
 - [x] Cap manifest worker concurrency and separate manifest creation from worker dispatch so terminal status publication cannot be starved.
-- [ ] Deploy and manually verify a complete production workflow plus current public artifacts.
+- [x] Deploy and manually verify a complete production workflow plus current public artifacts.
+  - Production execution `manual-shadow-30622366734-1` completed successfully on
+    2026-07-31 with `status=degraded`, `decision=publish_degraded`, and no
+    workflow error. It published current `workflow/latest.json`,
+    `top-picks/latest.json`, `data-readiness/latest.json`, and
+    `sell-alerts/latest.json` artifacts for 2026-07-31.
 - [x] Refine the dashboard so stale publication state is concise, current workflow freshness is prominent, and degraded suggestions remain usable.
+
+## Follow-up Optimizations
+
+- [ ] Reduce the optional evidence-repair critical path by lowering its daily
+  batch size or allowing sufficiently fresh stored evidence to make that branch
+  non-blocking. The verified production run completed, but the 100-ticker
+  evidence branch dominated downstream runtime after news and calendars had
+  already finished.
+- [ ] Split degraded price chunks into smaller targeted retry tasks so successful
+  tickers are not repeatedly reread with the failed tickers in the same chunk.

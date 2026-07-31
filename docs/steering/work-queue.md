@@ -16,8 +16,8 @@ Other backlog-like files are reference material unless this file links to them a
 
 ### 1. Daily Pipeline Stability
 
-Status: Production recovery in progress. The first scheduled execution after
-schedule retirement timed out in manifest dispatch on 2026-07-31.
+Status: Production recovery complete. A full manual production execution
+completed and published current degraded artifacts on 2026-07-31.
 
 Goal: Make the once-daily Stockara publication stable, explainable, and useful even when optional data is degraded, by replacing independent schedule timing assumptions with one observable daily workflow.
 
@@ -38,11 +38,10 @@ Completed stability work:
 
 Next executable item:
 
-- Replace concurrent whole-document S3 task updates with atomic DynamoDB
-  per-task state while retaining S3 manifests as operational snapshots.
-- Add a bounded dispatch exit and guarantee terminal workflow status artifacts.
-- Run and verify a complete manual production workflow before resuming lower
-  priority work.
+- Optimize the optional evidence-repair critical path and degraded price-chunk
+  retries without weakening the verified terminal-publication guarantees.
+- Resume backtest-support work after these bounded stability optimizations, or
+  explicitly promote backtesting if daily runtime is acceptable for Phase 1.
 
 Why this matters:
 

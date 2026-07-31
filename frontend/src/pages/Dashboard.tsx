@@ -819,10 +819,17 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
   );
   const statusIsForDisplayedPublication =
     statusPayload?.publication_date === payload?.publication_date;
+  const workflowSupersedesStatus =
+    statusPayload &&
+    workflowStatus &&
+    ["success", "degraded", "blocked"].includes(workflowStatus.status) &&
+    workflowStatus.run_date >= statusPayload.publication_date;
+  const showTransientStatus =
+    statusPayload &&
+    !statusIsForDisplayedPublication &&
+    !workflowSupersedesStatus;
   const currentStatusWarnings =
-    statusPayload && !statusIsForDisplayedPublication
-      ? statusPayload.data_warnings
-      : [];
+    showTransientStatus ? statusPayload.data_warnings : [];
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
@@ -911,7 +918,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
 
         {!loading && payload && (
           <div className="space-y-8">
-            {statusPayload && !statusIsForDisplayedPublication && (
+            {showTransientStatus && (
               <div className="flex flex-col gap-2 border-l-2 border-amber-500 bg-amber-950/60 px-4 py-3 text-sm text-amber-100 md:flex-row md:items-center md:justify-between">
                 <p>
                   <span className="font-medium">
