@@ -68,6 +68,15 @@ The project also includes a public demo-trading feature: 100 superhero-named sim
 
 ## Scheduling And Deployment Expectations
 
+### Stable Versions And Rollback
+
+- Stable versions are immutable annotated Git tags using the `stockara-X.Y` naming convention, for example `stockara-1.0`.
+- Stable tags identify commits that are suitable for production rollback. They must not be moved, deleted, or reused.
+- GitHub Actions workflow `.github/workflows/deploy-stable.yml` provides the operator path to select a stable tag and deploy that exact tag to the `prod` stage.
+- The stable deployment workflow validates that the tag exists, checks out the tag, runs the same tests/build/deploy/smoke-test path as the normal deployment, and deploys only after validation passes.
+- To roll back, select the previously known-good stable tag in the `Deploy Stable Stockara Version` workflow. Do not create a new code commit merely to perform a rollback.
+- Pushes to `main` remain the normal development deployment path; they do not change existing stable tags.
+
 - Daily production workflow: Step Functions state machine `stockara-daily-pipeline`, started once daily before the analysis window, is the source of truth for static metadata sync, manifest dispatch, final price readiness, gap repair, news readiness, calendar/evidence collection, AI analysis/review, publication, and workflow status.
 - Stock collector: frequent standalone EventBridge collection is disabled as a rollback path; the daily workflow owns final pre-analysis price readiness.
 - News collector: EventBridge runs three times per day during development/testing as quota-conscious prefetching; the daily workflow owns final pre-analysis news readiness.

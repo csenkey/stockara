@@ -62,3 +62,11 @@ Prefer targeted tests while iterating, then run the relevant full suite before h
 - Prefer CDK table/index changes for database schema access patterns; do not silently mutate data shapes in application code.
 - Treat `docs/steering/` as the canonical planning source. `.kiro/specs/` is legacy reference material only.
 
+## Stable Release Rules
+
+- Create stable versions as annotated, immutable tags named `stockara-X.Y`.
+- Before creating a stable tag, run the relevant local tests/builds and confirm the current `main` deployment is green.
+- Push stable tags to the repository so GitHub Actions can validate and deploy them.
+- Use the `Deploy Stable Stockara Version` workflow to deploy or roll back to a stable tag; it always targets `prod` and runs the normal deployment verification.
+- Never force-move, delete, or reuse a stable tag. A correction requires a new version tag.
+- Record stable release and rollback decisions in the commit/tag message or the relevant steering note; do not rely on chat history alone.

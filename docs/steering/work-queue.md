@@ -168,3 +168,12 @@ When a feature or priority changes:
 - Update the relevant feature backlog under `docs/steering/features/`.
 - Keep `BACKLOG.md` as historical detail unless intentionally retiring sections.
 - Avoid creating new top-level backlog files.
+
+## Stable Release Operations
+
+Status: Implemented.
+
+- Stable production checkpoints use immutable annotated tags named `stockara-X.Y`.
+- GitHub Actions workflow `.github/workflows/deploy-stable.yml` validates a selected stable tag and deploys it to `prod` through the same checks as the normal deployment.
+- Rollbacks are performed by selecting an earlier stable tag in that workflow.
+- The current stable checkpoint is `stockara-1.0`; future stable releases must use a new tag.

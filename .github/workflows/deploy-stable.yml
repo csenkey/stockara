@@ -1,0 +1,50 @@
+name: Deploy Stable Stockara Version
+
+on:
+  workflow_dispatch:
+    inputs:
+      stable_tag:
+        description: "Stable tag to deploy, for example stockara-1.0"
+        required: true
+        type: string
+
+concurrency:
+  group: deploy-stable-${{ inputs.stable_tag }}
+  cancel-in-progress: false
+
+jobs:
+  validate-tag:
+    name: Validate stable tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository metadata
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify stable tag exists
+        shell: bash
+        env:
+          STABLE_TAG: ${{ inputs.stable_tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$STABLE_TAG" =~ ^stockara-[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Stable tags must use the stockara-X.Y format, optionally followed by a prerelease suffix."
+            exit 1
+          fi
+          git rev-parse --verify --quiet "refs/tags/${STABLE_TAG}^{commit}" >/dev/null || {
+            echo "Stable tag does not exist: ${STABLE_TAG}"
+            exit 1
+          }
+          echo "Validated ${STABLE_TAG} at $(git rev-parse "refs/tags/${STABLE_TAG}^{commit}")"
+
+  deploy:
+    name: Deploy selected stable tag to prod
+    needs: validate-tag
+    uses: ./.github/workflows/deploy.yml
+    with:
+      deployment_stage: prod
+      deploy_ref: ${{ inputs.stable_tag }}
+    secrets: inherit

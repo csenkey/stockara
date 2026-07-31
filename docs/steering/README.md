@@ -24,6 +24,14 @@ These files are the canonical, tool-neutral steering layer for Stockara. Codex a
 - If `.kiro` disagrees with `docs/steering/`, follow `docs/steering/`.
 - If older backlog or handoff files disagree with `docs/steering/work-queue.md`, follow `docs/steering/work-queue.md`.
 
+## Stable Release Operations
+
+- Stable production versions are immutable annotated Git tags named `stockara-X.Y`, such as `stockara-1.0`.
+- A tag is a rollback point only after its commit has passed the normal deployment checks.
+- Use `.github/workflows/deploy-stable.yml` from the GitHub Actions UI to deploy a selected stable tag to the `prod` stage.
+- Do not move, delete, or reuse a stable tag. Create a new tag for a new stable version.
+- Normal development continues on `main`; pushes to `main` continue to deploy the active production version automatically.
+
 ## Current Feature Steering
 
 - `work-queue.md`

@@ -5,9 +5,21 @@ on:
     branches:
       - main
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      deployment_stage:
+        description: "Deployment stage"
+        required: false
+        type: string
+        default: ""
+      deploy_ref:
+        description: "Git ref to deploy"
+        required: false
+        type: string
+        default: ""
 
 concurrency:
-  group: deploy-${{ github.ref_name }}
+  group: deploy-${{ inputs.deploy_ref || github.ref_name }}
   cancel-in-progress: false
 
 env:
@@ -29,10 +41,19 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.deploy_ref || github.ref }}
 
       - name: Resolve deployment stage
         shell: bash
         run: |
+          requested_stage="${{ inputs.deployment_stage }}"
+          if [[ -n "$requested_stage" ]]; then
+            echo "DEPLOYMENT_STAGE=$requested_stage" >> "$GITHUB_ENV"
+            echo "Resolved deployment stage: $requested_stage"
+            exit 0
+          fi
+
           branch="${GITHUB_REF_NAME}"
           if [[ "$branch" == "main" ]]; then
             stage="prod"
