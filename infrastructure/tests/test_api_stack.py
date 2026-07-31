@@ -366,7 +366,10 @@ def test_daily_pipeline_state_machine_is_created_for_daily_production_run():
     assert "dispatch_deadline_exceeded" in definition
     assert "analysis_not_before" in definition
     assert "max_tasks_per_run" in definition
-    assert "24" in definition
+    assert '\\"max_tasks_per_run\\":0' in definition
+    assert '\\"max_tasks_per_run\\":4' in definition
+    assert '\\"task_types\\":[\\"price\\"]' in definition
+    assert '\\"Seconds\\":60' in definition
     assert "repair_news" in definition
     assert "repair_calendars" in definition
     assert "repair_evidence" in definition

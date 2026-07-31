@@ -701,7 +701,9 @@ class ApiStack(Stack):
             {
                 "workflow": "daily_step_functions",
                 "stage": "create_or_refresh_manifest",
-                "max_tasks_per_run": 24,
+                "max_tasks_per_run": 0,
+                "task_types": ["price"],
+                "workflow_started_at": sfn.JsonPath.execution_start_time,
             },
             "$.manifest",
         )
@@ -711,14 +713,16 @@ class ApiStack(Stack):
             {
                 "workflow": "daily_step_functions",
                 "stage": "dispatch_manifest_tasks",
-                "max_tasks_per_run": 24,
+                "max_tasks_per_run": 4,
+                "task_types": ["price"],
+                "workflow_started_at": sfn.JsonPath.execution_start_time,
             },
             "$.manifest_dispatch",
         )
         wait_for_manifest_dispatch = sfn.Wait(
             self,
             "WaitForManifestDispatch",
-            time=sfn.WaitTime.duration(Duration.minutes(5)),
+            time=sfn.WaitTime.duration(Duration.minutes(1)),
             comment="Wait for leased manifest worker Lambdas before dispatching more chunks.",
         )
         wait_for_manifest_dispatch.next(dispatch_manifest_tasks)

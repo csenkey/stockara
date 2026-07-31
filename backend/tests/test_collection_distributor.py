@@ -234,6 +234,24 @@ def test_production_sized_manifest_uses_bounded_chunk_tasks():
     ) == 90
 
 
+def test_price_only_manifest_avoids_duplicate_optional_collection_tasks():
+    generated_at = datetime(2026, 7, 31, 21, 5, tzinfo=timezone.utc)
+    stocks = [{"ticker": f"T{index:04d}"} for index in range(900)]
+
+    manifest = build_manifest(
+        stocks,
+        manifest_date=date(2026, 7, 31),
+        generated_at=generated_at,
+        task_types=[CollectionTaskType.PRICE],
+    )
+
+    assert manifest.task_types == [CollectionTaskType.PRICE]
+    assert manifest.summary.total_tasks == 90
+    assert {task.task_type for task in manifest.tasks} == {
+        CollectionTaskType.PRICE
+    }
+
+
 def test_dispatch_deadline_exits_with_active_tasks(monkeypatch):
     generated_at = datetime(2026, 7, 31, 21, 5, tzinfo=timezone.utc)
     manifest = build_manifest(
@@ -256,6 +274,63 @@ def test_dispatch_deadline_exits_with_active_tasks(monkeypatch):
     assert after["dispatch_deadline_exceeded"] is True
     assert after["dispatch_ready_for_analysis"] is False
     assert after["analysis_not_before"] == "2026-07-31T22:00:00+00:00"
+
+
+def test_dispatch_deadline_uses_current_workflow_start_for_reused_manifest(
+    monkeypatch,
+):
+    generated_at = datetime(2026, 7, 30, 21, 5, tzinfo=timezone.utc)
+    workflow_started_at = datetime(2026, 7, 31, 8, 50, tzinfo=timezone.utc)
+    manifest = build_manifest(
+        [{"ticker": "AAPL"}],
+        manifest_date=date(2026, 7, 31),
+        generated_at=generated_at,
+    )
+    monkeypatch.setattr(collection_distributor, "DISPATCH_DEADLINE_MINUTES", 70)
+
+    status = collection_distributor._manifest_dispatch_status(
+        manifest,
+        workflow_started_at + timedelta(minutes=1),
+        dispatch_started_at=workflow_started_at,
+    )
+
+    assert status["dispatch_deadline"] == "2026-07-31T10:00:00+00:00"
+    assert status["dispatch_deadline_exceeded"] is False
+
+
+@patch("src.collectors.collection_distributor.boto3.client")
+def test_dispatch_respects_active_worker_cap(mock_boto_client, monkeypatch):
+    lambda_client = MagicMock()
+    mock_boto_client.return_value = lambda_client
+    monkeypatch.setattr(collection_distributor, "PRICE_COLLECTOR_FUNCTION_NAME", "price-fn")
+    now = datetime(2026, 7, 31, 21, 5, tzinfo=timezone.utc)
+    manifest = build_manifest(
+        [{"ticker": f"T{index:03d}"} for index in range(1, 61)],
+        manifest_date=date(2026, 7, 31),
+        generated_at=now,
+        task_types=[CollectionTaskType.PRICE],
+    )
+    for task in manifest.tasks[:3]:
+        task.status = CollectionTaskStatus.RUNNING
+        task.lease_expires_at = now + timedelta(minutes=10)
+
+    with patch(
+        "src.collectors.collection_distributor.lease_persisted_manifest_task"
+    ) as lease_task:
+        pending = manifest.tasks[3].model_copy(deep=True)
+        pending.status = CollectionTaskStatus.LEASED
+        pending.lease_expires_at = now + timedelta(minutes=15)
+        lease_task.return_value = pending
+        dispatched = collection_distributor._dispatch_ready_tasks(
+            "stockara-artifacts",
+            "collection_manifest/2026-07-31.json",
+            manifest,
+            now,
+            max_tasks_per_run=4,
+        )
+
+    assert dispatched == [manifest.tasks[3].task_id]
+    assert lambda_client.invoke.call_count == 1
 
 
 def test_expired_lease_is_ready_for_redispatch():

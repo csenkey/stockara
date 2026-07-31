@@ -67,6 +67,8 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
 
     key = collection_manifest_s3_key(manifest_date)
     now = datetime.now(timezone.utc)
+    task_types = _task_types(event)
+    workflow_started_at = _workflow_started_at(event, now)
     manifest = _load_existing_manifest(bucket, key)
     created = manifest is None
     if manifest is None:
@@ -79,15 +81,27 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
             stocks,
             manifest_date=manifest_date,
             generated_at=now,
+            task_types=task_types,
         )
     refresh_manifest_task_state(manifest)
+    if task_types is not None:
+        manifest.tasks = [
+            task for task in manifest.tasks if task.task_type in task_types
+        ]
+        manifest.task_types = task_types
+    manifest.analysis_not_before = workflow_started_at
+    recompute_summary(manifest)
 
     max_tasks_per_run = _max_tasks_per_run(event)
     dispatched = _dispatch_ready_tasks(bucket, key, manifest, now, max_tasks_per_run)
     recompute_summary(manifest)
     _put_manifest(bucket, key, manifest)
     _publish_data_health_artifact(bucket, key, manifest, now)
-    dispatch_status = _manifest_dispatch_status(manifest, now)
+    dispatch_status = _manifest_dispatch_status(
+        manifest,
+        now,
+        dispatch_started_at=workflow_started_at,
+    )
     log.info(
         "collection_manifest_refreshed",
         bucket=bucket,
@@ -119,8 +133,15 @@ def build_manifest(
     stocks: list[dict[str, Any]],
     manifest_date: date,
     generated_at: datetime,
+    task_types: list[CollectionTaskType] | None = None,
 ) -> CollectionManifest:
     """Build a daily manifest from active stock metadata."""
+    task_types = task_types or [
+        CollectionTaskType.PRICE,
+        CollectionTaskType.NEWS,
+        CollectionTaskType.EARNINGS,
+        CollectionTaskType.DIVIDEND,
+    ]
     active_tickers = sorted(
         {
             str(stock.get("ticker", "")).strip().upper()
@@ -129,38 +150,21 @@ def build_manifest(
         }
     )
     tasks: list[CollectionTask] = []
-    tasks.extend(
-        _ticker_chunk_tasks(
-            CollectionTaskType.PRICE,
-            active_tickers,
-            PRICE_TASK_CHUNK_SIZE,
-            generated_at,
+    task_chunk_sizes = {
+        CollectionTaskType.PRICE: PRICE_TASK_CHUNK_SIZE,
+        CollectionTaskType.NEWS: NEWS_TASK_CHUNK_SIZE,
+        CollectionTaskType.EARNINGS: CALENDAR_TASK_CHUNK_SIZE,
+        CollectionTaskType.DIVIDEND: CALENDAR_TASK_CHUNK_SIZE,
+    }
+    for task_type in task_types:
+        tasks.extend(
+            _ticker_chunk_tasks(
+                task_type,
+                active_tickers,
+                task_chunk_sizes[task_type],
+                generated_at,
+            )
         )
-    )
-    tasks.extend(
-        _ticker_chunk_tasks(
-            CollectionTaskType.NEWS,
-            active_tickers,
-            NEWS_TASK_CHUNK_SIZE,
-            generated_at,
-        )
-    )
-    tasks.extend(
-        _ticker_chunk_tasks(
-            CollectionTaskType.EARNINGS,
-            active_tickers,
-            CALENDAR_TASK_CHUNK_SIZE,
-            generated_at,
-        )
-    )
-    tasks.extend(
-        _ticker_chunk_tasks(
-            CollectionTaskType.DIVIDEND,
-            active_tickers,
-            CALENDAR_TASK_CHUNK_SIZE,
-            generated_at,
-        )
-    )
     analysis_not_before = generated_at.replace(
         hour=ANALYSIS_HOUR_UTC,
         minute=0,
@@ -173,12 +177,7 @@ def build_manifest(
         updated_at=generated_at,
         analysis_not_before=analysis_not_before,
         active_ticker_count=len(active_tickers),
-        task_types=[
-            CollectionTaskType.PRICE,
-            CollectionTaskType.NEWS,
-            CollectionTaskType.EARNINGS,
-            CollectionTaskType.DIVIDEND,
-        ],
+        task_types=task_types,
         tasks=tasks,
         summary=_initial_summary(tasks, len(active_tickers)),
     )
@@ -275,6 +274,24 @@ def _max_tasks_per_run(event: dict[str, Any]) -> int:
         return MAX_TASKS_PER_RUN
 
 
+def _task_types(event: dict[str, Any]) -> list[CollectionTaskType] | None:
+    values = event.get("task_types")
+    if values is None:
+        return None
+    return list(dict.fromkeys(CollectionTaskType(str(value)) for value in values))
+
+
+def _workflow_started_at(
+    event: dict[str, Any],
+    fallback: datetime,
+) -> datetime:
+    value = event.get("workflow_started_at")
+    if not value:
+        return fallback
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return parsed.astimezone(timezone.utc)
+
+
 def _load_existing_manifest(bucket: str, key: str) -> CollectionManifest | None:
     try:
         response = boto3.client("s3").get_object(Bucket=bucket, Key=key)
@@ -293,8 +310,14 @@ def _dispatch_ready_tasks(
 ) -> list[str]:
     lambda_client = boto3.client("lambda")
     dispatched: list[str] = []
+    active_task_count = sum(
+        task.status in {CollectionTaskStatus.LEASED, CollectionTaskStatus.RUNNING}
+        and bool(task.lease_expires_at and task.lease_expires_at > now)
+        for task in manifest.tasks
+    )
+    available_slots = max(max_tasks_per_run - active_task_count, 0)
     for task in _ready_tasks_by_type(manifest, now):
-        if len(dispatched) >= max_tasks_per_run:
+        if len(dispatched) >= available_slots:
             break
         function_name = _worker_function_name(task.task_type)
         if not function_name:
@@ -343,6 +366,8 @@ def _replace_manifest_task(
 def _manifest_dispatch_status(
     manifest: CollectionManifest,
     now: datetime,
+    *,
+    dispatch_started_at: datetime | None = None,
 ) -> dict[str, Any]:
     summary = manifest.summary
     pending = summary.pending_tasks
@@ -352,7 +377,7 @@ def _manifest_dispatch_status(
     failed = summary.failed_tasks
     active_incomplete = pending + leased + running
     incomplete = active_incomplete + retry_wait
-    dispatch_deadline = manifest.generated_at + timedelta(
+    dispatch_deadline = (dispatch_started_at or manifest.generated_at) + timedelta(
         minutes=DISPATCH_DEADLINE_MINUTES
     )
     return {
