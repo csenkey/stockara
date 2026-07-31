@@ -1,12 +1,13 @@
 """Helpers for reading and updating collection manifests in S3."""
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any
+from typing import Any, Callable
 
 import boto3
 
+from src.db.connection import store
 from src.models.schemas import (
     CollectionCoverageGate,
     CollectionManifest,
@@ -38,6 +39,7 @@ TRANSIENT_RETRY_BASE_MINUTES = {
     "finnhub": 15,
 }
 MAX_TRANSIENT_RETRY_MINUTES = 6 * 60
+TASK_MUTATION_MAX_ATTEMPTS = 8
 
 
 def load_manifest(bucket: str, key: str) -> CollectionManifest:
@@ -54,6 +56,172 @@ def write_manifest(bucket: str, key: str, manifest: CollectionManifest) -> None:
         ContentType="application/json",
     )
     emit_manifest_metrics(manifest)
+
+
+def manifest_date_from_key(key: str) -> date:
+    filename = key.rsplit("/", 1)[-1]
+    return date.fromisoformat(filename.removesuffix(".json"))
+
+
+def refresh_manifest_task_state(
+    manifest: CollectionManifest,
+    *,
+    seed_if_missing: bool = True,
+) -> CollectionManifest:
+    """Overlay the S3 snapshot with authoritative per-task DynamoDB state."""
+    rows = store.collection_manifest_tasks(manifest.manifest_date)
+    if not rows and seed_if_missing:
+        store.seed_collection_manifest_tasks(
+            manifest.manifest_date,
+            [task.model_dump(mode="json") for task in manifest.tasks],
+        )
+        rows = store.collection_manifest_tasks(manifest.manifest_date)
+    if rows:
+        manifest.tasks = [
+            CollectionTask.model_validate(row)
+            for row in sorted(rows, key=lambda row: str(row["task_id"]))
+        ]
+        recompute_summary(manifest)
+    return manifest
+
+
+def get_persisted_manifest_task(
+    manifest_date: date,
+    task_id: str,
+) -> CollectionTask:
+    row = store.get_collection_manifest_task(manifest_date, task_id)
+    if row is None:
+        raise ValueError(f"Collection manifest task not found: {task_id}")
+    return CollectionTask.model_validate(row)
+
+
+def lease_persisted_manifest_task(
+    manifest_date: date,
+    task_id: str,
+    *,
+    lease_owner: str,
+    lease_expires_at: datetime,
+    now: datetime,
+) -> CollectionTask | None:
+    def mutate(task: CollectionTask) -> bool:
+        ready = task.status == CollectionTaskStatus.PENDING
+        if task.status == CollectionTaskStatus.RETRY_WAIT:
+            ready = task.next_retry_at is None or task.next_retry_at <= now
+        if task.status in {
+            CollectionTaskStatus.LEASED,
+            CollectionTaskStatus.RUNNING,
+        }:
+            ready = bool(task.lease_expires_at and task.lease_expires_at <= now)
+        if not ready:
+            return False
+        task.status = CollectionTaskStatus.LEASED
+        task.lease_owner = lease_owner
+        task.lease_expires_at = lease_expires_at
+        task.updated_at = now
+        return True
+
+    task, changed = _mutate_persisted_manifest_task(
+        manifest_date,
+        task_id,
+        mutate,
+    )
+    return task if changed else None
+
+
+def mark_persisted_manifest_task_running(
+    manifest_date: date,
+    task_id: str,
+    *,
+    lease_owner: str | None,
+    now: datetime | None = None,
+) -> CollectionTask:
+    now = now or datetime.now(timezone.utc)
+
+    def mutate(task: CollectionTask) -> bool:
+        if task.status in {
+            CollectionTaskStatus.SUCCEEDED,
+            CollectionTaskStatus.FAILED,
+            CollectionTaskStatus.SKIPPED,
+        }:
+            return False
+        if (
+            task.status == CollectionTaskStatus.RUNNING
+            and task.lease_owner == lease_owner
+        ):
+            return False
+        mark_task_running(task_manifest(task), task_id, lease_owner, now)
+        return True
+
+    task, _ = _mutate_persisted_manifest_task(manifest_date, task_id, mutate)
+    return task
+
+
+def complete_persisted_manifest_task(
+    manifest_date: date,
+    task_id: str,
+    output_counts: CollectionOutputCounts,
+    *,
+    failed: bool = False,
+    failure_reason: str | None = None,
+    now: datetime | None = None,
+) -> CollectionTask:
+    now = now or datetime.now(timezone.utc)
+
+    def mutate(task: CollectionTask) -> bool:
+        if task.status in {
+            CollectionTaskStatus.SUCCEEDED,
+            CollectionTaskStatus.FAILED,
+            CollectionTaskStatus.SKIPPED,
+        }:
+            return False
+        complete_task(
+            task_manifest(task),
+            task_id,
+            output_counts,
+            failed=failed,
+            failure_reason=failure_reason,
+            now=now,
+        )
+        return True
+
+    task, _ = _mutate_persisted_manifest_task(manifest_date, task_id, mutate)
+    return task
+
+
+def _mutate_persisted_manifest_task(
+    manifest_date: date,
+    task_id: str,
+    mutate: Callable[[CollectionTask], bool],
+) -> tuple[CollectionTask, bool]:
+    for _ in range(TASK_MUTATION_MAX_ATTEMPTS):
+        row = store.get_collection_manifest_task(manifest_date, task_id)
+        if row is None:
+            raise ValueError(f"Collection manifest task not found: {task_id}")
+        version = int(row.get("version", 0))
+        task = CollectionTask.model_validate(row)
+        if not mutate(task):
+            return task, False
+        if store.replace_collection_manifest_task(
+            manifest_date,
+            task.model_dump(mode="json"),
+            version,
+        ):
+            return task, True
+    raise RuntimeError(
+        f"Collection manifest task update conflicted repeatedly: {task_id}"
+    )
+
+
+def task_manifest(task: CollectionTask) -> CollectionManifest:
+    """Build the smallest valid manifest needed by shared lifecycle helpers."""
+    return CollectionManifest(
+        manifest_date=task.created_at.date(),
+        generated_at=task.created_at,
+        updated_at=task.updated_at,
+        active_ticker_count=len(task.tickers),
+        task_types=[task.task_type],
+        tasks=[task],
+    )
 
 
 def emit_manifest_metrics(manifest: CollectionManifest) -> None:

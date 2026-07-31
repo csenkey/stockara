@@ -68,3 +68,18 @@
 - [x] Decide whether stock gap scan remains a separate after-market maintenance job or becomes a workflow step.
   - Decision: keep the 23:15 UTC stock gap scan as separate after-market maintenance; the daily workflow owns same-day price readiness through manifest dispatch and `repair_price_gaps`.
 - [x] Update runbooks, architecture docs, and smoke tests to treat the Step Functions execution as the source of daily operational truth.
+
+## Milestone 6: Production Dispatch Recovery
+
+The first scheduled production execution after schedule retirement timed out on
+2026-07-31 after spending three hours in the manifest dispatch loop. Mutable
+task state was stored by concurrent workers through whole-document S3 writes,
+which allowed one worker to overwrite another worker's lease or completion.
+
+- [x] Store mutable manifest task state as atomic per-task DynamoDB rows while keeping S3 manifests as public operational snapshots.
+- [x] Make manifest creation and task lifecycle updates idempotent and compatible with existing S3 manifests.
+- [x] Bound manifest dispatch by an explicit deadline and convert exhausted dispatch into a typed blocked/degraded workflow result.
+- [x] Publish `workflow/latest.json` and dated workflow status for every terminal workflow path, including dispatch exhaustion and caught failures.
+- [x] Add tests for concurrent task completion, expired leases, a 900-ticker manifest, and workflow terminal paths.
+- [ ] Deploy and manually verify a complete production workflow plus current public artifacts.
+- [ ] Refine the dashboard so stale publication state is concise, current workflow freshness is prominent, and degraded suggestions remain usable.

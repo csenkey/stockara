@@ -1,7 +1,7 @@
 """Tests for the collection distributor manifest creation."""
 
 import json
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 from src.collectors import collection_distributor
@@ -66,8 +66,29 @@ def test_handler_writes_manifest_to_s3(mock_pool, mock_active_stocks, mock_boto_
         "cloudwatch": MagicMock(),
     }[service]
     mock_active_stocks.return_value = [{"ticker": "aapl"}, {"ticker": "msft"}]
+    expected_manifest = build_manifest(
+        [{"ticker": "aapl"}, {"ticker": "msft"}],
+        manifest_date=date(2026, 6, 20),
+        generated_at=datetime(2026, 6, 20, tzinfo=timezone.utc),
+    )
+    tasks_by_id = {task.task_id: task for task in expected_manifest.tasks}
+
+    def lease_task(_, task_id, **kwargs):
+        task = tasks_by_id[task_id].model_copy(deep=True)
+        task.status = CollectionTaskStatus.LEASED
+        task.lease_owner = kwargs["lease_owner"]
+        task.lease_expires_at = kwargs["lease_expires_at"]
+        return task
 
     with (
+        patch(
+            "src.collectors.collection_distributor.refresh_manifest_task_state",
+            side_effect=lambda manifest: manifest,
+        ),
+        patch(
+            "src.collectors.collection_distributor.lease_persisted_manifest_task",
+            side_effect=lease_task,
+        ),
         patch(
             "src.collectors.collection_distributor.PRICE_COLLECTOR_FUNCTION_NAME",
             "stockara-stock-collector",
@@ -150,14 +171,26 @@ def test_dispatch_ready_tasks_round_robins_task_types(mock_boto_client, monkeypa
         manifest_date=date(2026, 6, 20),
         generated_at=datetime(2026, 6, 20, 7, 30, tzinfo=timezone.utc),
     )
+    tasks_by_id = {task.task_id: task for task in manifest.tasks}
 
-    dispatched = collection_distributor._dispatch_ready_tasks(
-        "stockara-artifacts",
-        "collection_manifest/2026-06-20.json",
-        manifest,
-        datetime(2026, 6, 20, 7, 31, tzinfo=timezone.utc),
-        max_tasks_per_run=4,
-    )
+    def lease_task(_, task_id, **kwargs):
+        task = tasks_by_id[task_id].model_copy(deep=True)
+        task.status = CollectionTaskStatus.LEASED
+        task.lease_owner = kwargs["lease_owner"]
+        task.lease_expires_at = kwargs["lease_expires_at"]
+        return task
+
+    with patch(
+        "src.collectors.collection_distributor.lease_persisted_manifest_task",
+        side_effect=lease_task,
+    ):
+        dispatched = collection_distributor._dispatch_ready_tasks(
+            "stockara-artifacts",
+            "collection_manifest/2026-06-20.json",
+            manifest,
+            datetime(2026, 6, 20, 7, 31, tzinfo=timezone.utc),
+            max_tasks_per_run=4,
+        )
 
     assert dispatched == [
         "price-0000-T001-T010",
@@ -169,6 +202,81 @@ def test_dispatch_ready_tasks_round_robins_task_types(mock_boto_client, monkeypa
         call.kwargs["FunctionName"] for call in lambda_client.invoke.call_args_list
     ]
     assert invoked_functions == ["price-fn", "news-fn", "earnings-fn", "dividend-fn"]
+
+
+def test_production_sized_manifest_uses_bounded_chunk_tasks():
+    generated_at = datetime(2026, 7, 31, 21, 5, tzinfo=timezone.utc)
+    stocks = [{"ticker": f"T{index:04d}"} for index in range(900)]
+
+    with (
+        patch.object(collection_distributor, "PRICE_TASK_CHUNK_SIZE", 10),
+        patch.object(collection_distributor, "NEWS_TASK_CHUNK_SIZE", 50),
+        patch.object(collection_distributor, "CALENDAR_TASK_CHUNK_SIZE", 10),
+    ):
+        manifest = build_manifest(
+            stocks,
+            manifest_date=date(2026, 7, 31),
+            generated_at=generated_at,
+        )
+
+    assert manifest.summary.total_tasks == 288
+    assert sum(
+        task.task_type == CollectionTaskType.PRICE for task in manifest.tasks
+    ) == 90
+    assert sum(
+        task.task_type == CollectionTaskType.NEWS for task in manifest.tasks
+    ) == 18
+    assert sum(
+        task.task_type == CollectionTaskType.EARNINGS for task in manifest.tasks
+    ) == 90
+    assert sum(
+        task.task_type == CollectionTaskType.DIVIDEND for task in manifest.tasks
+    ) == 90
+
+
+def test_dispatch_deadline_exits_with_active_tasks(monkeypatch):
+    generated_at = datetime(2026, 7, 31, 21, 5, tzinfo=timezone.utc)
+    manifest = build_manifest(
+        [{"ticker": "AAPL"}],
+        manifest_date=date(2026, 7, 31),
+        generated_at=generated_at,
+    )
+    monkeypatch.setattr(collection_distributor, "DISPATCH_DEADLINE_MINUTES", 70)
+
+    before = collection_distributor._manifest_dispatch_status(
+        manifest,
+        generated_at + timedelta(minutes=69),
+    )
+    after = collection_distributor._manifest_dispatch_status(
+        manifest,
+        generated_at + timedelta(minutes=70),
+    )
+
+    assert before["dispatch_deadline_exceeded"] is False
+    assert after["dispatch_deadline_exceeded"] is True
+    assert after["dispatch_ready_for_analysis"] is False
+    assert after["analysis_not_before"] == "2026-07-31T22:00:00+00:00"
+
+
+def test_expired_lease_is_ready_for_redispatch():
+    generated_at = datetime(2026, 7, 31, 21, 5, tzinfo=timezone.utc)
+    manifest = build_manifest(
+        [{"ticker": "AAPL"}],
+        manifest_date=date(2026, 7, 31),
+        generated_at=generated_at,
+    )
+    task = manifest.tasks[0]
+    task.status = CollectionTaskStatus.LEASED
+    task.lease_expires_at = generated_at + timedelta(minutes=15)
+
+    assert collection_distributor._task_is_ready(
+        task,
+        generated_at + timedelta(minutes=14),
+    ) is False
+    assert collection_distributor._task_is_ready(
+        task,
+        generated_at + timedelta(minutes=15),
+    ) is True
 
 
 @patch("src.collectors.collection_distributor.DatabasePool")

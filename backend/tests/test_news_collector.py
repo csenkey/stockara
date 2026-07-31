@@ -30,7 +30,7 @@ from backend.src.collectors.news_collector import (
     handler,
 )
 from src.collectors.collection_distributor import build_manifest
-from src.models.schemas import CollectionTaskStatus, CollectionTaskType
+from src.models.schemas import CollectionTaskType
 from backend.src.services.secrets import get_provider_api_key
 
 
@@ -1053,14 +1053,16 @@ class TestHandler:
         assert "error" in result["body"]["status"]
         mock_db_pool.close.assert_called_once()
 
-    @patch("backend.src.collectors.news_collector.write_manifest")
-    @patch("backend.src.collectors.news_collector.load_manifest")
+    @patch("backend.src.collectors.news_collector.complete_persisted_manifest_task")
+    @patch("backend.src.collectors.news_collector.mark_persisted_manifest_task_running")
+    @patch("backend.src.collectors.news_collector.get_persisted_manifest_task")
     @patch("backend.src.collectors.news_collector.collect_news")
     def test_handler_processes_manifest_news_task(
         self,
         mock_collect,
-        mock_load_manifest,
-        mock_write_manifest,
+        mock_get_task,
+        mock_mark_running,
+        mock_complete_task,
     ):
         """Manifest task mode scopes news collection to the chunk tickers."""
         manifest = build_manifest(
@@ -1073,7 +1075,7 @@ class TestHandler:
             for candidate in manifest.tasks
             if candidate.task_type == CollectionTaskType.NEWS
         )
-        mock_load_manifest.return_value = manifest
+        mock_get_task.return_value = task
         mock_collect.return_value = {
             "status": "success",
             "articles_processed": 2,
@@ -1100,9 +1102,9 @@ class TestHandler:
 
         assert result["statusCode"] == 200
         mock_collect.assert_called_once_with(tickers=task.tickers)
-        assert mock_write_manifest.call_count == 2
-        assert task.status == CollectionTaskStatus.SUCCEEDED
-        assert task.output_counts.records_fetched == 3
-        assert task.output_counts.records_written == 2
-        assert task.output_counts.duplicate_records == 1
-        assert manifest.summary.succeeded_tasks == 1
+        mock_mark_running.assert_called_once()
+        mock_complete_task.assert_called_once()
+        counts = mock_complete_task.call_args.args[2]
+        assert counts.records_fetched == 3
+        assert counts.records_written == 2
+        assert counts.duplicate_records == 1

@@ -1742,6 +1742,9 @@ def build_workflow_status_payload(
                 workflow_result.get("sync_static_metadata")
             ),
             "manifest": _workflow_step_summary(workflow_result.get("manifest")),
+            "manifest_dispatch": _workflow_step_summary(
+                workflow_result.get("manifest_dispatch")
+            ),
             "prices": _workflow_step_summary(workflow_result.get("prices")),
             "price_gap_repair": _workflow_step_summary(
                 workflow_result.get("price_gap_repair")
@@ -1799,6 +1802,15 @@ def _workflow_step_summary(value: Any) -> dict[str, Any]:
         "failed_count": body.get("failed_count"),
         "candidate_count": body.get("candidate_count"),
         "analyzed_count": body.get("analyzed_count"),
+        "active_incomplete_task_count": body.get(
+            "active_incomplete_task_count"
+        ),
+        "incomplete_task_count": body.get("incomplete_task_count"),
+        "dispatch_deadline": body.get("dispatch_deadline"),
+        "dispatch_deadline_exceeded": body.get(
+            "dispatch_deadline_exceeded"
+        ),
+        "task_counts": body.get("task_counts"),
     }
     return {key: item for key, item in summary.items() if item is not None}
 

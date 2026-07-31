@@ -48,7 +48,7 @@ from backend.src.collectors.stock_collector import (
     _store_stooq_backfill_records,
 )
 from src.collectors.collection_distributor import build_manifest
-from src.models.schemas import CollectionTaskStatus, CollectionTaskType
+from src.models.schemas import CollectionTaskType
 
 
 class _RemainingTimeContext:
@@ -2052,8 +2052,9 @@ class TestHandler:
         )
         mock_movement.assert_called_once_with({"AAPL", "MSFT"})
 
-    @patch("backend.src.collectors.stock_collector.write_manifest")
-    @patch("backend.src.collectors.stock_collector.load_manifest")
+    @patch("backend.src.collectors.stock_collector.complete_persisted_manifest_task")
+    @patch("backend.src.collectors.stock_collector.mark_persisted_manifest_task_running")
+    @patch("backend.src.collectors.stock_collector.get_persisted_manifest_task")
     @patch("backend.src.collectors.stock_collector._emit_metric")
     @patch("backend.src.collectors.stock_collector._compute_and_store_movement_signals")
     @patch("backend.src.collectors.stock_collector._record_failed_ticker_state")
@@ -2072,8 +2073,9 @@ class TestHandler:
         mock_failure_state,
         mock_movement,
         mock_metric,
-        mock_load_manifest,
-        mock_write_manifest,
+        mock_get_task,
+        mock_mark_running,
+        mock_complete_task,
     ):
         generated_at = datetime(2026, 6, 20, 7, 30, tzinfo=timezone.utc)
         manifest = build_manifest(
@@ -2086,7 +2088,7 @@ class TestHandler:
             for task in manifest.tasks
             if task.task_type == CollectionTaskType.PRICE
         )
-        mock_load_manifest.return_value = manifest
+        mock_get_task.return_value = price_task
         mock_watchlist.return_value = [{"ticker": "AAPL"}, {"ticker": "MSFT"}]
         mock_batch.return_value = BatchResult(
             records_inserted=2,
@@ -2106,16 +2108,15 @@ class TestHandler:
 
         assert result["statusCode"] == 200
         assert result["body"]["collection_summary"]["successful_ticker_count"] == 2
-        assert mock_write_manifest.call_count == 2
-        assert price_task.status == CollectionTaskStatus.SUCCEEDED
-        assert price_task.attempts == 1
-        assert price_task.output_counts.records_written == 2
-        assert manifest.summary.succeeded_tasks == 1
+        mock_mark_running.assert_called_once()
+        mock_complete_task.assert_called_once()
+        assert mock_complete_task.call_args.args[2].records_written == 2
         mock_batch.assert_called_once()
         assert mock_batch.call_args.args[0] == ["AAPL", "MSFT"]
 
-    @patch("backend.src.collectors.stock_collector.write_manifest")
-    @patch("backend.src.collectors.stock_collector.load_manifest")
+    @patch("backend.src.collectors.stock_collector.complete_persisted_manifest_task")
+    @patch("backend.src.collectors.stock_collector.mark_persisted_manifest_task_running")
+    @patch("backend.src.collectors.stock_collector.get_persisted_manifest_task")
     @patch("backend.src.collectors.stock_collector._emit_metric")
     @patch("backend.src.collectors.stock_collector._compute_and_store_movement_signals")
     @patch("backend.src.collectors.stock_collector._record_failed_ticker_state")
@@ -2136,8 +2137,9 @@ class TestHandler:
         mock_failure_state,
         mock_movement,
         mock_metric,
-        mock_load_manifest,
-        mock_write_manifest,
+        mock_get_task,
+        mock_mark_running,
+        mock_complete_task,
     ):
         generated_at = datetime(2026, 6, 20, 7, 30, tzinfo=timezone.utc)
         manifest = build_manifest(
@@ -2153,7 +2155,7 @@ class TestHandler:
         price_task.task_id = "price-backfill-AAPL-2026-06-16-2026-06-17"
         price_task.start_date = date(2026, 6, 16)
         price_task.end_date = date(2026, 6, 17)
-        mock_load_manifest.return_value = manifest
+        mock_get_task.return_value = price_task
         mock_watchlist.return_value = [{"ticker": "AAPL"}]
         mock_fetch_backfill.return_value = [
             {
@@ -2181,8 +2183,9 @@ class TestHandler:
 
         assert result["statusCode"] == 200
         assert result["body"]["mode"] == "price_gap_backfill"
-        assert price_task.status == CollectionTaskStatus.SUCCEEDED
-        assert price_task.output_counts.records_written == 1
+        mock_mark_running.assert_called_once()
+        mock_complete_task.assert_called_once()
+        assert mock_complete_task.call_args.args[2].records_written == 1
         mock_batch.assert_not_called()
         mock_fetch_backfill.assert_called_once_with(
             "AAPL",

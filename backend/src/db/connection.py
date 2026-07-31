@@ -943,6 +943,90 @@ class DynamoStore:
             item["last_summary"] = _to_dynamodb_value(summary)
         self.table.put_item(Item=item)
 
+    def seed_collection_manifest_tasks(
+        self,
+        manifest_date: date | str,
+        tasks: Iterable[dict[str, Any]],
+    ) -> int:
+        """Create per-task manifest rows when a daily manifest is first seen."""
+        date_key = _date_str(manifest_date)
+        task_rows = list(tasks)
+        if not task_rows:
+            return 0
+        with self.table.batch_writer(
+            overwrite_by_pkeys=["PK", "SK"],
+        ) as batch:
+            for task in task_rows:
+                task_id = str(task["task_id"])
+                batch.put_item(
+                    Item={
+                        "PK": f"COLLECTION_MANIFEST#{date_key}",
+                        "SK": f"TASK#{task_id}",
+                        "entity": "collection_manifest_task",
+                        "manifest_date": date_key,
+                        "task_id": task_id,
+                        "version": 0,
+                        **_to_dynamodb_value(task),
+                    }
+                )
+        return len(task_rows)
+
+    def collection_manifest_tasks(
+        self,
+        manifest_date: date | str,
+    ) -> list[dict[str, Any]]:
+        date_key = _date_str(manifest_date)
+        rows = self._query(
+            KeyConditionExpression=Key("PK").eq(
+                f"COLLECTION_MANIFEST#{date_key}"
+            )
+            & Key("SK").begins_with("TASK#"),
+        )
+        return [_to_jsonable(_strip_keys(row)) for row in rows]
+
+    def get_collection_manifest_task(
+        self,
+        manifest_date: date | str,
+        task_id: str,
+    ) -> dict[str, Any] | None:
+        date_key = _date_str(manifest_date)
+        row = self.table.get_item(
+            Key={
+                "PK": f"COLLECTION_MANIFEST#{date_key}",
+                "SK": f"TASK#{task_id}",
+            },
+            ConsistentRead=True,
+        ).get("Item")
+        return _to_jsonable(_strip_keys(row)) if row else None
+
+    def replace_collection_manifest_task(
+        self,
+        manifest_date: date | str,
+        task: dict[str, Any],
+        expected_version: int,
+    ) -> bool:
+        """Replace one task only when the caller read its current version."""
+        date_key = _date_str(manifest_date)
+        task_id = str(task["task_id"])
+        item = {
+            "PK": f"COLLECTION_MANIFEST#{date_key}",
+            "SK": f"TASK#{task_id}",
+            "entity": "collection_manifest_task",
+            "manifest_date": date_key,
+            **_to_dynamodb_value(task),
+            "version": expected_version + 1,
+        }
+        try:
+            self.table.put_item(
+                Item=item,
+                ConditionExpression=Attr("version").eq(expected_version),
+            )
+            return True
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                return False
+            raise
+
     def _get_system_status_timestamp(self, component: str) -> str | None:
         row = self.table.get_item(
             Key={"PK": "SYSTEM#STATUS", "SK": component}

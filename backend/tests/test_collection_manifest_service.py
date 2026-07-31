@@ -2,6 +2,7 @@
 
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from unittest.mock import MagicMock, patch
 
 from src.collectors.collection_distributor import build_manifest
 from src.models.schemas import (
@@ -11,9 +12,12 @@ from src.models.schemas import (
     CollectionTaskType,
 )
 from src.services.collection_manifest import (
+    complete_persisted_manifest_task,
     complete_task,
     emit_manifest_metrics,
+    mark_persisted_manifest_task_running,
     mark_task_running,
+    refresh_manifest_task_state,
     recompute_summary,
     retry_delay_for_failure,
 )
@@ -203,8 +207,6 @@ def test_emit_manifest_metrics_reports_operational_health():
         now=generated_at,
     )
 
-    from unittest.mock import patch
-
     with patch("src.services.collection_manifest.boto3.client") as client:
         emit_manifest_metrics(manifest)
 
@@ -216,3 +218,104 @@ def test_emit_manifest_metrics_reports_operational_health():
     assert "collection_manifest_retry_wait_tasks" in metric_names
     assert "collection_manifest_low_coverage_gates" in metric_names
     assert "collection_provider_failure_tasks" in metric_names
+
+
+def test_concurrent_task_completions_do_not_overwrite_each_other():
+    generated_at = datetime(2026, 7, 31, 21, 5, tzinfo=timezone.utc)
+    manifest = build_manifest(
+        [{"ticker": "AAPL"}, {"ticker": "MSFT"}],
+        manifest_date=date(2026, 7, 31),
+        generated_at=generated_at,
+    )
+    tasks = manifest.tasks[:2]
+    rows = {
+        task.task_id: {
+            **task.model_dump(mode="json"),
+            "status": "running",
+            "attempts": 1,
+            "version": 1,
+        }
+        for task in tasks
+    }
+    mock_store = MagicMock()
+    mock_store.get_collection_manifest_task.side_effect = (
+        lambda _, task_id: dict(rows[task_id])
+    )
+
+    def replace(_, task, expected_version):
+        current = rows[task["task_id"]]
+        if current["version"] != expected_version:
+            return False
+        rows[task["task_id"]] = {
+            **task,
+            "version": expected_version + 1,
+        }
+        return True
+
+    mock_store.replace_collection_manifest_task.side_effect = replace
+    mock_store.collection_manifest_tasks.side_effect = lambda _: [
+        dict(row) for row in rows.values()
+    ]
+
+    with patch("src.services.collection_manifest.store", mock_store):
+        for task in tasks:
+            complete_persisted_manifest_task(
+                manifest.manifest_date,
+                task.task_id,
+                CollectionOutputCounts(
+                    records_written=len(task.tickers),
+                    successful_tickers=len(task.tickers),
+                ),
+                now=generated_at + timedelta(minutes=1),
+            )
+        refresh_manifest_task_state(manifest, seed_if_missing=False)
+
+    assert manifest.summary.succeeded_tasks == 2
+    assert all(task.status == CollectionTaskStatus.SUCCEEDED for task in manifest.tasks)
+
+
+def test_task_mutation_retries_an_optimistic_version_conflict():
+    generated_at = datetime(2026, 7, 31, 21, 5, tzinfo=timezone.utc)
+    manifest = build_manifest(
+        [{"ticker": "AAPL"}],
+        manifest_date=date(2026, 7, 31),
+        generated_at=generated_at,
+    )
+    task = manifest.tasks[0]
+    row = {**task.model_dump(mode="json"), "version": 2}
+    mock_store = MagicMock()
+    mock_store.get_collection_manifest_task.return_value = row
+    mock_store.replace_collection_manifest_task.side_effect = [False, True]
+
+    with patch("src.services.collection_manifest.store", mock_store):
+        updated = mark_persisted_manifest_task_running(
+            manifest.manifest_date,
+            task.task_id,
+            lease_owner="request-1",
+            now=generated_at,
+        )
+
+    assert updated.status == CollectionTaskStatus.RUNNING
+    assert updated.attempts == 1
+    assert mock_store.replace_collection_manifest_task.call_count == 2
+
+
+def test_s3_only_manifest_seeds_atomic_task_rows_on_first_refresh():
+    generated_at = datetime(2026, 7, 31, 21, 5, tzinfo=timezone.utc)
+    manifest = build_manifest(
+        [{"ticker": "AAPL"}],
+        manifest_date=date(2026, 7, 31),
+        generated_at=generated_at,
+    )
+    persisted_rows = [
+        {**task.model_dump(mode="json"), "version": 0}
+        for task in manifest.tasks
+    ]
+    mock_store = MagicMock()
+    mock_store.collection_manifest_tasks.side_effect = [[], persisted_rows]
+
+    with patch("src.services.collection_manifest.store", mock_store):
+        refreshed = refresh_manifest_task_state(manifest)
+
+    assert refreshed.summary.total_tasks == len(persisted_rows)
+    mock_store.seed_collection_manifest_tasks.assert_called_once()

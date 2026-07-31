@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 
 from src.collectors.collection_distributor import build_manifest
-from src.models.schemas import CollectionTaskStatus, CollectionTaskType
+from src.models.schemas import CollectionTaskType
 
 from backend.src.collectors.earnings_collector import (
     enrich_price_reaction,
@@ -381,8 +381,9 @@ def test_handler_supports_repair_calendars_dry_run_for_earnings(
     mock_publish_snapshots.assert_not_called()
 
 
-@patch("backend.src.collectors.earnings_collector.write_manifest")
-@patch("backend.src.collectors.earnings_collector.load_manifest")
+@patch("backend.src.collectors.earnings_collector.complete_persisted_manifest_task")
+@patch("backend.src.collectors.earnings_collector.mark_persisted_manifest_task_running")
+@patch("backend.src.collectors.earnings_collector.get_persisted_manifest_task")
 @patch("backend.src.collectors.earnings_collector.publish_calendar_provider_snapshots")
 @patch("backend.src.collectors.earnings_collector.publish_calendar_artifacts")
 @patch("backend.src.collectors.earnings_collector._emit_metric")
@@ -398,8 +399,9 @@ def test_handler_processes_manifest_earnings_task(
     mock_metric,
     mock_publish_artifacts,
     mock_publish_snapshots,
-    mock_load_manifest,
-    mock_write_manifest,
+    mock_get_task,
+    mock_mark_running,
+    mock_complete_task,
 ):
     manifest = build_manifest(
         [{"ticker": "AAPL"}, {"ticker": "MSFT"}],
@@ -411,7 +413,7 @@ def test_handler_processes_manifest_earnings_task(
         for candidate in manifest.tasks
         if candidate.task_type == CollectionTaskType.EARNINGS
     )
-    mock_load_manifest.return_value = manifest
+    mock_get_task.return_value = task
     mock_store.active_stock_metadata.return_value = [
         {"ticker": "AAPL", "company_name": "Apple"},
         {"ticker": "MSFT", "company_name": "Microsoft"},
@@ -439,18 +441,20 @@ def test_handler_processes_manifest_earnings_task(
     assert result["statusCode"] == 200
     assert result["body"]["selected_ticker_count"] == len(task.tickers)
     assert mock_fetch.call_count == len(task.tickers)
-    assert mock_write_manifest.call_count == 2
-    assert task.status == CollectionTaskStatus.SUCCEEDED
-    assert task.output_counts.records_written == len(task.tickers)
-    assert task.output_counts.successful_tickers == len(task.tickers)
+    mock_mark_running.assert_called_once()
+    mock_complete_task.assert_called_once()
+    counts = mock_complete_task.call_args.args[2]
+    assert counts.records_written == len(task.tickers)
+    assert counts.successful_tickers == len(task.tickers)
     assert mock_publish_artifacts.call_args.kwargs["artifact_scope"] == task.task_id
     assert mock_publish_artifacts.call_args.kwargs["publish_latest"] is False
     assert mock_publish_snapshots.call_args.kwargs["artifact_scope"] == task.task_id
     assert mock_publish_snapshots.call_args.kwargs["publish_latest"] is False
 
 
-@patch("backend.src.collectors.earnings_collector.write_manifest")
-@patch("backend.src.collectors.earnings_collector.load_manifest")
+@patch("backend.src.collectors.earnings_collector.complete_persisted_manifest_task")
+@patch("backend.src.collectors.earnings_collector.mark_persisted_manifest_task_running")
+@patch("backend.src.collectors.earnings_collector.get_persisted_manifest_task")
 @patch("backend.src.collectors.earnings_collector._emit_metric")
 @patch("backend.src.collectors.earnings_collector.fetch_earnings_calendar_events")
 @patch("backend.src.collectors.earnings_collector.fetch_earnings_events")
@@ -462,8 +466,9 @@ def test_manifest_earnings_task_merges_range_calendar_events(
     mock_fetch,
     mock_fetch_calendar,
     mock_metric,
-    mock_load_manifest,
-    mock_write_manifest,
+    mock_get_task,
+    mock_mark_running,
+    mock_complete_task,
 ):
     manifest = build_manifest(
         [{"ticker": "AAPL"}],
@@ -475,7 +480,7 @@ def test_manifest_earnings_task_merges_range_calendar_events(
         for candidate in manifest.tasks
         if candidate.task_type == CollectionTaskType.EARNINGS
     )
-    mock_load_manifest.return_value = manifest
+    mock_get_task.return_value = task
     mock_store.active_stock_metadata.return_value = [
         {"ticker": "AAPL", "company_name": "Apple"},
     ]
@@ -521,4 +526,4 @@ def test_manifest_earnings_task_merges_range_calendar_events(
         call.args[0]["event_date"] for call in mock_store.put_earnings_event.call_args_list
     }
     assert stored_dates == {date(2026, 7, 20), date(2026, 7, 25)}
-    assert task.output_counts.records_written == 2
+    assert mock_complete_task.call_args.args[2].records_written == 2

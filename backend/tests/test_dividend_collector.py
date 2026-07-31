@@ -8,7 +8,7 @@ import pandas as pd
 import requests
 
 from src.collectors.collection_distributor import build_manifest
-from src.models.schemas import CollectionTaskStatus, CollectionTaskType
+from src.models.schemas import CollectionTaskType
 
 from backend.src.collectors.dividend_collector import (
     enrich_price_reaction,
@@ -553,8 +553,9 @@ def test_handler_supports_repair_calendars_dry_run_for_dividends(
     mock_publish_snapshots.assert_not_called()
 
 
-@patch("backend.src.collectors.dividend_collector.write_manifest")
-@patch("backend.src.collectors.dividend_collector.load_manifest")
+@patch("backend.src.collectors.dividend_collector.complete_persisted_manifest_task")
+@patch("backend.src.collectors.dividend_collector.mark_persisted_manifest_task_running")
+@patch("backend.src.collectors.dividend_collector.get_persisted_manifest_task")
 @patch("backend.src.collectors.dividend_collector.publish_calendar_provider_snapshots")
 @patch("backend.src.collectors.dividend_collector.publish_calendar_artifacts")
 @patch("backend.src.collectors.dividend_collector._emit_metric")
@@ -568,8 +569,9 @@ def test_handler_processes_manifest_dividend_task(
     mock_metric,
     mock_publish_artifacts,
     mock_publish_snapshots,
-    mock_load_manifest,
-    mock_write_manifest,
+    mock_get_task,
+    mock_mark_running,
+    mock_complete_task,
 ):
     manifest = build_manifest(
         [{"ticker": "AAPL"}, {"ticker": "MSFT"}],
@@ -581,7 +583,7 @@ def test_handler_processes_manifest_dividend_task(
         for candidate in manifest.tasks
         if candidate.task_type == CollectionTaskType.DIVIDEND
     )
-    mock_load_manifest.return_value = manifest
+    mock_get_task.return_value = task
     mock_store.active_stock_metadata.return_value = [
         {"ticker": "AAPL", "company_name": "Apple"},
         {"ticker": "MSFT", "company_name": "Microsoft"},
@@ -604,10 +606,11 @@ def test_handler_processes_manifest_dividend_task(
     assert result["statusCode"] == 200
     assert result["body"]["selected_ticker_count"] == len(task.tickers)
     assert mock_fetch.call_count == len(task.tickers)
-    assert mock_write_manifest.call_count == 2
-    assert task.status == CollectionTaskStatus.SUCCEEDED
-    assert task.output_counts.records_written == len(task.tickers)
-    assert task.output_counts.successful_tickers == len(task.tickers)
+    mock_mark_running.assert_called_once()
+    mock_complete_task.assert_called_once()
+    counts = mock_complete_task.call_args.args[2]
+    assert counts.records_written == len(task.tickers)
+    assert counts.successful_tickers == len(task.tickers)
     assert mock_publish_artifacts.call_args.kwargs["artifact_scope"] == task.task_id
     assert mock_publish_artifacts.call_args.kwargs["publish_latest"] is False
     assert mock_publish_snapshots.call_args.kwargs["artifact_scope"] == task.task_id

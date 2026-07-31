@@ -25,11 +25,10 @@ from src.models.schemas import (
     RepairModeRequest,
 )
 from src.services.collection_manifest import (
-    complete_task,
-    find_task,
-    load_manifest,
-    mark_task_running,
-    write_manifest,
+    complete_persisted_manifest_task,
+    get_persisted_manifest_task,
+    manifest_date_from_key,
+    mark_persisted_manifest_task_running,
 )
 from src.services.secrets import get_openai_api_key, get_provider_api_key
 from src.services.static_artifacts import safe_publish_json_artifact
@@ -95,6 +94,7 @@ cloudwatch = boto3.client("cloudwatch")
 class ManifestTaskRun:
     bucket: str
     key: str
+    manifest_date: date
     task_id: str
 
 
@@ -1291,14 +1291,27 @@ def _prepare_manifest_task_run(
     if not bucket or not key or not task_id:
         raise ValueError("manifest_bucket, manifest_key, and task_id are required")
 
-    manifest = load_manifest(bucket, key)
-    task = find_task(manifest, task_id)
+    manifest_date = date.fromisoformat(
+        str(event.get("manifest_date") or manifest_date_from_key(key))
+    )
+    task = get_persisted_manifest_task(manifest_date, task_id)
     if task.task_type != CollectionTaskType.NEWS:
         raise ValueError(f"Task {task_id} is not a news collection task")
     lease_owner = getattr(context, "aws_request_id", None) if context else None
-    mark_task_running(manifest, task_id, lease_owner=lease_owner)
-    write_manifest(bucket, key, manifest)
-    return ManifestTaskRun(bucket=bucket, key=key, task_id=task_id), task.tickers
+    mark_persisted_manifest_task_running(
+        manifest_date,
+        task_id,
+        lease_owner=lease_owner,
+    )
+    return (
+        ManifestTaskRun(
+            bucket=bucket,
+            key=key,
+            manifest_date=manifest_date,
+            task_id=task_id,
+        ),
+        task.tickers,
+    )
 
 
 def _complete_manifest_task_run(
@@ -1307,15 +1320,13 @@ def _complete_manifest_task_run(
     failed: bool = False,
 ) -> None:
     try:
-        manifest = load_manifest(task_run.bucket, task_run.key)
-        complete_task(
-            manifest,
+        complete_persisted_manifest_task(
+            task_run.manifest_date,
             task_run.task_id,
             _news_output_counts(result),
             failed=failed,
             failure_reason=None if not failed else str(result.get("status")),
         )
-        write_manifest(task_run.bucket, task_run.key, manifest)
     except Exception as exc:
         logger.warning(
             "news_manifest_task_completion_failed",
@@ -1326,15 +1337,13 @@ def _complete_manifest_task_run(
 
 def _fail_manifest_task_run(task_run: ManifestTaskRun, reason: str) -> None:
     try:
-        manifest = load_manifest(task_run.bucket, task_run.key)
-        complete_task(
-            manifest,
+        complete_persisted_manifest_task(
+            task_run.manifest_date,
             task_run.task_id,
             CollectionOutputCounts(),
             failed=True,
             failure_reason=reason,
         )
-        write_manifest(task_run.bucket, task_run.key, manifest)
     except Exception as exc:
         logger.warning(
             "news_manifest_task_failure_write_failed",

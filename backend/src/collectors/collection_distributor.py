@@ -24,6 +24,10 @@ from src.models.schemas import (
     collection_manifest_s3_key,
 )
 from src.services.collection_manifest import emit_manifest_metrics, recompute_summary
+from src.services.collection_manifest import (
+    lease_persisted_manifest_task,
+    refresh_manifest_task_state,
+)
 from src.services.static_artifacts import safe_publish_json_artifact
 
 logger = structlog.get_logger(__name__)
@@ -41,6 +45,9 @@ CALENDAR_TASK_CHUNK_SIZE = int(
 MAX_TASKS_PER_RUN = int(os.environ.get("COLLECTION_MAX_TASKS_PER_RUN", "12"))
 LEASE_MINUTES = int(os.environ.get("COLLECTION_TASK_LEASE_MINUTES", "15"))
 ANALYSIS_HOUR_UTC = int(os.environ.get("COLLECTION_ANALYSIS_HOUR_UTC", "22"))
+DISPATCH_DEADLINE_MINUTES = int(
+    os.environ.get("COLLECTION_DISPATCH_DEADLINE_MINUTES", "70")
+)
 
 
 def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
@@ -73,12 +80,12 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
             manifest_date=manifest_date,
             generated_at=now,
         )
+    refresh_manifest_task_state(manifest)
 
     max_tasks_per_run = _max_tasks_per_run(event)
     dispatched = _dispatch_ready_tasks(bucket, key, manifest, now, max_tasks_per_run)
     recompute_summary(manifest)
-    if not dispatched:
-        _put_manifest(bucket, key, manifest)
+    _put_manifest(bucket, key, manifest)
     _publish_data_health_artifact(bucket, key, manifest, now)
     dispatch_status = _manifest_dispatch_status(manifest, now)
     log.info(
@@ -295,12 +302,16 @@ def _dispatch_ready_tasks(
             task.failure_reason = f"worker_not_configured:{task.task_type.value}"
             task.updated_at = now
             continue
-        task.status = CollectionTaskStatus.LEASED
-        task.lease_owner = "collection-distributor"
-        task.lease_expires_at = now + timedelta(minutes=LEASE_MINUTES)
-        task.updated_at = now
-        recompute_summary(manifest)
-        _put_manifest(bucket, key, manifest)
+        leased_task = lease_persisted_manifest_task(
+            manifest.manifest_date,
+            task.task_id,
+            lease_owner="collection-distributor",
+            lease_expires_at=now + timedelta(minutes=LEASE_MINUTES),
+            now=now,
+        )
+        if leased_task is None:
+            continue
+        _replace_manifest_task(manifest, leased_task)
         lambda_client.invoke(
             FunctionName=function_name,
             InvocationType="Event",
@@ -309,12 +320,24 @@ def _dispatch_ready_tasks(
                     "mode": "manifest_task",
                     "manifest_bucket": bucket,
                     "manifest_key": key,
+                    "manifest_date": manifest.manifest_date.isoformat(),
                     "task_id": task.task_id,
                 }
             ).encode("utf-8"),
         )
         dispatched.append(task.task_id)
     return dispatched
+
+
+def _replace_manifest_task(
+    manifest: CollectionManifest,
+    replacement: CollectionTask,
+) -> None:
+    for index, task in enumerate(manifest.tasks):
+        if task.task_id == replacement.task_id:
+            manifest.tasks[index] = replacement
+            return
+    raise ValueError(f"Collection manifest task not found: {replacement.task_id}")
 
 
 def _manifest_dispatch_status(
@@ -329,6 +352,9 @@ def _manifest_dispatch_status(
     failed = summary.failed_tasks
     active_incomplete = pending + leased + running
     incomplete = active_incomplete + retry_wait
+    dispatch_deadline = manifest.generated_at + timedelta(
+        minutes=DISPATCH_DEADLINE_MINUTES
+    )
     return {
         "task_counts": {
             "total": summary.total_tasks,
@@ -346,6 +372,15 @@ def _manifest_dispatch_status(
         "terminal_failed_task_count": failed,
         "dispatch_complete": incomplete == 0,
         "dispatch_ready_for_analysis": active_incomplete == 0,
+        "dispatch_deadline": dispatch_deadline.isoformat(),
+        "dispatch_deadline_exceeded": (
+            active_incomplete > 0 and now >= dispatch_deadline
+        ),
+        "analysis_not_before": (
+            manifest.analysis_not_before.isoformat()
+            if manifest.analysis_not_before
+            else None
+        ),
     }
 
 

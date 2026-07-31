@@ -4,6 +4,8 @@ from datetime import date
 from decimal import Decimal
 from unittest.mock import MagicMock
 
+from botocore.exceptions import ClientError
+
 from src.db.connection import DynamoStore
 
 
@@ -118,6 +120,75 @@ def test_last_collection_methods_use_system_status_records():
     store._get_system_status_timestamp.assert_any_call("ANALYSIS")
     store._get_system_status_timestamp.assert_any_call("PUBLICATION")
     store._scan.assert_not_called()
+
+
+def test_seed_collection_manifest_tasks_writes_independent_task_rows():
+    table = MagicMock()
+    batch = table.batch_writer.return_value.__enter__.return_value
+    store = _TestableDynamoStore(table)
+
+    count = store.seed_collection_manifest_tasks(
+        date(2026, 7, 31),
+        [
+            {
+                "task_id": "price-0000-AAPL-MSFT",
+                "task_type": "price",
+                "status": "pending",
+                "tickers": ["AAPL", "MSFT"],
+                "created_at": "2026-07-31T21:05:00+00:00",
+                "updated_at": "2026-07-31T21:05:00+00:00",
+            }
+        ],
+    )
+
+    assert count == 1
+    item = batch.put_item.call_args.kwargs["Item"]
+    assert item["PK"] == "COLLECTION_MANIFEST#2026-07-31"
+    assert item["SK"] == "TASK#price-0000-AAPL-MSFT"
+    assert item["version"] == 0
+
+
+def test_replace_collection_manifest_task_uses_optimistic_version():
+    table = MagicMock()
+    store = _TestableDynamoStore(table)
+
+    replaced = store.replace_collection_manifest_task(
+        date(2026, 7, 31),
+        {
+            "task_id": "price-0000-AAPL-MSFT",
+            "task_type": "price",
+            "status": "succeeded",
+        },
+        expected_version=4,
+    )
+
+    assert replaced is True
+    kwargs = table.put_item.call_args.kwargs
+    assert kwargs["Item"]["version"] == 5
+    assert kwargs["Item"]["SK"] == "TASK#price-0000-AAPL-MSFT"
+    assert kwargs["ConditionExpression"] is not None
+
+
+def test_replace_collection_manifest_task_reports_version_conflict():
+    table = MagicMock()
+    table.put_item.side_effect = ClientError(
+        {
+            "Error": {
+                "Code": "ConditionalCheckFailedException",
+                "Message": "version changed",
+            }
+        },
+        "PutItem",
+    )
+    store = _TestableDynamoStore(table)
+
+    replaced = store.replace_collection_manifest_task(
+        date(2026, 7, 31),
+        {"task_id": "price-0000-AAPL-MSFT", "status": "running"},
+        expected_version=1,
+    )
+
+    assert replaced is False
 
 
 def test_suppressed_publication_record_does_not_update_success_status():

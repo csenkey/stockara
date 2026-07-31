@@ -382,6 +382,7 @@ class ApiStack(Stack):
                 "COLLECTION_CALENDAR_TASK_CHUNK_SIZE": "10",
                 "COLLECTION_MAX_TASKS_PER_RUN": "4",
                 "COLLECTION_ANALYSIS_HOUR_UTC": "22",
+                "COLLECTION_DISPATCH_DEADLINE_MINUTES": "70",
             },
             description="Creates the daily S3 manifest for bounded collector work",
         )
@@ -433,7 +434,7 @@ class ApiStack(Stack):
         data_table.grant_read_write_data(self.evidence_collector_fn)
         data_table.grant_read_write_data(self.earnings_collector_fn)
         data_table.grant_read_write_data(self.dividend_collector_fn)
-        data_table.grant_read_data(self.collection_distributor_fn)
+        data_table.grant_read_write_data(self.collection_distributor_fn)
         data_table.grant_read_data(self.stock_gap_scanner_fn)
         data_table.grant_read_write_data(self.ai_analyzer_fn)
         data_table.grant_read_write_data(self.watchlist_seed_fn)
@@ -700,7 +701,7 @@ class ApiStack(Stack):
             {
                 "workflow": "daily_step_functions",
                 "stage": "create_or_refresh_manifest",
-                "max_tasks_per_run": 80,
+                "max_tasks_per_run": 24,
             },
             "$.manifest",
         )
@@ -710,7 +711,7 @@ class ApiStack(Stack):
             {
                 "workflow": "daily_step_functions",
                 "stage": "dispatch_manifest_tasks",
-                "max_tasks_per_run": 80,
+                "max_tasks_per_run": 24,
             },
             "$.manifest_dispatch",
         )
@@ -807,9 +808,11 @@ class ApiStack(Stack):
             ),
             result_path="$.workflow_status",
         )
-        self._add_workflow_retry_and_catch(
-            publish_workflow_status,
-            "PublishWorkflowStatus",
+        self._add_workflow_retry(publish_workflow_status)
+        publish_workflow_status.add_catch(
+            self._workflow_fail_state("PublishWorkflowStatusFailed"),
+            errors=["States.ALL"],
+            result_path="$.workflow_error",
         )
 
         collect_calendars_and_evidence = sfn.Parallel(
@@ -820,21 +823,88 @@ class ApiStack(Stack):
         collect_calendars_and_evidence.branch(collect_earnings)
         collect_calendars_and_evidence.branch(collect_dividends)
         collect_calendars_and_evidence.branch(collect_evidence)
-        collect_calendars_and_evidence.add_catch(
-            self._workflow_fail_state("CollectCalendarsAndEvidenceFailed"),
-            errors=["States.ALL"],
-            result_path="$.workflow_error",
-        )
         wait_for_analysis_window = sfn.Wait(
             self,
             "WaitForAnalysisWindow",
-            time=sfn.WaitTime.duration(Duration.minutes(60)),
-            comment="Give collectors time to finish before the 22:00 UTC analysis gate.",
+            time=sfn.WaitTime.timestamp_path(
+                "$.manifest_dispatch.Payload.body.analysis_not_before"
+            ),
+            comment="Wait only until the manifest's configured analysis timestamp.",
         )
         decide_publication_readiness = self._workflow_readiness_decision()
-        publication_readiness_chain = (
-            decide_publication_readiness.afterwards().next(publish_workflow_status)
+        decide_publication_readiness.afterwards().next(publish_workflow_status)
+        wait_for_analysis_progress = sfn.Wait(
+            self,
+            "WaitForAnalysisProgress",
+            time=sfn.WaitTime.duration(Duration.minutes(1)),
+            comment="Continue bounded analyzer batches until publication is terminal.",
         )
+        analyze_progress_decision = (
+            sfn.Choice(
+                self,
+                "DecideAnalysisProgress",
+                comment=(
+                    "Repeat scoring and bounded analysis batches until the analyzer "
+                    "publishes or returns a terminal waiting/blocked state."
+                ),
+            )
+            .when(
+                sfn.Condition.or_(
+                    sfn.Condition.string_equals(
+                        "$.analysis.Payload.body.stage",
+                        "scored",
+                    ),
+                    sfn.Condition.string_equals(
+                        "$.analysis.Payload.body.stage",
+                        "analyzed_batch",
+                    ),
+                ),
+                wait_for_analysis_progress,
+            )
+            .otherwise(decide_publication_readiness)
+        )
+        wait_for_analysis_progress.next(analyze_and_publish)
+
+        classify_manifest_dispatch_exhausted = sfn.Pass(
+            self,
+            "ManifestDispatchExhausted",
+            result=sfn.Result.from_object({"decision": "blocked"}),
+            result_path="$.workflow_decision",
+            comment=(
+                "Publish a blocked terminal artifact instead of waiting for the "
+                "state machine timeout."
+            ),
+        )
+        classify_manifest_dispatch_exhausted.next(publish_workflow_status)
+
+        classify_workflow_failure = sfn.Pass(
+            self,
+            "ClassifyWorkflowFailure",
+            result=sfn.Result.from_object({"decision": "blocked"}),
+            result_path="$.workflow_decision",
+            comment="Convert caught workflow failures into a terminal status artifact.",
+        )
+        classify_workflow_failure.next(publish_workflow_status)
+        collect_calendars_and_evidence.add_catch(
+            classify_workflow_failure,
+            errors=["States.ALL"],
+            result_path="$.workflow_error",
+        )
+
+        for step in [
+            sync_static_metadata,
+            create_or_refresh_manifest,
+            dispatch_manifest_tasks,
+            collect_prices,
+            repair_price_gaps,
+            collect_news,
+            analyze_and_publish,
+        ]:
+            step.add_catch(
+                classify_workflow_failure,
+                errors=["States.ALL"],
+                result_path="$.workflow_error",
+            )
         manifest_dispatch_decision = (
             sfn.Choice(
                 self,
@@ -851,6 +921,13 @@ class ApiStack(Stack):
                 ),
                 collect_prices,
             )
+            .when(
+                sfn.Condition.boolean_equals(
+                    "$.manifest_dispatch.Payload.body.dispatch_deadline_exceeded",
+                    True,
+                ),
+                classify_manifest_dispatch_exhausted,
+            )
             .otherwise(wait_for_manifest_dispatch)
         )
 
@@ -866,7 +943,7 @@ class ApiStack(Stack):
             .next(collect_calendars_and_evidence)
             .next(wait_for_analysis_window)
             .next(analyze_and_publish)
-            .next(publication_readiness_chain)
+            .next(analyze_progress_decision)
         )
 
         return sfn.StateMachine(
@@ -1020,13 +1097,12 @@ class ApiStack(Stack):
             payload=sfn.TaskInput.from_object(payload),
             result_path=result_path,
         )
-        self._add_workflow_retry_and_catch(step, construct_id)
+        self._add_workflow_retry(step)
         return step
 
-    def _add_workflow_retry_and_catch(
+    def _add_workflow_retry(
         self,
         step: sfn_tasks.LambdaInvoke,
-        construct_id: str,
     ) -> None:
         step.add_retry(
             errors=[
@@ -1045,11 +1121,6 @@ class ApiStack(Stack):
             interval=Duration.seconds(2),
             max_attempts=3,
             backoff_rate=2,
-        )
-        step.add_catch(
-            self._workflow_fail_state(f"{construct_id}Failed"),
-            errors=["States.ALL"],
-            result_path="$.workflow_error",
         )
 
     def _workflow_fail_state(self, construct_id: str) -> sfn.Fail:

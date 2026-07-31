@@ -586,6 +586,17 @@ def test_build_workflow_status_payload_summarizes_daily_execution():
                         "body": {"status": "partial", "collected_count": 5},
                     }
                 },
+                "manifest_dispatch": {
+                    "Payload": {
+                        "statusCode": 200,
+                        "body": {
+                            "status": "success",
+                            "active_incomplete_task_count": 0,
+                            "dispatch_deadline_exceeded": False,
+                            "task_counts": {"succeeded": 288},
+                        },
+                    }
+                },
             },
         },
         date(2026, 7, 30),
@@ -599,6 +610,12 @@ def test_build_workflow_status_payload_summarizes_daily_execution():
     assert payload["analyzer"]["data_readiness_summary"] == {"degraded_item_count": 3}
     assert payload["steps"]["news"]["status"] == "partial"
     assert payload["steps"]["news"]["collected_count"] == 5
+    assert payload["steps"]["manifest_dispatch"][
+        "active_incomplete_task_count"
+    ] == 0
+    assert payload["steps"]["manifest_dispatch"]["task_counts"] == {
+        "succeeded": 288
+    }
 
 
 def test_publish_workflow_status_report_writes_latest_and_history_artifacts():

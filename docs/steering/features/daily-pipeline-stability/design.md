@@ -133,3 +133,27 @@ retired schedules are intentionally kept in CDK as disabled rollback paths:
 - Disabled: frequent `StockCollectionSchedule`.
 - Retained: low-frequency news prefetching.
 - Retained: after-market stock gap scan maintenance.
+
+## Manifest Task State
+
+S3 manifest documents are operational snapshots, not a concurrent mutation
+store. The immutable task definition and latest aggregate summary remain
+published at `collection_manifest/{date}.json`, while each mutable task state is
+stored in the existing DynamoDB single table:
+
+- `PK = COLLECTION_MANIFEST#{date}`
+- `SK = TASK#{task_id}`
+
+Workers update only their own task row. Lease acquisition and lifecycle changes
+use conditional or atomic DynamoDB updates so concurrent worker completion
+cannot erase another task's state. The distributor reads the task rows,
+recomputes the manifest summary, and republishes the S3 snapshot.
+
+Existing S3-only manifests remain readable. When the distributor encounters one
+without DynamoDB task rows, it seeds the rows from the S3 task definitions
+without replacing newer rows.
+
+The workflow must also have a dispatch deadline shorter than the state machine
+timeout. When active tasks remain after that deadline, it proceeds to a terminal
+classification and publishes workflow status instead of waiting until Step
+Functions terminates the execution without an artifact.

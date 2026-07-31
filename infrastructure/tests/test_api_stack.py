@@ -320,6 +320,7 @@ def test_daily_pipeline_state_machine_is_created_for_daily_production_run():
         "DispatchManifestTasks",
         "WaitForManifestDispatch",
         "DecideManifestDispatchReadiness",
+        "ManifestDispatchExhausted",
         "CollectPrices",
         "RepairPriceGaps",
         "CollectNews",
@@ -329,16 +330,15 @@ def test_daily_pipeline_state_machine_is_created_for_daily_production_run():
         "CollectEvidence",
         "WaitForAnalysisWindow",
         "AnalyzeAndPublish",
+        "WaitForAnalysisProgress",
+        "DecideAnalysisProgress",
         "DecidePublicationReadiness",
         "Publish",
         "PublishDegraded",
         "WaitOrRepair",
         "Blocked",
+        "ClassifyWorkflowFailure",
         "PublishWorkflowStatus",
-        "SyncStaticMetadataFailed",
-        "CollectNewsFailed",
-        "CollectCalendarsAndEvidenceFailed",
-        "AnalyzeAndPublishFailed",
         "PublishWorkflowStatusFailed",
     ]:
         assert state_name in definition
@@ -359,11 +359,14 @@ def test_daily_pipeline_state_machine_is_created_for_daily_production_run():
     assert "OpenAITransientError" in definition
     assert "ArtifactPublishFailed" in definition
     assert "Parallel" in definition
-    assert "Give collectors time to finish before the 22:00 UTC analysis gate." in definition
+    assert "Wait only until the manifest's configured analysis timestamp." in definition
+    assert "Continue bounded analyzer batches until publication is terminal." in definition
     assert "Wait for leased manifest worker Lambdas before dispatching more chunks." in definition
     assert "dispatch_ready_for_analysis" in definition
+    assert "dispatch_deadline_exceeded" in definition
+    assert "analysis_not_before" in definition
     assert "max_tasks_per_run" in definition
-    assert "80" in definition
+    assert "24" in definition
     assert "repair_news" in definition
     assert "repair_calendars" in definition
     assert "repair_evidence" in definition
