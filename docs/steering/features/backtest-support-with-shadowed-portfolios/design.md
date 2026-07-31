@@ -214,7 +214,7 @@ preselection:
     max_ai_analyzed_per_day: 30
 
 recommendation_ai:
-  model: gpt-5.4-mini
+  model: gpt-5.6-luna
   prompt_template: recommendation_news_events_v2
   prompt_inputs:
     - ohlcv_30d
@@ -226,7 +226,7 @@ recommendation_ai:
 
 review_ai:
   enabled: true
-  model: gpt-5.4
+  model: gpt-5.6-terra
   prompt_template: strict_review_v2
   review_gate:
     require_for_public_buy_sell: true

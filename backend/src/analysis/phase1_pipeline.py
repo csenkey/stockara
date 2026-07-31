@@ -26,9 +26,9 @@ logger = structlog.get_logger(__name__)
 
 OPENAI_ANALYSIS_MODEL = os.environ.get(
     "OPENAI_ANALYSIS_MODEL",
-    os.environ.get("OPENAI_MODEL", "gpt-5.4-mini"),
+    os.environ.get("OPENAI_MODEL", "gpt-5.6-luna"),
 )
-OPENAI_REVIEW_MODEL = os.environ.get("OPENAI_REVIEW_MODEL", "gpt-5.4")
+OPENAI_REVIEW_MODEL = os.environ.get("OPENAI_REVIEW_MODEL", "gpt-5.6-terra")
 ARTIFACT_BUCKET = os.environ.get("STOCKARA_ARTIFACT_BUCKET", "")
 SHORTLIST_SIZE = int(os.environ.get("PHASE1_SHORTLIST_SIZE", "50"))
 TOP_PICK_COUNT = int(os.environ.get("PHASE1_TOP_PICK_COUNT", "10"))

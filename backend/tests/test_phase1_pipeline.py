@@ -1671,7 +1671,7 @@ def test_analyze_shortlist_falls_back_when_openai_client_init_fails():
 
 def test_chat_completion_options_use_gpt5_token_parameter():
     assert _chat_completion_options(
-        "gpt-5.4-mini", max_tokens=500, temperature=0.25
+        "gpt-5.6-luna", max_tokens=500, temperature=0.25
     ) == {"max_completion_tokens": 500}
     assert _chat_completion_options(
         "gpt-4o-mini", max_tokens=500, temperature=0.25
@@ -1708,13 +1708,13 @@ def test_analyze_shortlist_reviews_actionable_ai_recommendations():
     ):
         analyses = analyze_shortlist([score], [stock], date(2026, 6, 17))
 
-    assert client.models == ["gpt-5.4-mini", "gpt-5.4"]
+    assert client.models == ["gpt-5.6-luna", "gpt-5.6-terra"]
     assert analyses[0]["analysis_method"] == "ai"
-    assert analyses[0]["analysis_model"] == "gpt-5.4-mini"
+    assert analyses[0]["analysis_model"] == "gpt-5.6-luna"
     assert analyses[0]["publication_allowed"] is True
     assert analyses[0]["confidence_score"] == 85
     assert analyses[0]["ai_review"]["status"] == "approved"
-    assert analyses[0]["ai_review"]["model"] == "gpt-5.4"
+    assert analyses[0]["ai_review"]["model"] == "gpt-5.6-terra"
     put_analysis.assert_called_once()
 
 
@@ -1725,7 +1725,7 @@ def test_review_rejection_suppresses_public_publication():
         {
             "ticker": "NVDA",
             "analysis_method": "ai",
-            "analysis_model": "gpt-5.4-mini",
+            "analysis_model": "gpt-5.6-luna",
             "publication_allowed": False,
             "recommendation": "BUY",
             "risk_level": "MEDIUM",
@@ -1739,7 +1739,7 @@ def test_review_rejection_suppresses_public_publication():
             "signals": [],
             "ai_review": {
                 "status": "rejected",
-                "model": "gpt-5.4",
+                "model": "gpt-5.6-terra",
                 "approved": False,
                 "rationale": "Evidence is too weak.",
                 "concerns": ["weak evidence"],
@@ -1768,7 +1768,7 @@ def test_review_rejection_suppresses_public_publication():
     assert withheld["ticker"] == "NVDA"
     assert withheld["company_name"] == "NVIDIA"
     assert withheld["sector"] == "Technology"
-    assert withheld["analysis_model"] == "gpt-5.4-mini"
+    assert withheld["analysis_model"] == "gpt-5.6-luna"
     assert withheld["recommendation"] == "BUY"
     assert withheld["supporting_evidence"] == []
     assert withheld["source_traceability"] == []
@@ -1788,7 +1788,7 @@ def test_review_rejection_suppresses_public_publication():
     ]
     assert withheld["ai_review"] == {
         "status": "rejected",
-        "model": "gpt-5.4",
+        "model": "gpt-5.6-terra",
         "approved": False,
         "rationale": "Evidence is too weak.",
         "concerns": ["weak evidence"],

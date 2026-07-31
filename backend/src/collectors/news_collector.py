@@ -38,7 +38,7 @@ logger = structlog.get_logger(__name__)
 
 # Configuration from environment variables
 POLL_INTERVAL_MINUTES = int(os.environ.get("NEWS_POLL_INTERVAL_MINUTES", "15"))
-OPENAI_NEWS_MODEL = os.environ.get("OPENAI_NEWS_MODEL", "gpt-5.4-mini")
+OPENAI_NEWS_MODEL = os.environ.get("OPENAI_NEWS_MODEL", "gpt-5.6-luna")
 COLLECTION_MANIFEST_BUCKET = os.environ.get(
     "COLLECTION_MANIFEST_BUCKET",
     os.environ.get("STOCKARA_ARTIFACT_BUCKET", ""),
