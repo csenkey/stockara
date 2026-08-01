@@ -33,7 +33,6 @@ The project also includes a public demo-trading feature: 100 superhero-named sim
 - `frontend/src/services/`: frontend API clients and helpers
 - `infrastructure/stacks/`: CDK stacks for API, database, frontend, monitoring, and scheduled workloads
 - `docs/steering/`: canonical product, architecture, and backlog steering for Codex and Claude
-- `.kiro/specs/`: legacy source material only
 
 ## Core Product Rules
 

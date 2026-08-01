@@ -2,11 +2,11 @@
 
 Audience: architecture reviewers, AWS operators, and engineers.
 
-Status: current Phase 1 implementation, generated from repository code and specs.
+Status: Stockara 1.0 production architecture. See `docs/steering/stockara-1.0.md` for the canonical baseline.
 
 ## Executive summary
 
-Stockara Phase 1 is a low-cost serverless AWS system. Scheduled Lambda jobs collect market data and evidence, store records in DynamoDB, run a daily analysis/publishing pipeline, and write static JSON artifacts to the same S3 bucket that hosts the React frontend. CloudFront serves both the web app and the published data artifacts. API Gateway remains intentionally small and exposes only `/api/health`.
+Stockara 1.0 is a low-cost serverless AWS system. One Step Functions Standard Workflow coordinates bounded Lambda workers for metadata, market data, evidence, AI analysis/review, and publication. Source records live in DynamoDB, while static JSON artifacts are written to the same S3 bucket that hosts the React frontend. CloudFront serves both the web app and the published artifacts. API Gateway remains intentionally small and exposes health and authenticated application APIs.
 
 ## High-level AWS diagram
 
@@ -17,13 +17,14 @@ flowchart TB
   CF --> SPA["React SPA assets"]
   CF --> Artifacts["Static JSON artifacts"]
 
-  EventBridge["EventBridge schedules"] --> Distributor["Collection distributor Lambda"]
-  EventBridge --> Stock["Stock collector Lambda"]
-  EventBridge --> News["News collector Lambda"]
-  EventBridge --> Evidence["Evidence collector Lambda"]
-  EventBridge --> Earnings["Earnings collector Lambda"]
-  EventBridge --> Dividends["Dividend collector Lambda"]
-  EventBridge --> Publisher["Phase 1 analyzer/publisher Lambda"]
+  EventBridge["EventBridge schedules"] --> SFN["stockara-daily-pipeline\nStep Functions Standard"]
+  SFN --> Distributor["Collection distributor Lambda"]
+  SFN --> Stock["Stock collector Lambda"]
+  SFN --> News["News collector Lambda"]
+  SFN --> Evidence["Evidence collector Lambda"]
+  SFN --> Earnings["Earnings collector Lambda"]
+  SFN --> Dividends["Dividend collector Lambda"]
+  SFN --> Publisher["Phase 1 analyzer/publisher Lambda"]
   EventBridge --> GapScanner["Stock gap scanner Lambda"]
 
   Distributor --> S3
@@ -81,20 +82,20 @@ Current schedules from CDK:
 
 | Schedule | Target | Purpose |
 |---|---|---|
-| Every 5 minutes | Collection distributor | Refresh daily manifest and dispatch one bounded task |
-| Every 15 minutes | Stock collector with `max_tickers: 10` | Bounded incremental OHLCV collection |
-| 20:00 UTC daily | Earnings collector | Earnings calendar collection before publication |
-| 20:15 UTC daily | Dividend collector | Dividend collection before publication |
-| Every 15 minutes | News collector | Frequent catalyst news collection |
-| 20:45 UTC daily | Evidence collector with `max_tickers: 100` | SEC and analyst evidence collection |
-| 22:00 UTC daily | Phase 1 analyzer/publisher | Daily top-pick and sell-alert publication |
+| 21:05 UTC daily | Step Functions `stockara-daily-pipeline` | Owns the complete daily collection, repair, analysis, review, and publication flow |
+| Three times daily | News collector | Quota-conscious global news prefetch |
 | 23:15 UTC daily | Stock gap scanner | Price gap detection and backfill task creation |
+| 22:30 UTC daily | Demo trade executor | Applies eligible reviewed recommendations to simulated accounts |
+
+The old high-frequency distributor, stock collector, and analyzer schedules are
+disabled rollback paths. Calendar and evidence collection are invoked by the
+daily workflow rather than racing the analyzer on independent clocks.
 
 ## Lambda workflow: collection distributor
 
 ```mermaid
 flowchart TD
-  Start["Scheduled every 5 minutes"] --> Load["Load active ticker universe"]
+  Start["Step Functions invokes bounded task"] --> Load["Load active ticker universe"]
   Load --> Manifest["Create or refresh daily collection manifest in S3"]
   Manifest --> Tasks["Split work into price, news, earnings, and dividend tasks"]
   Tasks --> Pick["Select one pending/retryable task"]
@@ -108,7 +109,7 @@ The distributor keeps collection work bounded. It prevents one large daily job f
 
 ```mermaid
 flowchart TD
-  Start["22:00 UTC EventBridge"] --> Gate["Load collection manifest and log failed coverage gates"]
+  Start["Step Functions analysis state"] --> Gate["Load readiness and log failed coverage gates"]
   Gate --> Freshness["Evaluate ticker data freshness"]
   Freshness --> Eligible{"Any eligible tickers?"}
   Eligible -->|no| Suppress["Publish suppressed artifact with warnings"]

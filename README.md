@@ -1,6 +1,8 @@
 # Stockara — Daily Top Picks and Risk Alerts
 
-Stockara Phase 1 is a low-cost, serverless catalyst scanner. It collects market/news/event signals, analyzes only the highest-signal candidates, and publishes static daily top-pick and sell-alert artifacts for the website.
+Stockara 1.0 is a low-cost, serverless daily stock research system. It collects market/news/event signals, analyzes only the highest-signal candidates, reviews actionable calls, and publishes static daily artifacts for the website. The stable baseline is the immutable Git tag `stockara-1.0`.
+
+The complete shipped baseline and continuation guide is [Stockara 1.0 Baseline](docs/steering/stockara-1.0.md). The canonical active backlog is [docs/steering/work-queue.md](docs/steering/work-queue.md); older top-level backlog files are historical reference.
 
 ## Phase 1 Scope
 
@@ -14,17 +16,17 @@ Stockara Phase 1 is a low-cost, serverless catalyst scanner. It collects market/
 ## Architecture
 
 ```text
-EventBridge -> stock/news collectors -> DynamoDB
-EventBridge -> Phase 1 analyzer/publisher -> S3 JSON artifacts
+EventBridge -> Step Functions daily workflow -> bounded collectors/analyzer -> DynamoDB/S3
 CloudFront -> React static site + /top-picks/latest.json + /sell-alerts/latest.json
 API Gateway -> Lambda -> /api/health only
 ```
 
 Key jobs:
 
-- **Stock Collector**: daily at 21:00 UTC.
-- **News Collector**: daily at 20:30 UTC.
-- **Phase 1 Analyzer/Publisher**: daily at 22:00 UTC.
+- **Daily workflow**: starts at 21:05 UTC and owns collection readiness, repair, analysis, review, and publication.
+- **News prefetch**: runs three times per day within free-tier quota; final readiness is owned by the daily workflow.
+- **Price-gap maintenance**: runs separately at 23:15 UTC after market close.
+- **Demo trading**: runs at 22:30 UTC after the daily analysis workflow.
 
 ## Tech Stack
 
@@ -131,7 +133,9 @@ Published artifacts:
 
 During early Phase 1 development, pushes to `main` run tests, frontend build, CDK synth/deploy, and a `/api/health` smoke test. Branch-scoped AWS deployments are intentionally disabled while Istvan is the only developer.
 
-The manual **Run Phase 1 Pipeline Now** workflow invokes stock, news, earnings, dividend, and optionally publisher Lambdas for an already deployed stage. Use it to backfill or diagnose production data before reaching for AWS Console test events.
+The manual **Run Daily Workflow Now** workflow starts the production Step Functions execution. Repair workflows provide targeted modes for metadata, price gaps/history, news, calendars, evidence, AI analysis, and AI review. Use them to diagnose or repair production data before reaching for AWS Console test events.
+
+The manual **Deploy Stable Stockara Version** workflow deploys an immutable stable tag, such as `stockara-1.0`, to `prod` and is the rollback path.
 
 ## License
 

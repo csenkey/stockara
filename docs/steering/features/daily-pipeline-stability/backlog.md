@@ -22,6 +22,10 @@
 - [x] Implement `repair_calendars` mode for earnings/dividend retry and fallback providers.
   - [x] Add shared `repair_calendars` mode aliases to earnings and dividend collectors with dry-run support.
   - [x] Update calendar manual backfill and Phase 1 workflows to use repair payloads with provider budget inputs.
+  - [x] Scan the full active watchlist with one forward-looking Finnhub earnings
+    request instead of a fixed alphabetical 50-ticker slice.
+  - [x] Add a bounded rotating per-ticker fallback and mark zero-event earnings
+    runs degraded with provider diagnostics, artifact warnings, and metrics.
 - [x] Implement `repair_evidence` mode for SEC filing and analyst-action gaps.
   - [x] Add shared `repair_evidence` mode alias to the evidence collector with `sec`, `finnhub`, and `yfinance` provider budgets.
   - [x] Update `Run Evidence Collection Now` to use `repair_evidence` with provider budget and dry-run inputs.
@@ -91,6 +95,47 @@ which allowed one worker to overwrite another worker's lease or completion.
     `top-picks/latest.json`, `data-readiness/latest.json`, and
     `sell-alerts/latest.json` artifacts for 2026-07-31.
 - [x] Refine the dashboard so stale publication state is concise, current workflow freshness is prominent, and degraded suggestions remain usable.
+
+## Milestone 7: Evidence-Aware Review Recovery
+
+- [x] Define and validate a versioned structured AI-review schema.
+  - Require an explanation for every rejection; classify missing or truncated
+    fields as `invalid_response`.
+  - Persist finish reason, response ID, token usage, attempt, and validation
+    outcome without storing sensitive prompts unnecessarily.
+- [x] Add one bounded retry for invalid AI-review responses with an explicit
+  repair prompt and a sufficient completion budget.
+- [x] Replace new-review keyword evidence inference with typed `evidence_gaps[]`.
+  - Keep keyword parsing only for backward compatibility with old artifacts.
+- [x] Create an evidence-gap capability registry covering collector support,
+  feature gaps, retry mode, provider budget, and developer owner.
+- [x] Add a targeted post-review repair path for shortlisted candidates.
+  - Collect only requested evidence gaps.
+  - Merge evidence and rerun analysis/review once.
+  - Preserve first and second attempts for auditability.
+  - Enforce candidate, provider, token, and wall-clock budgets.
+- [x] Classify repair outcomes as valid rejection, repaired-and-approved,
+  provider incident, feature-missing developer incident, or invalid-AI incident.
+- [ ] Add SEC filing-text substance and source-backed fundamental evidence
+  collectors using affordable/free primary sources where practical.
+- [x] Surface existing technical levels, volume confirmation, invalidation, and
+  trade horizon explicitly in the reviewer context.
+- [x] Add contract, retry, bounded-loop, artifact, and Step Functions tests.
+- [ ] Rerun malformed reviews from the first affected daily artifact and verify
+  that publication explains every remaining withheld recommendation.
+
+## Milestone 8: Low-Cost Incident Dashboard
+
+- [x] Emit structured incident metrics for invalid review, evidence repair,
+  provider failure, quota/auth failure, feature missing, and workflow failure.
+- [x] Extend the existing CloudWatch dashboard with incident and repair widgets.
+- [ ] Add only actionable alarms for invalid review output, exhausted required
+  evidence repair, and provider auth/quota failures; keep valid rejections as
+  dashboard signals.
+- [ ] Publish a compact `incidents/latest.json` and dated history artifact for
+  operator and developer triage.
+- [ ] Add an optional SNS email subscription setting and document the one-time
+  confirmation step.
 
 ## Follow-up Optimizations
 

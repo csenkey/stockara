@@ -10,12 +10,15 @@ from src.collectors.collection_distributor import build_manifest
 from src.models.schemas import CollectionTaskType
 
 from backend.src.collectors.earnings_collector import (
+    ManifestTaskRun,
+    _complete_manifest_task_run,
     enrich_price_reaction,
     fetch_alpha_vantage_earnings_events,
     fetch_earnings_calendar_events,
     fetch_earnings_events,
     handler,
     _select_stocks,
+    _select_rotating_fallback_stocks,
 )
 
 
@@ -276,6 +279,47 @@ def test_select_stocks_honors_ticker_offset():
     assert [stock["ticker"] for stock in selected] == ["AMZN", "MSFT"]
 
 
+def test_rotating_fallback_wraps_without_favoring_alphabetical_prefix():
+    stocks = [{"ticker": ticker} for ticker in ["AAPL", "MSFT", "NVDA", "TSLA"]]
+
+    selected = _select_rotating_fallback_stocks(
+        stocks,
+        {"fallback_max_tickers": 3, "fallback_ticker_offset": 2},
+        date(2026, 8, 1),
+    )
+
+    assert [stock["ticker"] for stock in selected] == ["NVDA", "TSLA", "AAPL"]
+
+
+@patch("backend.src.collectors.earnings_collector.complete_persisted_manifest_task")
+def test_degraded_empty_manifest_task_is_completed_as_failed(mock_complete):
+    task_run = ManifestTaskRun(
+        bucket="bucket",
+        key="collection_manifest/2026-08-01.json",
+        manifest_date=date(2026, 8, 1),
+        task_id="earnings-1",
+    )
+
+    _complete_manifest_task_run(
+        task_run,
+        selected_ticker_count=10,
+        stored_count=0,
+        failed_tickers=[],
+        provider_health={
+            "status": "degraded",
+            "reason": "provider_returned_zero_events",
+        },
+    )
+
+    counts = mock_complete.call_args.args[2]
+    assert counts.successful_tickers == 0
+    assert counts.failed_tickers == 10
+    assert mock_complete.call_args.kwargs == {
+        "failed": True,
+        "failure_reason": "provider_returned_zero_events",
+    }
+
+
 def test_enrich_price_reaction_uses_stored_prices_around_past_event():
     event = {
         "ticker": "NVDA",
@@ -333,11 +377,92 @@ def test_handler_respects_explicit_max_tickers_for_earnings(
     ]
     mock_fetch.return_value = []
 
-    result = handler({"max_tickers": 1}, None)
+    result = handler({"max_tickers": 1, "fallback_max_tickers": 0}, None)
 
     assert result["statusCode"] == 200
     selected = mock_fetch.call_args.args[0]
     assert [stock["ticker"] for stock in selected] == ["AAPL"]
+
+
+@patch("backend.src.collectors.earnings_collector.publish_calendar_provider_snapshots")
+@patch("backend.src.collectors.earnings_collector.publish_calendar_artifacts")
+@patch("backend.src.collectors.earnings_collector._emit_metric")
+@patch("backend.src.collectors.earnings_collector.fetch_earnings_calendar_events")
+@patch("backend.src.collectors.earnings_collector.DatabasePool")
+@patch("backend.src.collectors.earnings_collector.store")
+def test_handler_scans_full_watchlist_and_marks_empty_calendar_degraded(
+    mock_store,
+    mock_pool,
+    mock_fetch,
+    mock_metric,
+    mock_publish_artifacts,
+    mock_publish_snapshots,
+):
+    mock_store.active_stock_metadata.return_value = [
+        {"ticker": "MSFT", "company_name": "Microsoft"},
+        {"ticker": "AAPL", "company_name": "Apple"},
+        {"ticker": "NVDA", "company_name": "NVIDIA"},
+    ]
+    mock_fetch.return_value = []
+
+    result = handler(
+        {"mode": "repair_calendars", "fallback_max_tickers": 0},
+        None,
+    )
+
+    selected = mock_fetch.call_args.args[0]
+    assert [stock["ticker"] for stock in selected] == ["AAPL", "MSFT", "NVDA"]
+    assert result["body"]["status"] == "degraded"
+    assert result["body"]["provider_health"]["reason"] == "provider_returned_zero_events"
+    assert result["body"]["zero_event_tickers"] == ["AAPL", "MSFT", "NVDA"]
+    assert mock_publish_artifacts.call_args.kwargs["collection_status"] == "degraded"
+    mock_metric.assert_any_call("earnings_provider_degraded_runs", 1)
+
+
+@patch("backend.src.collectors.earnings_collector.publish_calendar_provider_snapshots")
+@patch("backend.src.collectors.earnings_collector.publish_calendar_artifacts")
+@patch("backend.src.collectors.earnings_collector._emit_metric")
+@patch("backend.src.collectors.earnings_collector.fetch_earnings_events")
+@patch("backend.src.collectors.earnings_collector.fetch_earnings_calendar_events")
+@patch("backend.src.collectors.earnings_collector.DatabasePool")
+@patch("backend.src.collectors.earnings_collector.store")
+def test_handler_uses_bounded_ticker_fallback_when_range_calendar_is_empty(
+    mock_store,
+    mock_pool,
+    mock_fetch_calendar,
+    mock_fetch_ticker,
+    mock_metric,
+    mock_publish_artifacts,
+    mock_publish_snapshots,
+):
+    mock_store.active_stock_metadata.return_value = [
+        {"ticker": "AAPL", "company_name": "Apple"},
+        {"ticker": "MSFT", "company_name": "Microsoft"},
+        {"ticker": "NVDA", "company_name": "NVIDIA"},
+    ]
+    mock_fetch_calendar.return_value = []
+    mock_fetch_ticker.side_effect = lambda ticker, **kwargs: [
+        {
+            "ticker": ticker,
+            "event_date": date(2026, 8, 20),
+            "is_upcoming": True,
+            "provider": "yfinance",
+        }
+    ]
+
+    result = handler(
+        {
+            "mode": "repair_calendars",
+            "fallback_max_tickers": 2,
+            "fallback_ticker_offset": 1,
+        },
+        None,
+    )
+
+    assert mock_fetch_ticker.call_count == 2
+    assert [call.args[0] for call in mock_fetch_ticker.call_args_list] == ["MSFT", "NVDA"]
+    assert result["body"]["events_collected"] == 2
+    assert result["body"]["status"] == "success"
 
 
 @patch("backend.src.collectors.earnings_collector.publish_calendar_provider_snapshots")

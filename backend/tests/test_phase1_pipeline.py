@@ -1188,8 +1188,16 @@ def test_price_volume_signals_add_multi_day_market_context():
         signals = _price_volume_signals("NVDA", run_date)
 
     signal_types = {signal["signal_type"] for signal in signals}
+    assert "technical_levels" in signal_types
     assert "technical_trend" in signal_types
     assert "volume_persistence" in signal_types
+    levels = next(signal for signal in signals if signal["signal_type"] == "technical_levels")
+    assert levels["direction"] == "neutral"
+    assert levels["score"] == 0
+    assert levels["source"]["raw"]["context_only"] is True
+    assert levels["source"]["raw"]["support"] == 110
+    assert levels["source"]["raw"]["resistance"] == 129
+    assert levels["source"]["raw"]["trade_horizon"] == "1-30 days"
     trend = next(signal for signal in signals if signal["signal_type"] == "technical_trend")
     assert trend["direction"] == "positive"
     assert trend["score"] > 0
@@ -1644,6 +1652,62 @@ def test_analysis_prompt_includes_candidate_specific_invalidation_checks():
     assert "generic wording" in prompt
 
 
+def test_technical_levels_are_review_evidence_and_define_price_invalidation():
+    technical_levels = phase1_pipeline._signal(
+        "NVDA",
+        "technical_levels",
+        "neutral",
+        0,
+        "Objective technical levels",
+        (
+            "NVDA closed at 124, with 20-session SMA 118, support 112, "
+            "resistance 128, and review horizon 1-30 days."
+        ),
+        "derived_ohlcv",
+        {
+            "context_only": True,
+            "latest_close": 124,
+            "sma_20": 118,
+            "support": 112,
+            "resistance": 128,
+            "trade_horizon": "1-30 days",
+        },
+    )
+    directional_signal = phase1_pipeline._signal(
+        "NVDA",
+        "news",
+        "positive",
+        80,
+        "Company catalyst",
+        "NVDA announced a material company-specific catalyst.",
+        "company_release",
+    )
+    analysis = {
+        "recommendation": "BUY",
+        "risk_level": "MEDIUM",
+        "confidence_score": 82,
+        "opportunity_score": 90,
+        "negative_score": 5,
+        "catalyst": "Company catalyst",
+        "reasoning": "Evidence supports the setup.",
+        "invalidation_criteria": "A close below 112 invalidates the setup.",
+        "invalidation_checks": phase1_pipeline._invalidation_checks(
+            [directional_signal, technical_levels], "BUY"
+        ),
+        "signals": [directional_signal, technical_levels],
+    }
+    stock = {"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology"}
+
+    prompt = phase1_pipeline._build_review_prompt(stock, analysis)
+
+    assert "support 112" in prompt
+    assert "resistance 128" in prompt
+    assert analysis["invalidation_checks"][0] == (
+        "A close below 112 invalidates the BUY setup; require follow-through "
+        "within 1-30 days."
+    )
+
+
 def test_review_prompt_requires_specific_invalidation_for_actionable_calls():
     analysis = {
         "recommendation": "BUY",
@@ -1733,6 +1797,193 @@ def test_analyze_shortlist_reviews_actionable_ai_recommendations():
     assert analyses[0]["ai_review"]["status"] == "approved"
     assert analyses[0]["ai_review"]["model"] == "gpt-5.6-terra"
     put_analysis.assert_called_once()
+
+
+def test_review_retries_schema_incomplete_rejection_and_keeps_typed_gaps():
+    stock = {"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology"}
+    analysis = {
+        "ticker": "NVDA",
+        "recommendation": "BUY",
+        "risk_level": "MEDIUM",
+        "confidence_score": 82,
+        "opportunity_score": 90,
+        "negative_score": 5,
+        "catalyst": "Volume breakout",
+        "reasoning": "Evidence supports a near-term catalyst.",
+        "invalidation_criteria": "Breakout fails.",
+        "invalidation_checks": [],
+        "signals": [],
+    }
+    client = _SequencedOpenAIClient(
+        [
+            {"approved": False},
+            {
+                "approved": False,
+                "rationale": "The catalyst is not yet company-specific.",
+                "concerns": ["unverified catalyst"],
+                "confidence_adjustment": -5,
+                "rejection_category": "insufficient_evidence",
+                "what_would_make_approvable": "Verify a dated company catalyst.",
+                "evidence_gaps": [
+                    {
+                        "gap_type": "company_specific_catalyst",
+                        "classification": "collectable",
+                        "description": "A company-specific source is missing.",
+                        "source_candidates": ["company news"],
+                    }
+                ],
+            },
+        ]
+    )
+
+    with patch("src.analysis.phase1_pipeline._emit_metric"):
+        reviewed = phase1_pipeline._review_candidate_analysis(client, stock, analysis)
+
+    assert client.calls == 2
+    assert reviewed["publication_allowed"] is False
+    assert reviewed["ai_review"]["status"] == "rejected"
+    assert reviewed["ai_review"]["attempt_count"] == 2
+    assert reviewed["ai_review"]["rationale"]
+    assert reviewed["ai_review"]["evidence_gaps"][0]["gap_type"] == "company_specific_catalyst"
+
+
+def test_review_marks_exhausted_schema_errors_as_invalid_response():
+    stock = {"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology"}
+    analysis = {
+        "ticker": "NVDA",
+        "recommendation": "BUY",
+        "risk_level": "MEDIUM",
+        "confidence_score": 82,
+        "opportunity_score": 90,
+        "negative_score": 5,
+        "catalyst": "Volume breakout",
+        "reasoning": "Evidence supports a near-term catalyst.",
+        "invalidation_criteria": "Breakout fails.",
+        "invalidation_checks": [],
+        "signals": [],
+    }
+    client = _SequencedOpenAIClient(
+        [{"approved": False}, {"approved": False, "rationale": " "}]
+    )
+
+    with patch("src.analysis.phase1_pipeline._emit_metric"):
+        reviewed = phase1_pipeline._review_candidate_analysis(client, stock, analysis)
+
+    assert reviewed["publication_allowed"] is False
+    assert reviewed["ai_review"]["status"] == "invalid_response"
+    assert reviewed["ai_review"]["concerns"] == ["review_response_invalid"]
+    assert reviewed["ai_review"]["attempt_count"] == 2
+
+
+def test_review_evidence_repair_plan_is_typed_bounded_and_single_round():
+    repairable = {
+        "ticker": "NVDA",
+        "recommendation": "BUY",
+        "analysis_method": "ai",
+        "evidence_repair_round": 0,
+        "ai_review": {
+            "status": "rejected",
+            "approved": False,
+            "evidence_gaps": [
+                {
+                    "gap_type": "company_specific_catalyst",
+                    "classification": "collectable",
+                    "description": "Missing catalyst source.",
+                    "source_candidates": ["company news"],
+                },
+                {
+                    "gap_type": "technical_confirmation",
+                    "classification": "analysis_context_missing",
+                    "description": "Missing objective invalidation level.",
+                    "source_candidates": ["stored OHLCV"],
+                },
+            ],
+        },
+    }
+    feature_missing = {
+        **repairable,
+        "ticker": "AAPL",
+        "ai_review": {
+            "status": "rejected",
+            "approved": False,
+            "evidence_gaps": [
+                {
+                    "gap_type": "sec_8k_substance",
+                    "classification": "feature_missing",
+                    "description": "Filing text is unavailable.",
+                    "source_candidates": ["SEC"],
+                }
+            ],
+        },
+    }
+    already_repaired = {**repairable, "ticker": "MSFT", "evidence_repair_round": 1}
+
+    plan = phase1_pipeline._review_evidence_repair_plan(
+        [repairable, feature_missing, already_repaired]
+    )
+
+    assert plan == [
+        {
+            "ticker": "NVDA",
+            "gap_types": ["company_specific_catalyst", "technical_confirmation"],
+            "repair_modes": ["repair_news", "repair_review_evidence"],
+        }
+    ]
+
+
+def test_daily_phase_requests_targeted_evidence_before_publication():
+    score = _candidate_score("NVDA", opportunity_score=90, negative_score=5)
+    analysis = {
+        "ticker": "NVDA",
+        "analysis_method": "ai",
+        "recommendation": "BUY",
+        "evidence_repair_round": 0,
+        "ai_review": {
+            "status": "rejected",
+            "approved": False,
+            "evidence_gaps": [
+                {
+                    "gap_type": "company_specific_catalyst",
+                    "classification": "collectable",
+                    "description": "Missing catalyst source.",
+                    "source_candidates": ["company news"],
+                },
+                {
+                    "gap_type": "analyst_action_recency",
+                    "classification": "collectable",
+                    "description": "Recent analyst action is missing.",
+                    "source_candidates": ["Finnhub"],
+                },
+            ],
+        },
+    }
+
+    with (
+        patch("src.analysis.phase1_pipeline._collection_gate_response", return_value=None),
+        patch("src.analysis.phase1_pipeline._publication_exists_for_date", return_value=False),
+        patch(
+            "src.analysis.phase1_pipeline._eligible_context",
+            return_value={"eligible_stocks": [], "freshness": {}},
+        ),
+        patch(
+            "src.analysis.phase1_pipeline.store.candidate_scores_for_date",
+            return_value=[score],
+        ),
+        patch(
+            "src.analysis.phase1_pipeline.store.candidate_analysis_for_date",
+            return_value=[analysis],
+        ),
+        patch("src.analysis.phase1_pipeline.select_shortlist", return_value=[score]),
+    ):
+        result = phase1_pipeline._run_daily_orchestration_phase(
+            {}, date(2026, 6, 17)
+        )
+
+    assert result["body"]["stage"] == "evidence_repair_needed"
+    assert result["body"]["targeted_tickers"] == ["NVDA"]
+    assert result["body"]["news_tickers"] == ["NVDA"]
+    assert result["body"]["evidence_tickers"] == ["NVDA"]
+    assert result["body"]["repair_round"] == 1
 
 
 def test_review_rejection_suppresses_public_publication():
@@ -3056,6 +3307,119 @@ def test_run_phase1_retry_ai_review_reviews_error_results():
     review.assert_called_once()
     assert review.call_args.args[2]["publication_allowed"] is True
     put_analysis.assert_called_once_with(reviewed)
+
+
+def test_run_phase1_repair_review_evidence_reanalyzes_once_and_keeps_history():
+    score = _candidate_score("AAPL", opportunity_score=80, negative_score=5)
+    previous = {
+        "ticker": "AAPL",
+        "analysis_method": "ai",
+        "analysis_model": "analysis-v1",
+        "recommendation": "BUY",
+        "confidence_score": 70,
+        "publication_allowed": False,
+        "created_at": "2026-06-17T10:00:00",
+        "evidence_repair_round": 0,
+        "ai_review": {
+            "status": "rejected",
+            "approved": False,
+            "rationale": "Catalyst needs verification.",
+        },
+    }
+    stock = {"ticker": "AAPL", "company_name": "Apple", "sector": "Technology"}
+    reanalyzed = {
+        **previous,
+        "analysis_model": "analysis-v2",
+        "confidence_score": 76,
+        "publication_allowed": True,
+    }
+    reviewed = {
+        **reanalyzed,
+        "ai_review": {
+            "status": "approved",
+            "approved": True,
+            "rationale": "The refreshed evidence supports the call.",
+        },
+    }
+
+    with (
+        patch("src.analysis.phase1_pipeline.DatabasePool"),
+        patch(
+            "src.analysis.phase1_pipeline.score_candidates",
+            return_value=[score],
+        ) as rescore,
+        patch(
+            "src.analysis.phase1_pipeline.store.candidate_analysis_for_date",
+            return_value=[previous],
+        ),
+        patch(
+            "src.analysis.phase1_pipeline.store.active_stock_metadata",
+            return_value=[stock],
+        ),
+        patch("src.analysis.phase1_pipeline._build_openai_client", return_value=object()),
+        patch("src.analysis.phase1_pipeline._analyze_candidate", return_value=reanalyzed),
+        patch(
+            "src.analysis.phase1_pipeline._review_candidate_analysis",
+            return_value=reviewed,
+        ),
+        patch("src.analysis.phase1_pipeline.store.put_candidate_analysis") as put_analysis,
+        patch("src.analysis.phase1_pipeline._emit_metric"),
+        patch.object(phase1_pipeline, "date", _fixed_date(date(2026, 6, 17))),
+    ):
+        result = run_phase1_pipeline(
+            {
+                "mode": "repair_review_evidence",
+                "run_date": "2026-06-17",
+                "tickers": ["AAPL"],
+                "max_tickers": 10,
+            }
+        )
+
+    assert result["statusCode"] == 200
+    assert result["body"]["stage"] == "evidence_repair_completed"
+    assert result["body"]["reanalyzed_tickers"] == ["AAPL"]
+    rescore.assert_called_once_with([stock], date(2026, 6, 17))
+    stored = put_analysis.call_args.args[0]
+    assert stored["evidence_repair_round"] == 1
+    assert stored["evidence_repair_outcome"] == "repaired_and_approved"
+    assert stored["review_history"][0]["ai_review"] == previous["ai_review"]
+
+
+def test_evidence_repair_outcome_classifies_operational_failures():
+    assert phase1_pipeline._evidence_repair_outcome(
+        {
+            "analysis_method": "ai",
+            "ai_review": {
+                "status": "rejected",
+                "approved": False,
+                "evidence_gaps": [
+                    {
+                        "gap_type": "sec_8k_substance",
+                        "classification": "feature_missing",
+                        "description": "Filing text extraction is unavailable.",
+                        "source_candidates": ["SEC"],
+                    }
+                ],
+            },
+        }
+    ) == "feature_missing_developer_incident"
+    assert phase1_pipeline._evidence_repair_outcome(
+        {
+            "analysis_method": "ai",
+            "ai_review": {
+                "status": "rejected",
+                "approved": False,
+                "evidence_gaps": [
+                    {
+                        "gap_type": "company_specific_catalyst",
+                        "classification": "provider_failure",
+                        "description": "Provider quota was exhausted.",
+                        "source_candidates": ["NewsAPI"],
+                    }
+                ],
+            },
+        }
+    ) == "provider_incident"
 
 
 def _stock_rows(

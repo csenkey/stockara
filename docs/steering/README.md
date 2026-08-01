@@ -2,7 +2,7 @@
 
 These files are the canonical, tool-neutral steering layer for Stockara. Codex and Claude should both read these before making product or architecture changes.
 
-`.kiro/specs/` is legacy reference material only. Do not add new planning work there unless Istvan explicitly asks for Kiro-compatible artifacts.
+Legacy Kiro planning documents have been removed. Do not recreate Kiro-compatible artifacts unless Istvan explicitly asks for that format.
 
 ## Read Order For Agents
 
@@ -21,8 +21,7 @@ These files are the canonical, tool-neutral steering layer for Stockara. Codex a
 - Mark completed backlog items with `[x]` only after the code, tests, docs, and verification expected by that item are actually done.
 - Preserve traceability by naming the requirement or product rule behind each executable task.
 - Prefer dated notes inside feature files over scattering session-specific context across chat history.
-- If `.kiro` disagrees with `docs/steering/`, follow `docs/steering/`.
-- If older backlog or handoff files disagree with `docs/steering/work-queue.md`, follow `docs/steering/work-queue.md`.
+- Deleted historical backlog and handoff files are not active sources. Follow `docs/steering/work-queue.md`.
 
 ## Stable Release Operations
 
@@ -34,6 +33,7 @@ These files are the canonical, tool-neutral steering layer for Stockara. Codex a
 
 ## Current Feature Steering
 
+- `stockara-1.0.md` — shipped baseline, runtime architecture, operations, and limitations.
 - `work-queue.md`
 - `features/daily-pipeline-stability/requirements.md`
 - `features/daily-pipeline-stability/design.md`

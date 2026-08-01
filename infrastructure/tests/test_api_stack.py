@@ -314,6 +314,7 @@ def test_daily_pipeline_state_machine_is_created_for_daily_production_run():
     assert properties["StateMachineName"] == "stockara-codex-test-daily-pipeline"
     assert properties["StateMachineType"] == "STANDARD"
     assert "Daily Stockara workflow coordinating coarse" in definition
+    assert "fallback_max_tickers" in definition
     for state_name in [
         "SyncStaticMetadata",
         "CreateOrRefreshManifest",
@@ -330,6 +331,14 @@ def test_daily_pipeline_state_machine_is_created_for_daily_production_run():
         "CollectEvidence",
         "WaitForAnalysisWindow",
         "AnalyzeAndPublish",
+        "CollectReviewEvidence",
+        "IsReviewNewsRepairRequired",
+        "RepairReviewNews",
+        "SkipReviewNews",
+        "IsReviewEvidenceRepairRequired",
+        "RepairReviewEvidence",
+        "SkipReviewEvidence",
+        "ReanalyzeAfterEvidence",
         "WaitForAnalysisProgress",
         "DecideAnalysisProgress",
         "DecidePublicationReadiness",
@@ -374,6 +383,9 @@ def test_daily_pipeline_state_machine_is_created_for_daily_production_run():
     assert "repair_news" in definition
     assert "repair_calendars" in definition
     assert "repair_evidence" in definition
+    assert "repair_review_evidence" in definition
+    assert "evidence_repair_needed" in definition
+    assert "targeted_tickers" in definition
     template.has_resource_properties(
         "AWS::Events::Rule",
         {

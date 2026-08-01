@@ -15,6 +15,7 @@ import yfinance as yf
 
 from src.db.connection import DatabasePool, store
 from src.models.schemas import (
+    AIReviewDecision,
     CollectionManifest,
     RepairMode,
     RepairModeRequest,
@@ -148,6 +149,88 @@ OPTIONAL_EVIDENCE_SIGNAL_TYPES = {
 REDUCED_CONFIDENCE_PENALTY = int(
     os.environ.get("PHASE1_REDUCED_CONFIDENCE_PENALTY", "10")
 )
+AI_REVIEW_MAX_ATTEMPTS = int(os.environ.get("PHASE1_AI_REVIEW_MAX_ATTEMPTS", "2"))
+EVIDENCE_REPAIR_MAX_ROUNDS = int(
+    os.environ.get("PHASE1_EVIDENCE_REPAIR_MAX_ROUNDS", "1")
+)
+EVIDENCE_REPAIR_MAX_TICKERS = int(
+    os.environ.get("PHASE1_EVIDENCE_REPAIR_MAX_TICKERS", "10")
+)
+
+EVIDENCE_GAP_CAPABILITIES = {
+    "company_specific_catalyst": {
+        "title": "Company-specific catalyst verification",
+        "collector_supported": True,
+        "repair_mode": "repair_news",
+        "provider_budget_keys": ["newsapi", "finnhub", "alpha_vantage"],
+        "developer_owner": "news_collection",
+        "default_classification": "collectable",
+        "collection_plan": "Collect ticker-specific news and company event evidence.",
+    },
+    "analyst_action_recency": {
+        "title": "Recent analyst action context",
+        "collector_supported": True,
+        "repair_mode": "repair_evidence",
+        "provider_budget_keys": ["finnhub", "yfinance"],
+        "developer_owner": "evidence_collection",
+        "default_classification": "collectable",
+        "collection_plan": "Refresh analyst recommendation, rating, and price-target evidence.",
+    },
+    "technical_confirmation": {
+        "title": "Technical confirmation and trade horizon",
+        "collector_supported": True,
+        "repair_mode": "repair_review_evidence",
+        "provider_budget_keys": [],
+        "developer_owner": "analysis",
+        "default_classification": "analysis_context_missing",
+        "collection_plan": "Rebuild analysis with stored support, resistance, volume, relative strength, and timeframe evidence.",
+    },
+    "sec_8k_substance": {
+        "title": "SEC filing substance",
+        "collector_supported": False,
+        "repair_mode": None,
+        "provider_budget_keys": ["sec"],
+        "developer_owner": "evidence_collection",
+        "default_classification": "feature_missing",
+        "collection_plan": "Add bounded SEC filing-text extraction before retrying this evidence gap.",
+    },
+    "fundamental_valuation_context": {
+        "title": "Fundamental and valuation context",
+        "collector_supported": False,
+        "repair_mode": None,
+        "provider_budget_keys": ["sec", "finnhub", "yfinance"],
+        "developer_owner": "evidence_collection",
+        "default_classification": "feature_missing",
+        "collection_plan": "Add durable source-backed fundamentals and valuation context.",
+    },
+    "metadata_quality": {
+        "title": "Company metadata verification",
+        "collector_supported": True,
+        "repair_mode": "sync_static_metadata",
+        "provider_budget_keys": [],
+        "developer_owner": "metadata",
+        "default_classification": "collectable",
+        "collection_plan": "Refresh repository-backed company identity and classification metadata.",
+    },
+    "negative_event_detail": {
+        "title": "Negative event detail",
+        "collector_supported": True,
+        "repair_mode": "repair_evidence",
+        "provider_budget_keys": ["sec", "finnhub", "yfinance"],
+        "developer_owner": "evidence_collection",
+        "default_classification": "collectable",
+        "collection_plan": "Refresh company news and SEC event evidence for the adverse thesis.",
+    },
+    "reviewer_requested_evidence": {
+        "title": "Reviewer-requested evidence",
+        "collector_supported": False,
+        "repair_mode": None,
+        "provider_budget_keys": [],
+        "developer_owner": "analysis",
+        "default_classification": "not_collectable",
+        "collection_plan": "Convert the reviewer request into a supported typed evidence capability.",
+    },
+}
 
 
 def run_phase1_pipeline(event: dict | None = None) -> dict[str, Any]:
@@ -171,6 +254,8 @@ def run_phase1_pipeline(event: dict | None = None) -> dict[str, Any]:
             return _run_retry_ai_analysis_phase(event)
         if mode == RepairMode.RETRY_AI_REVIEW:
             return _run_retry_ai_review_phase(event)
+        if mode == RepairMode.REPAIR_REVIEW_EVIDENCE:
+            return _run_repair_review_evidence_phase(event)
         if mode != "full":
             return {"statusCode": 400, "body": f"Unsupported Phase 1 mode: {mode}"}
         return _run_full_phase(run_date)
@@ -426,6 +511,135 @@ def _run_retry_ai_review_phase(event: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _run_repair_review_evidence_phase(event: dict[str, Any]) -> dict[str, Any]:
+    """Reanalyze selected candidates once after targeted evidence collection."""
+    request = RepairModeRequest.model_validate(event)
+    run_date = request.run_date or date.today()
+    requested_tickers = set(request.tickers)
+    if not requested_tickers:
+        return {
+            "statusCode": 400,
+            "body": "repair_review_evidence requires at least one ticker",
+        }
+
+    analyses_by_ticker = {
+        analysis["ticker"]: analysis
+        for analysis in store.candidate_analysis_for_date(run_date)
+    }
+    stocks_by_ticker = {
+        stock["ticker"]: stock for stock in store.active_stock_metadata()
+    }
+    targets = sorted(requested_tickers)[: request.max_tickers or EVIDENCE_REPAIR_MAX_TICKERS]
+    body: dict[str, Any] = {
+        "mode": RepairMode.REPAIR_REVIEW_EVIDENCE.value,
+        "stage": "evidence_repair_completed",
+        "run_date": run_date.isoformat(),
+        "targeted_tickers": targets,
+    }
+    if request.dry_run:
+        return {
+            "statusCode": 200,
+            "body": {**body, "status": "dry_run", "reanalyzed_count": 0},
+        }
+
+    target_stocks = [
+        stocks_by_ticker[ticker]
+        for ticker in targets
+        if ticker in stocks_by_ticker
+    ]
+    scores_by_ticker = {
+        score["ticker"]: score
+        for score in score_candidates(target_stocks, run_date)
+    }
+    client = _build_openai_client()
+    repaired: list[dict[str, Any]] = []
+    failed: list[dict[str, str]] = []
+    for ticker in targets:
+        stock = stocks_by_ticker.get(ticker)
+        score = scores_by_ticker.get(ticker)
+        previous = analyses_by_ticker.get(ticker)
+        if not stock or not score or not previous:
+            failed.append({"ticker": ticker, "reason": "candidate_context_missing"})
+            logger.error(
+                "evidence_repair_candidate_failed",
+                ticker=ticker,
+                reason="candidate_context_missing",
+            )
+            continue
+        previous_round = int(previous.get("evidence_repair_round", 0) or 0)
+        if previous_round >= EVIDENCE_REPAIR_MAX_ROUNDS:
+            failed.append({"ticker": ticker, "reason": "repair_round_limit_reached"})
+            logger.error(
+                "evidence_repair_candidate_failed",
+                ticker=ticker,
+                reason="repair_round_limit_reached",
+            )
+            continue
+
+        analysis = _analyze_candidate(client, stock, score, run_date)
+        if analysis["analysis_method"] == "ai" and _requires_review(analysis):
+            analysis = _review_candidate_analysis(client, stock, analysis)
+        analysis["evidence_repair_round"] = previous_round + 1
+        analysis["review_history"] = [
+            *(previous.get("review_history") or []),
+            _review_history_entry(previous, previous_round),
+        ]
+        analysis["evidence_repair_outcome"] = _evidence_repair_outcome(analysis)
+        store.put_candidate_analysis(analysis)
+        _emit_metric(
+            f"evidence_repair_outcome_{analysis['evidence_repair_outcome']}",
+            1,
+        )
+        repaired.append(analysis)
+
+    _emit_metric("evidence_repair_candidates_reanalyzed", len(repaired))
+    _emit_metric("evidence_repair_candidates_failed", len(failed))
+    return {
+        "statusCode": 200,
+        "body": {
+            **body,
+            "status": "partial" if failed else "success",
+            "reanalyzed_count": len(repaired),
+            "reanalyzed_tickers": [analysis["ticker"] for analysis in repaired],
+            "failed_tickers": failed,
+        },
+    }
+
+
+def _review_history_entry(
+    analysis: dict[str, Any], repair_round: int
+) -> dict[str, Any]:
+    return {
+        "repair_round": repair_round,
+        "recommendation": analysis.get("recommendation"),
+        "confidence_score": analysis.get("confidence_score"),
+        "analysis_model": analysis.get("analysis_model"),
+        "created_at": analysis.get("created_at"),
+        "ai_review": analysis.get("ai_review"),
+    }
+
+
+def _evidence_repair_outcome(analysis: dict[str, Any]) -> str:
+    review = analysis.get("ai_review") or {}
+    if review.get("approved", False):
+        return "repaired_and_approved"
+    if analysis.get("analysis_method") != "ai" or review.get("status") in {
+        "error",
+        "invalid_response",
+        "unavailable",
+    }:
+        return "invalid_ai_incident"
+    gap_classifications = {
+        gap.get("classification")
+        for gap in _normalized_review_evidence_gaps(analysis)
+    }
+    if "provider_failure" in gap_classifications:
+        return "provider_incident"
+    if "feature_missing" in gap_classifications:
+        return "feature_missing_developer_incident"
+    return "valid_rejection"
+
+
 def _retryable_analysis_scores(
     shortlist: list[dict[str, Any]],
     analyses: list[dict[str, Any]],
@@ -460,7 +674,73 @@ def _is_retryable_review_analysis(
     status = review.get("status")
     if requested_tickers:
         return not bool(review.get("approved", False))
-    return status in {None, "error", "unavailable"}
+    return status in {None, "error", "unavailable", "invalid_response"}
+
+
+def _review_evidence_repair_plan(
+    analyses: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return a bounded plan for first-round repairable review gaps."""
+    plan: list[dict[str, Any]] = []
+    for analysis in analyses:
+        if len(plan) >= EVIDENCE_REPAIR_MAX_TICKERS:
+            break
+        if int(analysis.get("evidence_repair_round", 0) or 0) >= EVIDENCE_REPAIR_MAX_ROUNDS:
+            continue
+        review = analysis.get("ai_review") or {}
+        if review.get("status") != "rejected" or review.get("approved", False):
+            continue
+        repairable_gaps = [
+            gap
+            for gap in _normalized_review_evidence_gaps(analysis)
+            if gap.get("classification")
+            in {"collectable", "analysis_context_missing"}
+        ]
+        if not repairable_gaps:
+            continue
+        repair_modes = sorted(
+            {
+                str(gap.get("repair_mode"))
+                for gap in repairable_gaps
+                if gap.get("repair_mode")
+            }
+        )
+        plan.append(
+            {
+                "ticker": analysis.get("ticker"),
+                "gap_types": [gap["gap_type"] for gap in repairable_gaps],
+                "repair_modes": repair_modes,
+            }
+        )
+    return plan
+
+
+def _record_review_gap_incidents(analyses: list[dict[str, Any]]) -> None:
+    feature_missing = 0
+    provider_failures = 0
+    for analysis in analyses:
+        for gap in _normalized_review_evidence_gaps(analysis):
+            classification = gap.get("classification")
+            if classification == "feature_missing":
+                feature_missing += 1
+                logger.error(
+                    "review_evidence_feature_missing",
+                    ticker=analysis.get("ticker"),
+                    gap_type=gap.get("gap_type"),
+                    description=gap.get("description"),
+                )
+            elif classification == "provider_failure":
+                provider_failures += 1
+                logger.error(
+                    "review_evidence_provider_failure",
+                    ticker=analysis.get("ticker"),
+                    gap_type=gap.get("gap_type"),
+                    description=gap.get("description"),
+                )
+    if feature_missing:
+        _emit_metric("review_feature_missing_incidents", feature_missing)
+    if provider_failures:
+        _emit_metric("review_provider_failure_incidents", provider_failures)
 
 
 def _run_daily_orchestration_phase(
@@ -525,6 +805,35 @@ def _run_daily_orchestration_phase(
                 "analyzed_count": len(analyses),
                 "remaining_shortlist_count": max(len(remaining) - len(batch), 0),
                 "analyzed_tickers": [analysis["ticker"] for analysis in analyses],
+            },
+        }
+
+    _record_review_gap_incidents(existing_analyses)
+    repair_plan = _review_evidence_repair_plan(existing_analyses)
+    if repair_plan:
+        news_tickers = [
+            row["ticker"]
+            for row in repair_plan
+            if "repair_news" in row["repair_modes"]
+        ]
+        evidence_tickers = [
+            row["ticker"]
+            for row in repair_plan
+            if "repair_evidence" in row["repair_modes"]
+        ]
+        return {
+            "statusCode": 200,
+            "body": {
+                "mode": "daily",
+                "stage": "evidence_repair_needed",
+                "run_date": run_date.isoformat(),
+                "targeted_tickers": [row["ticker"] for row in repair_plan],
+                "news_tickers": news_tickers,
+                "evidence_tickers": evidence_tickers,
+                "repair_news_required": bool(news_tickers),
+                "repair_evidence_required": bool(evidence_tickers),
+                "repair_plan": repair_plan,
+                "repair_round": 1,
             },
         }
 
@@ -1799,6 +2108,8 @@ def _workflow_step_summary(value: Any) -> dict[str, Any]:
         "reason": body.get("reason"),
         "processed_count": body.get("processed_count"),
         "collected_count": body.get("collected_count"),
+        "events_collected": body.get("events_collected"),
+        "selected_ticker_count": body.get("selected_ticker_count"),
         "failed_count": body.get("failed_count"),
         "candidate_count": body.get("candidate_count"),
         "analyzed_count": body.get("analyzed_count"),
@@ -1811,6 +2122,8 @@ def _workflow_step_summary(value: Any) -> dict[str, Any]:
             "dispatch_deadline_exceeded"
         ),
         "task_counts": body.get("task_counts"),
+        "provider_health": body.get("provider_health"),
+        "warnings": body.get("warnings"),
     }
     return {key: item for key, item in summary.items() if item is not None}
 
@@ -2305,6 +2618,7 @@ def _review_candidate_analysis(
             **analysis,
             "publication_allowed": False,
             "ai_review": {
+                "schema_version": "1.0",
                 "status": "unavailable",
                 "model": OPENAI_REVIEW_MODEL,
                 "approved": False,
@@ -2313,79 +2627,183 @@ def _review_candidate_analysis(
             },
         }
 
-    try:
-        response = client.chat.completions.create(
-            model=OPENAI_REVIEW_MODEL,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a skeptical investment-risk reviewer. "
-                        "Your job is to reject unsupported BUY or SELL stock "
-                        "recommendations. This is not financial advice."
-                    ),
-                },
-                {"role": "user", "content": _build_review_prompt(stock, analysis)},
-            ],
-            response_format={"type": "json_object"},
-            **_chat_completion_options(
-                OPENAI_REVIEW_MODEL,
-                max_tokens=400,
-                temperature=0.1,
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a skeptical investment-risk reviewer. Your job is to "
+                "reject unsupported BUY or SELL stock recommendations. Return "
+                "a complete review object. This is not financial advice."
             ),
-        )
-        parsed = json.loads(response.choices[0].message.content or "{}")
-        approved = bool(parsed.get("approved", False))
-        confidence_adjustment = int(parsed.get("confidence_adjustment", 0) or 0)
-        confidence_score = max(
-            0,
-            min(100, int(analysis["confidence_score"]) + confidence_adjustment),
-        )
-        concerns = parsed.get("concerns", [])
-        if not isinstance(concerns, list):
-            concerns = [str(concerns)]
-        updated = {
-            **analysis,
-            "confidence_score": confidence_score,
-            "publication_allowed": approved,
-            "ai_review": {
-                "status": "approved" if approved else "rejected",
-                "model": OPENAI_REVIEW_MODEL,
-                "approved": approved,
-                "rationale": str(parsed.get("rationale", ""))[:750],
-                "concerns": [str(concern)[:250] for concern in concerns[:5]],
-                "rejection_category": str(parsed.get("rejection_category", ""))[:120]
-                or None,
-                "what_would_make_approvable": str(
-                    parsed.get("what_would_make_approvable", "")
-                )[:500]
-                or None,
-            },
-        }
-        _emit_metric("ai_reviews_completed", 1)
-        if not approved:
-            _emit_metric("ai_reviews_rejected", 1)
-            logger.warning(
-                "candidate_ai_review_rejected",
-                ticker=stock["ticker"],
-                recommendation=analysis["recommendation"],
-                rationale=updated["ai_review"]["rationale"],
+        },
+        {"role": "user", "content": _build_review_prompt(stock, analysis)},
+    ]
+    last_error: Exception | None = None
+    invalid_response = False
+    for attempt in range(1, max(AI_REVIEW_MAX_ATTEMPTS, 1) + 1):
+        try:
+            response = client.chat.completions.create(
+                model=OPENAI_REVIEW_MODEL,
+                messages=messages,
+                response_format=_review_response_format(),
+                **_chat_completion_options(
+                    OPENAI_REVIEW_MODEL,
+                    max_tokens=900,
+                    temperature=0.1,
+                ),
             )
-        return updated
-    except Exception as exc:
-        logger.warning("candidate_ai_review_failed", ticker=stock["ticker"], error=str(exc))
-        _emit_metric("ai_review_failures", 1)
-        return {
-            **analysis,
-            "publication_allowed": False,
-            "ai_review": {
-                "status": "error",
-                "model": OPENAI_REVIEW_MODEL,
-                "approved": False,
-                "rationale": "Review model call failed.",
-                "concerns": ["review_model_error"],
-            },
+            parsed = json.loads(response.choices[0].message.content or "{}")
+            decision = AIReviewDecision.model_validate(parsed)
+            approved = decision.approved
+            confidence_score = max(
+                0,
+                min(
+                    100,
+                    int(analysis["confidence_score"])
+                    + decision.confidence_adjustment,
+                ),
+            )
+            response_metadata = _review_response_metadata(response)
+            updated = {
+                **analysis,
+                "confidence_score": confidence_score,
+                "publication_allowed": approved,
+                "ai_review": {
+                    "schema_version": decision.schema_version,
+                    "status": "approved" if approved else "rejected",
+                    "model": OPENAI_REVIEW_MODEL,
+                    "approved": approved,
+                    "rationale": decision.rationale,
+                    "concerns": decision.concerns,
+                    "rejection_category": decision.rejection_category or None,
+                    "what_would_make_approvable": (
+                        decision.what_would_make_approvable or None
+                    ),
+                    "evidence_gaps": [
+                        gap.model_dump() for gap in decision.evidence_gaps
+                    ],
+                    "attempt_count": attempt,
+                    **response_metadata,
+                },
+            }
+            _emit_metric("ai_reviews_completed", 1)
+            if not approved:
+                _emit_metric("ai_reviews_rejected", 1)
+                logger.warning(
+                    "candidate_ai_review_rejected",
+                    ticker=stock["ticker"],
+                    recommendation=analysis["recommendation"],
+                    rationale=decision.rationale,
+                    evidence_gap_count=len(decision.evidence_gaps),
+                    attempt=attempt,
+                )
+            return updated
+        except (json.JSONDecodeError, ValueError, TypeError) as exc:
+            last_error = exc
+            invalid_response = True
+            _emit_metric("ai_review_invalid_responses", 1)
+            logger.warning(
+                "candidate_ai_review_invalid_response",
+                ticker=stock["ticker"],
+                attempt=attempt,
+                error=str(exc),
+            )
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "The previous response failed schema validation. Return "
+                        "all required fields. A rejection must include a non-empty "
+                        "rationale, rejection_category, and "
+                        "what_would_make_approvable."
+                    ),
+                }
+            )
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "candidate_ai_review_attempt_failed",
+                ticker=stock["ticker"],
+                attempt=attempt,
+                error=str(exc),
+            )
+
+    status = "invalid_response" if invalid_response else "error"
+    metric = "ai_review_invalid_response_exhausted" if invalid_response else "ai_review_failures"
+    _emit_metric(metric, 1)
+    logger.warning(
+        "candidate_ai_review_failed",
+        ticker=stock["ticker"],
+        status=status,
+        error=str(last_error),
+    )
+    return {
+        **analysis,
+        "publication_allowed": False,
+        "ai_review": {
+            "schema_version": "1.0",
+            "status": status,
+            "model": OPENAI_REVIEW_MODEL,
+            "approved": False,
+            "rationale": (
+                "Review model returned an incomplete response."
+                if invalid_response
+                else "Review model call failed."
+            ),
+            "concerns": [
+                "review_response_invalid" if invalid_response else "review_model_error"
+            ],
+            "rejection_category": None,
+            "what_would_make_approvable": None,
+            "evidence_gaps": [],
+            "attempt_count": max(AI_REVIEW_MAX_ATTEMPTS, 1),
+            "validation_error": str(last_error)[:500],
+        },
+    }
+
+
+def _review_response_format() -> dict[str, Any]:
+    schema = _strict_json_schema(AIReviewDecision.model_json_schema())
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "stockara_ai_review",
+            "strict": True,
+            "schema": schema,
+        },
+    }
+
+
+def _strict_json_schema(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_strict_json_schema(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    cleaned = {
+        key: _strict_json_schema(item)
+        for key, item in value.items()
+        if key != "default"
+    }
+    if cleaned.get("type") == "object" or "properties" in cleaned:
+        cleaned["additionalProperties"] = False
+        cleaned["required"] = list(cleaned.get("properties", {}).keys())
+    return cleaned
+
+
+def _review_response_metadata(response: Any) -> dict[str, Any]:
+    choice = response.choices[0]
+    usage = getattr(response, "usage", None)
+    metadata = {
+        "response_id": getattr(response, "id", None),
+        "finish_reason": getattr(choice, "finish_reason", None),
+    }
+    if usage is not None:
+        metadata["usage"] = {
+            "prompt_tokens": getattr(usage, "prompt_tokens", None),
+            "completion_tokens": getattr(usage, "completion_tokens", None),
+            "total_tokens": getattr(usage, "total_tokens", None),
         }
+    return {key: value for key, value in metadata.items() if value is not None}
 
 
 def _build_review_prompt(stock: dict[str, Any], analysis: dict[str, Any]) -> str:
@@ -2420,12 +2838,20 @@ the evidence, missing a signal failure/price/event/time condition, too
 speculative, stale, contradicted, or insufficiently supported.
 
 Return JSON with keys:
+schema_version: "1.0"
 approved: boolean
 rationale: concise explanation
 concerns: list of short strings
 confidence_adjustment: integer from -20 to 10
 rejection_category: short category when not approved, otherwise empty string
 what_would_make_approvable: concise missing evidence or prompt issue when not approved
+evidence_gaps: list of objects with gap_type, classification, description, and
+source_candidates. Use only these classifications: collectable,
+feature_missing, analysis_context_missing, provider_failure, not_collectable.
+Use stable gap types such as company_specific_catalyst, analyst_action_recency,
+technical_confirmation, sec_8k_substance, fundamental_valuation_context,
+metadata_quality, or negative_event_detail. Return an empty list when no
+evidence gap remains.
 """
 
 
@@ -2527,6 +2953,24 @@ def _derived_market_context_signals(
     )
     drawdown_20d = _drawdown_percent(closes[-20:])
 
+    level_rows = ordered[-20:]
+    lows = [
+        Decimal(str(row.get("low_price", _analysis_close_price(row))))
+        for row in level_rows
+    ]
+    highs = [
+        Decimal(str(row.get("high_price", _analysis_close_price(row))))
+        for row in level_rows
+    ]
+    support = min(lows)
+    resistance = max(highs)
+    recent_volume_ratio = 1.0
+    if len(volumes) >= 8:
+        recent_volume = _average_decimal(volumes[-3:])
+        baseline_volume = _average_decimal(volumes[-23:-3] or volumes[:-3])
+        if baseline_volume > 0:
+            recent_volume_ratio = float(recent_volume / baseline_volume)
+
     trend_score = 0
     if return_5d >= 2:
         trend_score += 14
@@ -2548,6 +2992,34 @@ def _derived_market_context_signals(
         trend_score -= min(12, int(abs(drawdown_20d) - 10))
 
     signals: list[dict[str, Any]] = []
+    signals.append(
+        _signal(
+            ticker,
+            "technical_levels",
+            "neutral",
+            0,
+            "Objective technical levels",
+            (
+                f"{ticker} closed at {_jsonable_value(latest_close)}, with "
+                f"20-session SMA {_jsonable_value(sma_20)}, support "
+                f"{_jsonable_value(support)}, resistance "
+                f"{_jsonable_value(resistance)}, and recent 3-session volume "
+                f"at {recent_volume_ratio:.2f}x baseline; review horizon is "
+                "1-30 days."
+            ),
+            "derived_ohlcv",
+            {
+                "context_only": True,
+                "latest_close": _jsonable_value(latest_close),
+                "sma_20": _jsonable_value(sma_20),
+                "support": _jsonable_value(support),
+                "resistance": _jsonable_value(resistance),
+                "recent_3_session_volume_ratio": round(recent_volume_ratio, 2),
+                "trade_horizon": "1-30 days",
+                "history_row_count": len(ordered),
+            },
+        )
+    )
     if abs(trend_score) >= 20:
         signals.append(
             _signal(
@@ -2577,9 +3049,7 @@ def _derived_market_context_signals(
     if len(volumes) >= 8:
         recent_volume = _average_decimal(volumes[-3:])
         baseline_volume = _average_decimal(volumes[-23:-3] or volumes[:-3])
-        volume_persistence = (
-            float(recent_volume / baseline_volume) if baseline_volume > 0 else 1.0
-        )
+        volume_persistence = recent_volume_ratio
         if volume_persistence >= 1.35:
             direction = "positive" if return_5d >= 0 else "negative"
             score = int(min(35, 12 + (volume_persistence - 1) * 12 + abs(return_5d)))
@@ -3573,15 +4043,25 @@ def _evidence(signals: list[dict[str, Any]]) -> list[str]:
     evidence: list[str] = []
     seen: set[str] = set()
     scored_signals = _scored_evidence_signals(signals)
-    evidence_signals = scored_signals or signals
-    for signal in sorted(evidence_signals, key=lambda s: abs(s["score"]), reverse=True):
+    context_signals = [
+        signal
+        for signal in signals
+        if signal.get("signal_type") == "technical_levels"
+    ]
+    ranked_signals = sorted(
+        scored_signals or signals,
+        key=lambda signal: abs(signal["score"]),
+        reverse=True,
+    )
+    evidence_signals = [*context_signals, *ranked_signals]
+    for signal in evidence_signals:
         summary = str(signal.get("summary", "")).strip()
         key = " ".join(summary.lower().split())
         if not summary or key in seen:
             continue
         seen.add(key)
         evidence.append(summary)
-        if len(evidence) >= 5:
+        if len(evidence) >= 6:
             break
     return evidence
 
@@ -3596,8 +4076,27 @@ def _invalidation_checks(
 
     checks: list[str] = []
     evidence_signals = _scored_evidence_signals(signals) or signals
-    for signal in sorted(evidence_signals, key=lambda s: abs(s.get("score", 0)), reverse=True):
-        if target_direction and str(signal.get("direction", "")).lower() != target_direction:
+    technical_levels = next(
+        (
+            signal
+            for signal in signals
+            if signal.get("signal_type") == "technical_levels"
+        ),
+        None,
+    )
+    evidence_signals = sorted(
+        evidence_signals,
+        key=lambda signal: abs(signal.get("score", 0)),
+        reverse=True,
+    )
+    if technical_levels and technical_levels not in evidence_signals:
+        evidence_signals = [technical_levels, *evidence_signals]
+    for signal in evidence_signals:
+        if (
+            target_direction
+            and str(signal.get("direction", "")).lower() != target_direction
+            and signal.get("signal_type") != "technical_levels"
+        ):
             continue
         check = _signal_invalidation_check(signal, recommendation)
         if check and check not in checks:
@@ -3623,6 +4122,29 @@ def _signal_invalidation_check(signal: dict[str, Any], recommendation: str) -> s
     raw = raw if isinstance(raw, dict) else {}
     ticker = str(signal.get("ticker", "ticker"))
     opposite_direction = "negative" if direction == "positive" else "positive"
+
+    if signal_type == "technical_levels":
+        support = raw.get("support")
+        resistance = raw.get("resistance")
+        sma_20 = raw.get("sma_20")
+        horizon = raw.get("trade_horizon", "1-30 days")
+        if recommendation == "BUY":
+            levels = [value for value in (support, sma_20) if value is not None]
+            threshold = min(levels) if levels else None
+            if threshold is not None:
+                return (
+                    f"A close below {threshold} invalidates the BUY setup; "
+                    f"require follow-through within {horizon}."
+                )
+        if recommendation == "SELL":
+            levels = [value for value in (resistance, sma_20) if value is not None]
+            threshold = max(levels) if levels else None
+            if threshold is not None:
+                return (
+                    f"A close above {threshold} invalidates the SELL setup; "
+                    f"require downside follow-through within {horizon}."
+                )
+        return f"Reassess {ticker} against its objective technical levels within {horizon}."
 
     if signal_type in {"technical_trend", "price_move", "volume_move", "volume_persistence"}:
         pieces = []
@@ -3949,7 +4471,7 @@ def _is_fallback_preview_candidate(analysis: dict[str, Any]) -> bool:
     if analysis.get("analysis_method") == "fallback_heuristic":
         return True
     review_status = (analysis.get("ai_review") or {}).get("status")
-    return review_status in {"error", "unavailable"}
+    return review_status in {"error", "unavailable", "invalid_response"}
 
 
 def _fallback_preview_confidence_cap(analysis: dict[str, Any]) -> int:
@@ -3986,6 +4508,7 @@ def _review_policy_summary(analyses: list[dict[str, Any]]) -> dict[str, Any]:
         "approved_count": status_counts.get("approved", 0),
         "rejected_count": status_counts.get("rejected", 0),
         "review_error_count": status_counts.get("error", 0),
+        "review_invalid_response_count": status_counts.get("invalid_response", 0),
         "review_unavailable_count": status_counts.get("unavailable", 0),
         "review_suppressed_count": len(suppressed),
         "review_status_counts": status_counts,
@@ -4345,6 +4868,19 @@ def _needed_evidence_plan(
     analysis: dict[str, Any], stock: dict[str, Any]
 ) -> list[dict[str, Any]]:
     review = analysis.get("ai_review") or {}
+    typed_gaps = _normalized_review_evidence_gaps(analysis)
+    if typed_gaps:
+        return [
+            {
+                "gap_type": gap["gap_type"],
+                "title": gap["title"],
+                "status": gap["classification"],
+                "collection_plan": gap["collection_plan"],
+                "source_candidates": gap["source_candidates"],
+                "repair_mode": gap.get("repair_mode"),
+            }
+            for gap in typed_gaps
+        ]
     text = " ".join(
         str(part or "")
         for part in [
@@ -4433,6 +4969,55 @@ def _needed_evidence_plan(
             status="temporary_suspended",
         )
     return gaps
+
+
+def _normalized_review_evidence_gaps(
+    analysis: dict[str, Any],
+) -> list[dict[str, Any]]:
+    review = analysis.get("ai_review") or {}
+    raw_gaps = review.get("evidence_gaps") or []
+    if not isinstance(raw_gaps, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for raw_gap in raw_gaps:
+        if not isinstance(raw_gap, dict):
+            continue
+        gap_type = str(raw_gap.get("gap_type") or "").strip()
+        if not gap_type:
+            continue
+        capability = EVIDENCE_GAP_CAPABILITIES.get(
+            gap_type,
+            EVIDENCE_GAP_CAPABILITIES["reviewer_requested_evidence"],
+        )
+        classification = str(
+            raw_gap.get("classification")
+            or capability["default_classification"]
+        )
+        if (
+            not capability["collector_supported"]
+            and classification in {"collectable", "analysis_context_missing"}
+        ):
+            classification = capability["default_classification"]
+        normalized.append(
+            {
+                "gap_type": gap_type,
+                "title": capability["title"]
+                if gap_type in EVIDENCE_GAP_CAPABILITIES
+                else gap_type.replace("_", " ").title(),
+                "classification": classification,
+                "description": str(raw_gap.get("description") or "")[:500],
+                "collection_plan": capability["collection_plan"],
+                "source_candidates": [
+                    str(source)[:200]
+                    for source in (raw_gap.get("source_candidates") or [])[:5]
+                ],
+                "repair_mode": capability.get("repair_mode"),
+                "collector_supported": capability["collector_supported"],
+                "provider_budget_keys": capability["provider_budget_keys"],
+                "developer_owner": capability["developer_owner"],
+            }
+        )
+    return normalized
 
 
 def _parse_date(value: Any) -> date | None:

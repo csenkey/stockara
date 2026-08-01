@@ -2,7 +2,8 @@
 
 Audience: stock market experts, investment reviewers, and product stakeholders.
 
-Status: current Stockara implementation, written for stock-domain review.
+Status: Stockara 1.0 implementation, written for stock-domain review. The
+runtime and backlog baseline is `docs/steering/stockara-1.0.md`.
 
 ## Purpose
 
@@ -20,7 +21,8 @@ Stockara is deliberately conservative:
 
 ```mermaid
 flowchart LR
-  Universe["Tracked stock universe"] --> Collect["Collect market, news, event, sector, and macro data"]
+  Universe["Tracked stock universe"] --> Orchestrator["Step Functions daily workflow"]
+  Orchestrator --> Collect["Collect market, news, event, sector, and macro data"]
   Collect --> Clean["Validate, deduplicate, summarize, and normalize"]
   Clean --> Gates["Apply data-quality gates"]
   Gates --> Score["Score opportunity and risk signals"]

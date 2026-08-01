@@ -229,6 +229,46 @@ def test_product_quality_alarms_are_created():
             1,
             "notBreaching",
         ),
+        (
+            "StockMonitoring",
+            "earnings_provider_degraded_runs",
+            "Sum",
+            "GreaterThanOrEqualToThreshold",
+            1,
+            "notBreaching",
+        ),
+        (
+            "StockaraPhase1",
+            "ai_review_invalid_response_exhausted",
+            "Sum",
+            "GreaterThanOrEqualToThreshold",
+            1,
+            "notBreaching",
+        ),
+        (
+            "StockaraPhase1",
+            "review_feature_missing_incidents",
+            "Sum",
+            "GreaterThanOrEqualToThreshold",
+            1,
+            "notBreaching",
+        ),
+        (
+            "StockaraPhase1",
+            "review_provider_failure_incidents",
+            "Sum",
+            "GreaterThanOrEqualToThreshold",
+            1,
+            "notBreaching",
+        ),
+        (
+            "StockaraPhase1",
+            "evidence_repair_candidates_failed",
+            "Sum",
+            "GreaterThanOrEqualToThreshold",
+            1,
+            "notBreaching",
+        ),
     ]
 
     for (
@@ -270,6 +310,7 @@ def test_product_quality_dashboard_widgets_are_created():
         "Publication freshness and suppression",
         "Daily workflow status",
         "Fallback and review gate usage",
+        "Review evidence recovery",
         "Backfill and gap health",
     ]:
         assert widget_title in dashboard_body

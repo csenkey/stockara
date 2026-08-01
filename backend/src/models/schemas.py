@@ -3,7 +3,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -89,6 +89,49 @@ class RepairMode(str, Enum):
     REPAIR_EVIDENCE = "repair_evidence"
     RETRY_AI_ANALYSIS = "retry_ai_analysis"
     RETRY_AI_REVIEW = "retry_ai_review"
+    REPAIR_REVIEW_EVIDENCE = "repair_review_evidence"
+
+
+class ReviewEvidenceGap(BaseModel):
+    gap_type: str = Field(..., min_length=1, max_length=100)
+    classification: Literal[
+        "collectable",
+        "feature_missing",
+        "analysis_context_missing",
+        "provider_failure",
+        "not_collectable",
+    ]
+    description: str = Field(..., min_length=1, max_length=500)
+    source_candidates: list[str] = Field(default_factory=list, max_length=5)
+
+
+class AIReviewDecision(BaseModel):
+    schema_version: Literal["1.0"] = "1.0"
+    approved: bool
+    rationale: str = Field(..., min_length=1, max_length=750)
+    concerns: list[str] = Field(default_factory=list, max_length=5)
+    confidence_adjustment: int = Field(default=0, ge=-20, le=10)
+    rejection_category: str = Field(default="", max_length=120)
+    what_would_make_approvable: str = Field(default="", max_length=500)
+    evidence_gaps: list[ReviewEvidenceGap] = Field(default_factory=list, max_length=8)
+
+    @field_validator("rationale")
+    @classmethod
+    def validate_rationale(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("AI review rationale must not be empty")
+        return value
+
+    @model_validator(mode="after")
+    def validate_rejection_explanation(self) -> "AIReviewDecision":
+        if self.approved:
+            return self
+        if not self.rejection_category.strip():
+            raise ValueError("Rejected reviews require rejection_category")
+        if not self.what_would_make_approvable.strip():
+            raise ValueError("Rejected reviews require what_would_make_approvable")
+        return self
 
 
 VALID_SECTORS = [

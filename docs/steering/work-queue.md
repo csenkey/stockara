@@ -8,16 +8,17 @@ Other backlog-like files are reference material unless this file links to them a
 
 - Use this file to decide what is currently on top.
 - Use `docs/steering/features/*/backlog.md` for executable feature-specific task breakdowns.
-- Use `BACKLOG.md`, `docs/PHASE1_MUST_HAVE_BACKLOG.md`, and `docs/NEXT_SESSION_HANDOFF.md` as historical/reference material only.
+- Deleted historical backlog and handoff files are not active sources. Use this queue and the linked feature backlogs.
 - When priorities change, update this file first.
 - Do not add new work queues elsewhere. Add feature-level task details under `docs/steering/features/`.
 
 ## Current Priority Order
 
-### 1. Daily Pipeline Stability
+### 1. Daily Pipeline Stability And Evidence Recovery
 
-Status: Production recovery complete. A full manual production execution
-completed and published current degraded artifacts on 2026-07-31.
+Status: Core production recovery complete. Structured review responses and the
+bounded review-directed evidence-repair loop are implemented locally and await
+deployment plus production replay verification.
 
 Goal: Make the once-daily Stockara publication stable, explainable, and useful even when optional data is degraded, by replacing independent schedule timing assumptions with one observable daily workflow.
 
@@ -38,6 +39,13 @@ Completed stability work:
 
 Next executable item:
 
+- Deploy the typed review contract and targeted evidence repair loop, then
+  replay the affected malformed reviews and verify every withheld recommendation
+  has a reviewer rationale or an explicit invalid-response incident.
+- Add bounded SEC filing-text substance and durable source-backed fundamental
+  collectors for gaps currently classified as `feature_missing`.
+- Publish a compact incident artifact and optionally connect actionable alarms
+  to SNS email after the production repair loop is verified.
 - Optimize the optional evidence-repair critical path and degraded price-chunk
   retries without weakening the verified terminal-publication guarantees.
 - Resume backtest-support work after these bounded stability optimizations, or
@@ -81,12 +89,13 @@ Goal: Make earnings/dividend data reliable enough for both daily analysis and de
 
 Source detail:
 
-- Historical detailed backlog: `BACKLOG.md`, `Critical calendar follow-up`
+- Calendar follow-up tasks are maintained in this queue until promoted to a dedicated feature backlog.
 
 Next executable items:
 
 - Roll out dividend-calendar backfill safely after Alpha Vantage throttling.
-- Improve calendar provider-health diagnostics.
+- Verify the deployed full-watchlist earnings query and bounded rotating
+  fallback produce upcoming events; alert on continued zero-event degraded runs.
 - Build an S3 calendar data lake for earnings and dividends.
 - Index normalized calendar events into DynamoDB for analysis.
 - Backfill historical earnings and dividend events.
@@ -96,6 +105,13 @@ Why this matters:
 - Backtest promotion should not rely on reduced-evidence runs.
 - Earnings/dividend context is required by the S3-backed backtest evidence snapshot.
 
+Completed reliability work:
+
+- Done locally: remove the fixed first-50 ticker scope from the daily earnings
+  workflow, query the forward calendar against the full active watchlist, add a
+  quota-bounded rotating per-ticker fallback, and expose provider diagnostics
+  instead of reporting empty results as success.
+
 ### 4. Phase 1 UI and Static Artifact Refinement
 
 Status: Proposed/secondary.
@@ -104,7 +120,7 @@ Goal: Improve public/read-only decision-support surfaces after the analysis pipe
 
 Source detail:
 
-- Historical detailed backlog: `BACKLOG.md`, section `Phase 1: Daily Top Picks and Risk Alerts`
+- Historical UI tasks remain reference context only; promote active work into a feature backlog before implementation.
 
 Representative open items:
 
@@ -131,42 +147,13 @@ Why this mattered:
 - Backtesting is valuable only if the production analyzer/data pipeline has clear gating, provenance, and publication semantics.
 - This item also helped define the first baseline `AnalysisStrategy`.
 
-### Phase 1 Must-Have Backlog
-
-File: `docs/PHASE1_MUST_HAVE_BACKLOG.md`
-
-Status: Historical completed checklist. P0, P1, P2, and P3 items shown there are marked done as of the latest file contents.
-
-Use it for:
-
-- Understanding why current data-quality rules exist.
-- Finding references to tests and modules that enforce Phase 1 quality.
-
-Do not use it for:
-
-- Choosing the next active task.
-
-### Next Session Handoff
-
-File: `docs/NEXT_SESSION_HANDOFF.md`
-
-Status: Historical handoff dated 2026-07-05.
-
-Use it for:
-
-- Reconstructing the past news-source hardening/deployment context.
-
-Do not use it for:
-
-- Current priority ordering.
-
 ## Maintenance Checklist
 
 When a feature or priority changes:
 
 - Update this file.
 - Update the relevant feature backlog under `docs/steering/features/`.
-- Keep `BACKLOG.md` as historical detail unless intentionally retiring sections.
+- Keep active task detail in the linked feature backlogs; do not create replacement top-level backlog files.
 - Avoid creating new top-level backlog files.
 
 ## Stable Release Operations

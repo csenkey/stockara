@@ -41,6 +41,9 @@ CLOUDWATCH_NAMESPACE = "StockMonitoring"
 DEFAULT_LOOKBACK_DAYS = int(os.environ.get("EARNINGS_CALENDAR_LOOKBACK_DAYS", "1825"))
 DEFAULT_LOOKAHEAD_DAYS = int(os.environ.get("EARNINGS_CALENDAR_LOOKAHEAD_DAYS", "120"))
 DEFAULT_LIMIT = int(os.environ.get("EARNINGS_CALENDAR_YFINANCE_LIMIT", "32"))
+DEFAULT_FALLBACK_MAX_TICKERS = int(
+    os.environ.get("EARNINGS_CALENDAR_FALLBACK_MAX_TICKERS", "25")
+)
 MAX_TICKERS_PER_RUN = 50
 FINNHUB_EARNINGS_CALENDAR_URL = "https://finnhub.io/api/v1/calendar/earnings"
 ALPHA_VANTAGE_URL = "https://www.alphavantage.co/query"
@@ -111,6 +114,7 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
         collected_events: list[dict[str, Any]] = []
         provider_events: list[dict[str, Any]] = []
         failed_tickers: list[str] = []
+        provider_attempts: dict[str, dict[str, Any]] = {}
 
         if manifest_task_run:
             collected_events, failed_tickers = _collect_per_ticker(
@@ -120,18 +124,50 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
                 range_start=range_start,
                 range_end=range_end,
                 provider_events=provider_events,
+                provider_attempts=provider_attempts,
             )
         else:
             events = fetch_earnings_calendar_events(
                 selected,
-                start_date=range_start,
+                start_date=max(range_start, collection_date),
                 end_date=range_end,
                 provider_events=provider_events,
+                provider_attempts=provider_attempts,
             )
+            if not events:
+                fallback_stocks = _select_rotating_fallback_stocks(
+                    selected,
+                    event,
+                    collection_date,
+                )
+                fallback_events, fallback_failures = _collect_per_ticker(
+                    fallback_stocks,
+                    event,
+                    log,
+                    range_start=range_start,
+                    range_end=range_end,
+                    provider_events=provider_events,
+                    provider_attempts=provider_attempts,
+                    include_range_calendar=False,
+                )
+                events = fallback_events
+                failed_tickers.extend(fallback_failures)
             for earnings_event in events:
                 collected_events.append(enrich_price_reaction(earnings_event))
 
         stored_count = _store_events(collected_events)
+        event_tickers = {str(item.get("ticker") or "").upper() for item in collected_events}
+        zero_event_tickers = [
+            stock["ticker"] for stock in selected if stock["ticker"] not in event_tickers
+        ]
+        provider_health = _build_provider_health(
+            selected_ticker_count=len(selected),
+            stored_count=stored_count,
+            failed_tickers=failed_tickers,
+            provider_attempts=provider_attempts,
+        )
+        warnings = _calendar_warnings(provider_health)
+        response_status = _response_status(failed_tickers, provider_health)
         artifact_scope = manifest_task_run.task_id if manifest_task_run else None
         publish_latest_artifacts = manifest_task_run is None
         publish_calendar_artifacts(
@@ -142,6 +178,10 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
             range_start=range_start,
             range_end=range_end,
             selected_tickers=[stock["ticker"] for stock in selected],
+            collection_status=response_status,
+            provider_health=provider_health,
+            warnings=warnings,
+            zero_event_tickers=zero_event_tickers,
             artifact_scope=artifact_scope,
             publish_latest=publish_latest_artifacts,
         )
@@ -159,11 +199,17 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
 
         _emit_metric("earnings_events_collected", stored_count)
         _emit_metric("earnings_collection_failed_tickers", len(failed_tickers))
+        _emit_metric("earnings_zero_event_tickers", len(zero_event_tickers))
+        _emit_metric(
+            "earnings_provider_degraded_runs",
+            1 if provider_health["status"] == "degraded" else 0,
+        )
         log.info(
             "earnings_collector_completed",
             selected_ticker_count=len(selected),
             events_collected=stored_count,
             failed_ticker_count=len(failed_tickers),
+            provider_health=provider_health,
         )
         if manifest_task_run:
             _complete_manifest_task_run(
@@ -171,15 +217,19 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
                 selected_ticker_count=len(selected),
                 stored_count=stored_count,
                 failed_tickers=failed_tickers,
+                provider_health=provider_health,
             )
         return {
             "statusCode": 200,
             "body": {
-                "status": "partial" if failed_tickers else "success",
+                "status": response_status,
                 **({"mode": repair_mode} if repair_mode else {}),
                 "events_collected": stored_count,
                 "selected_ticker_count": len(selected),
                 "failed_tickers": failed_tickers,
+                "zero_event_tickers": zero_event_tickers,
+                "provider_health": provider_health,
+                "warnings": warnings,
             },
         }
     except Exception as exc:
@@ -235,21 +285,25 @@ def _collect_per_ticker(
     range_start: date,
     range_end: date,
     provider_events: list[dict[str, Any]],
+    provider_attempts: dict[str, dict[str, Any]] | None = None,
+    include_range_calendar: bool = True,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     failed_tickers: list[str] = []
     events_by_key: dict[tuple[str, date], dict[str, Any]] = {}
-    try:
-        for earnings_event in fetch_earnings_calendar_events(
-            selected,
-            start_date=max(range_start, date.today()),
-            end_date=range_end,
-            provider_events=provider_events,
-        ):
-            events_by_key[
-                (earnings_event["ticker"], earnings_event["event_date"])
-            ] = earnings_event
-    except Exception as exc:
-        log.warning("earnings_calendar_range_collection_failed", error=str(exc))
+    if include_range_calendar:
+        try:
+            for earnings_event in fetch_earnings_calendar_events(
+                selected,
+                start_date=max(range_start, date.today()),
+                end_date=range_end,
+                provider_events=provider_events,
+                provider_attempts=provider_attempts,
+            ):
+                events_by_key[
+                    (earnings_event["ticker"], earnings_event["event_date"])
+                ] = earnings_event
+        except Exception as exc:
+            log.warning("earnings_calendar_range_collection_failed", error=str(exc))
 
     for stock in selected:
         ticker = stock["ticker"]
@@ -261,6 +315,7 @@ def _collect_per_ticker(
                 start_date=range_start,
                 end_date=range_end,
                 provider_events=provider_events,
+                provider_attempts=provider_attempts,
             )
             for earnings_event in events:
                 events_by_key[
@@ -277,6 +332,112 @@ def _collect_per_ticker(
         )
     ]
     return enriched_events, failed_tickers
+
+
+def _select_rotating_fallback_stocks(
+    stocks: list[dict[str, Any]],
+    event: dict[str, Any],
+    collection_date: date,
+) -> list[dict[str, Any]]:
+    """Select a bounded daily slice without permanently favoring A tickers."""
+    ordered = sorted(stocks, key=lambda stock: stock["ticker"])
+    if not ordered:
+        return []
+    limit = min(
+        max(int(event.get("fallback_max_tickers", DEFAULT_FALLBACK_MAX_TICKERS)), 0),
+        len(ordered),
+    )
+    if limit <= 0:
+        return []
+    offset = event.get("fallback_ticker_offset")
+    if offset is None:
+        offset = (collection_date.toordinal() * limit) % len(ordered)
+    start = max(int(offset), 0) % len(ordered)
+    return [ordered[(start + index) % len(ordered)] for index in range(limit)]
+
+
+def _record_provider_attempt(
+    attempts: dict[str, dict[str, Any]] | None,
+    provider: str,
+    status: str,
+    *,
+    event_count: int = 0,
+    raw_event_count: int | None = None,
+    error: object | None = None,
+) -> None:
+    if attempts is None:
+        return
+    item = attempts.setdefault(
+        provider,
+        {"attempt_count": 0, "event_count": 0, "raw_event_count": 0, "statuses": {}},
+    )
+    item["attempt_count"] += 1
+    item["event_count"] += event_count
+    item["raw_event_count"] += raw_event_count if raw_event_count is not None else event_count
+    statuses = item["statuses"]
+    statuses[status] = statuses.get(status, 0) + 1
+    if error is not None:
+        item["last_error"] = _safe_provider_error(error)
+
+
+def _build_provider_health(
+    *,
+    selected_ticker_count: int,
+    stored_count: int,
+    failed_tickers: list[str],
+    provider_attempts: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    if selected_ticker_count <= 0:
+        return {"status": "ok", "providers": provider_attempts}
+    failed_statuses = {"failed", "rate_limited", "unconfigured", "budget_exhausted"}
+    observed_statuses = {
+        status
+        for attempt in provider_attempts.values()
+        for status in attempt.get("statuses", {})
+    }
+    if stored_count > 0:
+        return {
+            "status": (
+                "partial"
+                if failed_tickers or observed_statuses.intersection(failed_statuses)
+                else "ok"
+            ),
+            "providers": provider_attempts,
+        }
+    reason = (
+        "providers_unavailable"
+        if observed_statuses.intersection(failed_statuses)
+        else "provider_returned_zero_events"
+    )
+    return {
+        "status": "degraded",
+        "reason": reason,
+        "message": (
+            "No earnings events were collected for the active watchlist. "
+            "The run used the full-watchlist Finnhub calendar query and a bounded "
+            "rotating per-ticker fallback; inspect provider diagnostics before analysis."
+        ),
+        "providers": provider_attempts,
+    }
+
+
+def _calendar_warnings(provider_health: dict[str, Any]) -> list[str]:
+    if provider_health.get("status") == "degraded":
+        return [str(provider_health.get("message") or provider_health.get("reason"))]
+    if provider_health.get("status") == "partial":
+        return ["Earnings events were collected, but one or more providers failed or were unavailable."]
+    return []
+
+
+def _response_status(
+    failed_tickers: list[str],
+    provider_health: dict[str, Any],
+) -> str:
+    if provider_health.get("status") == "degraded":
+        return "degraded"
+    if failed_tickers or provider_health.get("status") == "partial":
+        return "partial"
+    return "success"
 
 
 def _store_events(events: list[dict[str, Any]]) -> int:
@@ -326,22 +487,35 @@ def _complete_manifest_task_run(
     selected_ticker_count: int,
     stored_count: int,
     failed_tickers: list[str],
+    provider_health: dict[str, Any],
 ) -> None:
     try:
         failed_count = len(set(failed_tickers))
+        provider_degraded = provider_health.get("status") == "degraded"
+        failure_reason = None
+        if provider_degraded:
+            failure_reason = str(
+                provider_health.get("reason") or "earnings_provider_degraded"
+            )
+        elif failed_count:
+            failure_reason = "partial_ticker_failure"
         output_counts = CollectionOutputCounts(
             records_fetched=stored_count,
             records_written=stored_count,
             failed_records=failed_count,
-            successful_tickers=max(selected_ticker_count - failed_count, 0),
-            failed_tickers=failed_count,
+            successful_tickers=(
+                0
+                if provider_degraded
+                else max(selected_ticker_count - failed_count, 0)
+            ),
+            failed_tickers=(selected_ticker_count if provider_degraded else failed_count),
         )
         complete_persisted_manifest_task(
             task_run.manifest_date,
             task_run.task_id,
             output_counts,
-            failed=failed_count > 0,
-            failure_reason="partial_ticker_failure" if failed_count else None,
+            failed=failed_count > 0 or provider_degraded,
+            failure_reason=failure_reason,
         )
     except Exception as exc:
         logger.warning(
@@ -375,6 +549,7 @@ def fetch_earnings_events(
     start_date: date | None = None,
     end_date: date | None = None,
     provider_events: list[dict[str, Any]] | None = None,
+    provider_attempts: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch and normalize earnings calendar rows from yfinance."""
     try:
@@ -384,6 +559,12 @@ def fetch_earnings_events(
         else:
             data = getattr(yf_ticker, "earnings_dates", None)
     except Exception as exc:
+        _record_provider_attempt(
+            provider_attempts,
+            "yfinance",
+            "failed",
+            error=exc,
+        )
         logger.warning(
             "yfinance_earnings_events_unavailable",
             ticker=ticker.upper(),
@@ -391,12 +572,15 @@ def fetch_earnings_events(
         )
         data = None
     if data is None or getattr(data, "empty", True):
+        if data is not None:
+            _record_provider_attempt(provider_attempts, "yfinance", "empty")
         return fetch_alpha_vantage_earnings_events(
             ticker,
             company_name=company_name,
             start_date=start_date,
             end_date=end_date,
             provider_events=provider_events,
+            provider_attempts=provider_attempts,
         )
 
     today = date.today()
@@ -438,6 +622,13 @@ def fetch_earnings_events(
                 "collected_at": datetime.now(timezone.utc).isoformat(),
             }
         )
+    _record_provider_attempt(
+        provider_attempts,
+        "yfinance",
+        "success" if events else "empty",
+        event_count=len(events),
+        raw_event_count=len(data.index),
+    )
     return events
 
 
@@ -447,13 +638,16 @@ def fetch_alpha_vantage_earnings_events(
     start_date: date | None = None,
     end_date: date | None = None,
     provider_events: list[dict[str, Any]] | None = None,
+    provider_attempts: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch historical earnings reports from Alpha Vantage."""
     api_key = _alpha_vantage_api_key()
     if not api_key:
+        _record_provider_attempt(provider_attempts, "alpha_vantage", "unconfigured")
         logger.warning("alpha_vantage_api_key_not_configured_for_earnings_calendar")
         return []
     if _ALPHA_VANTAGE_EARNINGS_QUOTA_EXHAUSTED:
+        _record_provider_attempt(provider_attempts, "alpha_vantage", "rate_limited")
         logger.warning(
             "alpha_vantage_earnings_quota_skipped",
             ticker=ticker.upper(),
@@ -461,6 +655,7 @@ def fetch_alpha_vantage_earnings_events(
         )
         return []
     if _ALPHA_VANTAGE_EARNINGS_CALL_COUNT >= _ALPHA_VANTAGE_EARNINGS_CALL_BUDGET:
+        _record_provider_attempt(provider_attempts, "alpha_vantage", "budget_exhausted")
         logger.warning(
             "alpha_vantage_earnings_budget_skipped",
             ticker=ticker.upper(),
@@ -485,6 +680,12 @@ def fetch_alpha_vantage_earnings_events(
         )
         response.raise_for_status()
     except requests.RequestException as exc:
+        _record_provider_attempt(
+            provider_attempts,
+            "alpha_vantage",
+            "failed",
+            error=exc,
+        )
         logger.warning(
             "alpha_vantage_earnings_events_unavailable",
             ticker=ticker.upper(),
@@ -501,6 +702,12 @@ def fetch_alpha_vantage_earnings_events(
             "alpha_vantage_earnings_payload_unavailable",
             ticker=ticker.upper(),
             error=_safe_provider_error(provider_error),
+        )
+        _record_provider_attempt(
+            provider_attempts,
+            "alpha_vantage",
+            "rate_limited" if _is_alpha_vantage_quota_error(provider_error) else "failed",
+            error=provider_error,
         )
         return []
 
@@ -557,6 +764,13 @@ def fetch_alpha_vantage_earnings_events(
         ticker=ticker.upper(),
         count=len(events),
     )
+    _record_provider_attempt(
+        provider_attempts,
+        "alpha_vantage",
+        "success" if events else "empty",
+        event_count=len(events),
+        raw_event_count=len(payload.get("quarterlyEarnings", [])),
+    )
     return events
 
 
@@ -566,34 +780,59 @@ def fetch_earnings_calendar_events(
     start_date: date | None = None,
     end_date: date | None = None,
     provider_events: list[dict[str, Any]] | None = None,
+    provider_attempts: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch upcoming earnings in one date-range request, filtered to watchlist."""
     api_key = _finnhub_api_key()
     if not api_key:
+        _record_provider_attempt(provider_attempts, "finnhub", "unconfigured")
         logger.warning("finnhub_api_key_not_configured_for_earnings_calendar")
         return []
 
     today = date.today()
     range_start = start_date or today
     range_end = end_date or today + timedelta(days=max(lookahead_days, 1))
-    response = requests.get(
-        FINNHUB_EARNINGS_CALENDAR_URL,
-        params={
-            "from": range_start.isoformat(),
-            "to": range_end.isoformat(),
-            "token": api_key,
-        },
-        timeout=30,
-    )
-    response.raise_for_status()
-    payload = response.json()
+    try:
+        response = requests.get(
+            FINNHUB_EARNINGS_CALENDAR_URL,
+            params={
+                "from": range_start.isoformat(),
+                "to": range_end.isoformat(),
+                "token": api_key,
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        status = "rate_limited" if "429" in str(exc) else "failed"
+        _record_provider_attempt(
+            provider_attempts,
+            "finnhub",
+            status,
+            error=exc,
+        )
+        logger.warning(
+            "finnhub_earnings_calendar_unavailable",
+            error=_safe_provider_error(exc),
+        )
+        return []
     active_by_ticker = {
         str(stock.get("ticker", "")).upper(): stock
         for stock in stocks
         if stock.get("ticker")
     }
     events: list[dict[str, Any]] = []
-    for row in payload.get("earningsCalendar", []):
+    raw_rows = payload.get("earningsCalendar", [])
+    if not isinstance(raw_rows, list):
+        _record_provider_attempt(
+            provider_attempts,
+            "finnhub",
+            "failed",
+            error="earningsCalendar payload was not a list",
+        )
+        return []
+    for row in raw_rows:
         ticker = str(row.get("symbol", "")).upper()
         if ticker not in active_by_ticker:
             continue
@@ -631,6 +870,13 @@ def fetch_earnings_calendar_events(
             }
         )
     logger.info("earnings_calendar_events_fetched", count=len(events))
+    _record_provider_attempt(
+        provider_attempts,
+        "finnhub",
+        "success" if events else "empty",
+        event_count=len(events),
+        raw_event_count=len(raw_rows),
+    )
     return events
 
 

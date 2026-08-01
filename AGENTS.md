@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This document initializes coding-agent sessions for Stockara. Shared, tool-neutral steering lives in `docs/steering/` and should be treated as canonical for both Codex and Claude. `.kiro/specs/` is legacy reference material only; do not create or update Kiro specs unless Istvan explicitly asks for that format.
+This document initializes coding-agent sessions for Stockara. Shared, tool-neutral steering lives in `docs/steering/` and should be treated as canonical for both Codex and Claude. Legacy Kiro planning documents have been removed; do not recreate that format unless Istvan explicitly asks for it.
 
 ## First Read
 
@@ -46,7 +46,6 @@ The project also includes a public demo-trading feature: 100 superhero-named sim
 - `frontend/src/services/`: axios API/auth clients
 - `infrastructure/stacks/`: CDK stacks for API, database, frontend, monitoring, and demo trading
 - `docs/steering/`: canonical product, architecture, and backlog steering for Codex and Claude
-- `.kiro/specs/`: legacy source material only
 
 ## Common Commands
 
@@ -145,9 +144,12 @@ Public demo endpoints:
 
 ## Scheduling and Deployment Expectations
 
-- Stock collector: EventBridge daily at 21:00 UTC.
-- News collector: EventBridge every 15 minutes by default.
-- AI analyzer: EventBridge daily at 22:00 UTC.
+- Stable baseline: `stockara-1.0`; read `docs/steering/stockara-1.0.md` for the shipped architecture.
+- Daily production owner: Step Functions state machine `stockara-daily-pipeline`, started by EventBridge at 21:05 UTC.
+- The workflow owns metadata sync, manifest dispatch, price readiness/gap repair, news, calendars/evidence, AI analysis/review, and publication.
+- News prefetch runs three times daily during development/testing; the daily workflow owns final news readiness.
+- Stock gap scan: EventBridge at 23:15 UTC as separate after-market maintenance.
+- AI analysis is invoked by the workflow, not by an independent production schedule.
 - Demo trade executor: EventBridge daily at 22:30 UTC, after AI analysis.
 - Backend Lambdas should emit structured JSON logs and useful custom metrics.
 - The health endpoint should report component status and last successful batch timestamps.

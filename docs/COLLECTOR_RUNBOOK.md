@@ -6,15 +6,25 @@ recovery before the analyzer publishes recommendations.
 
 ## Normal Daily Flow
 
-1. EventBridge runs the collection distributor.
+1. EventBridge starts the `stockara-daily-pipeline` Step Functions workflow at
+   21:05 UTC.
 2. The distributor writes `collection_manifest/YYYY-MM-DD.json` to the artifact
    bucket.
-3. Price, news, earnings, and dividend workers process bounded ticker chunks.
+3. Price, news, and dividend workers process bounded ticker chunks. The daily
+   earnings worker uses one forward-looking Finnhub date-range request filtered
+   against the full active watchlist, then a bounded rotating per-ticker
+   fallback only when the range request produces no watchlist events.
 4. Workers update task status, attempts, retry state, provider health, and output
    counts in the manifest.
-5. The analyzer checks manifest coverage gates before scoring or publishing.
+5. The workflow waits for readiness, then invokes the analyzer/reviewer only
+   after coverage gates are evaluated.
 6. Published artifacts include `data_quality.collection_manifest` when the
    manifest is available.
+
+The Step Functions execution and `workflow/latest.json` are the operational
+source of truth. The old independent analyzer/distributor schedules are
+disabled rollback paths. Use the after-market gap scan and three daily news
+prefetches only as supporting jobs.
 
 The global news collector is intentionally scheduled only three times per day.
 The daily manifest also runs ticker-scoped news chunks, so frequent global
@@ -86,6 +96,21 @@ News repair mode currently supported:
   `provider_budget_json` to cap or disable providers, for example
   `{"newsapi":1,"finnhub":5,"alpha_vantage":1}`. Set a provider budget to `0`
   to skip that provider for the run.
+
+Earnings repair behavior:
+
+- An uncapped `repair_calendars` earnings invocation scans the full active
+  watchlist in one Finnhub request; do not add `max_tickers` to the scheduled
+  workflow input.
+- `fallback_max_tickers` caps the rotating yfinance/Alpha Vantage fallback used
+  when Finnhub is empty or unavailable. The daily workflow uses 25, so fallback
+  calls stay bounded and do not permanently favor alphabetically early tickers.
+- A zero-event run returns `status=degraded`, publishes provider diagnostics and
+  warnings in `calendar/normalized/earnings/latest.json`, and increments
+  `earnings_provider_degraded_runs`. It must not be interpreted as a successful
+  proof that no tracked companies have upcoming earnings.
+- The workflow status artifact includes `events_collected`,
+  `selected_ticker_count`, `provider_health`, and `warnings` for calendar steps.
 
 Expected summary fields:
 
@@ -191,7 +216,10 @@ Common fixes:
 - `price_freshness`: retry price chunks or inspect symbol mappings.
 - `news_freshness`: verify NewsAPI and Finnhub secrets, quotas, and worker logs.
 - `calendar_coverage`: retry earnings/dividend chunks and inspect yfinance
-  failures.
+  failures. For earnings, first inspect the Finnhub status under
+  `provider_health.providers`, then the bounded yfinance/Alpha Vantage fallback
+  statuses. `provider_returned_zero_events` and `providers_unavailable` are
+  degraded collection incidents, not empty-calendar confirmations.
 
 Do not override gates for normal publication unless the published artifact will
 explicitly call out partial coverage.

@@ -60,7 +60,7 @@ Prefer targeted tests while iterating, then run the relevant full suite before h
 - Use structured logs for batch and API operations, especially partial failures.
 - Keep public demo routes outside authenticated frontend layout and backend auth middleware.
 - Prefer CDK table/index changes for database schema access patterns; do not silently mutate data shapes in application code.
-- Treat `docs/steering/` as the canonical planning source. `.kiro/specs/` is legacy reference material only.
+- Treat `docs/steering/` as the canonical planning source. Do not recreate deleted legacy planning formats.
 
 ## Stable Release Rules
 

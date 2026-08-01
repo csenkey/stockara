@@ -765,7 +765,7 @@ class ApiStack(Stack):
             self.earnings_collector_fn,
             {
                 "mode": "repair_calendars",
-                "max_tickers": 50,
+                "fallback_max_tickers": 25,
                 "provider_budget": {"alpha_vantage": 20, "finnhub": 50},
                 "workflow": "daily_step_functions",
             },
@@ -797,6 +797,88 @@ class ApiStack(Stack):
             "AnalyzeAndPublish",
             self.ai_analyzer_fn,
             {"mode": "daily", "workflow": "daily_step_functions"},
+            "$.analysis",
+        )
+        repair_review_news = self._lambda_workflow_step(
+            "RepairReviewNews",
+            self.news_collector_fn,
+            {
+                "mode": "repair_news",
+                "run_date": sfn.JsonPath.string_at(
+                    "$.analysis.Payload.body.run_date"
+                ),
+                "tickers": sfn.JsonPath.list_at(
+                    "$.analysis.Payload.body.news_tickers"
+                ),
+                "max_tickers": 10,
+                "provider_budget": {
+                    "newsapi": 5,
+                    "finnhub": 10,
+                    "alpha_vantage": 2,
+                },
+                "workflow": "review_evidence_repair",
+            },
+            "$.review_news",
+        )
+        repair_review_evidence = self._lambda_workflow_step(
+            "RepairReviewEvidence",
+            self.evidence_collector_fn,
+            {
+                "mode": "repair_evidence",
+                "run_date": sfn.JsonPath.string_at(
+                    "$.analysis.Payload.body.run_date"
+                ),
+                "tickers": sfn.JsonPath.list_at(
+                    "$.analysis.Payload.body.evidence_tickers"
+                ),
+                "max_tickers": 10,
+                "provider_budget": {"sec": 10, "finnhub": 10, "yfinance": 10},
+                "workflow": "review_evidence_repair",
+            },
+            "$.review_evidence",
+        )
+        collect_review_evidence = sfn.Parallel(
+            self,
+            "CollectReviewEvidence",
+            result_path="$.review_evidence_repair",
+            comment="Collect only evidence requested by rejected shortlist reviews.",
+        )
+        skip_review_news = sfn.Pass(self, "SkipReviewNews")
+        skip_review_evidence = sfn.Pass(self, "SkipReviewEvidence")
+        collect_review_evidence.branch(
+            sfn.Choice(self, "IsReviewNewsRepairRequired")
+            .when(
+                sfn.Condition.boolean_equals(
+                    "$.analysis.Payload.body.repair_news_required", True
+                ),
+                repair_review_news,
+            )
+            .otherwise(skip_review_news)
+        )
+        collect_review_evidence.branch(
+            sfn.Choice(self, "IsReviewEvidenceRepairRequired")
+            .when(
+                sfn.Condition.boolean_equals(
+                    "$.analysis.Payload.body.repair_evidence_required", True
+                ),
+                repair_review_evidence,
+            )
+            .otherwise(skip_review_evidence)
+        )
+        reanalyze_after_evidence = self._lambda_workflow_step(
+            "ReanalyzeAfterEvidence",
+            self.ai_analyzer_fn,
+            {
+                "mode": "repair_review_evidence",
+                "run_date": sfn.JsonPath.string_at(
+                    "$.analysis.Payload.body.run_date"
+                ),
+                "tickers": sfn.JsonPath.list_at(
+                    "$.analysis.Payload.body.targeted_tickers"
+                ),
+                "max_tickers": 10,
+                "workflow": "review_evidence_repair",
+            },
             "$.analysis",
         )
         publish_workflow_status = sfn_tasks.LambdaInvoke(
@@ -868,9 +950,19 @@ class ApiStack(Stack):
                 ),
                 wait_for_analysis_progress,
             )
+            .when(
+                sfn.Condition.string_equals(
+                    "$.analysis.Payload.body.stage",
+                    "evidence_repair_needed",
+                ),
+                collect_review_evidence,
+            )
             .otherwise(decide_publication_readiness)
         )
         wait_for_analysis_progress.next(analyze_and_publish)
+        collect_review_evidence.next(reanalyze_after_evidence).next(
+            wait_for_analysis_progress
+        )
 
         classify_manifest_dispatch_exhausted = sfn.Pass(
             self,
@@ -897,6 +989,11 @@ class ApiStack(Stack):
             errors=["States.ALL"],
             result_path="$.workflow_error",
         )
+        collect_review_evidence.add_catch(
+            classify_workflow_failure,
+            errors=["States.ALL"],
+            result_path="$.workflow_error",
+        )
 
         for step in [
             sync_static_metadata,
@@ -906,6 +1003,7 @@ class ApiStack(Stack):
             repair_price_gaps,
             collect_news,
             analyze_and_publish,
+            reanalyze_after_evidence,
         ]:
             step.add_catch(
                 classify_workflow_failure,

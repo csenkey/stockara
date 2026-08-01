@@ -2,7 +2,8 @@
 
 Audience: Stockara reviewers and web UI users.
 
-Status: current Phase 1 implementation.
+Status: Stockara 1.0 public UI. The canonical product baseline is
+`docs/steering/stockara-1.0.md`.
 
 ## What the web UI does today
 

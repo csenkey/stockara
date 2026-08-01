@@ -78,3 +78,42 @@ Acceptance criteria:
 - Workflow cost is tracked as Step Functions state transitions plus existing Lambda/EventBridge/S3/DynamoDB usage.
 - The expected Step Functions cost remains near-free for one daily Standard Workflow unless the workflow starts high-cardinality per-ticker state transitions.
 
+### 7. Review Contract And Evidence Recovery
+
+Every actionable AI analysis must have a machine-valid review result. A review
+that is missing an explanation is not equivalent to a valid rejection.
+
+Acceptance criteria:
+
+- A rejected review must contain a rationale, concerns or an explicit empty
+  concerns decision, rejection category, and what would make it approvable.
+- Invalid, truncated, or schema-incomplete review responses are recorded as
+  `invalid_response`, retried once with bounded output limits, and never marked
+  as terminal rejection.
+- Valid review gaps are typed as `collectable`, `feature_missing`,
+  `analysis_context_missing`, `provider_failure`, or `not_collectable`.
+- A bounded post-review repair path may collect targeted evidence, rerun the
+  candidate analysis, and perform one final review.
+- The repair path records both attempts and cannot loop until the model approves.
+- Provider failures retry with backoff and a provider budget; exhausted retries
+  create an operational incident.
+- Missing product capabilities create a developer incident and do not consume
+  repeated provider retries.
+
+### 8. Incident Visibility
+
+Operators and developers must be able to distinguish a normal review rejection
+from a broken collection, model, or workflow path.
+
+Acceptance criteria:
+
+- The existing CloudWatch dashboard shows invalid reviews, evidence gaps,
+  repair attempts, repair successes, exhausted repairs, and incident counts by
+  category.
+- Actionable alarms notify the existing SNS topic for workflow failure or
+  absence, invalid review output, provider authentication/quota failure, and
+  exhausted required-evidence repair.
+- Valid review rejection and optional evidence gaps remain dashboard signals,
+  not paging incidents.
+- Each incident includes run date, ticker when applicable, provider/model,
+  repair mode, attempt count, and a link or key for the related artifacts.

@@ -23,6 +23,23 @@ existing Lambdas instead of replacing them:
 13. `PublishArtifacts`
 14. `PublishWorkflowStatus`
 
+The post-1.0 review-recovery extension adds a bounded loop inside the analysis
+portion of this flow:
+
+```text
+Analyze shortlist -> Review actionable calls -> Validate review contract
+  -> approved: publish
+  -> valid rejection: withhold and record evidence gaps
+  -> repairable gap: targeted collectors -> merge evidence
+       -> rerun analysis/review once -> publish or withhold
+  -> feature missing: developer incident
+  -> provider failure after retries: data incident
+  -> invalid review after one retry: AI incident
+```
+
+The loop is intentionally bounded to one repair cycle and a small candidate
+cap. It is evidence recovery, not an approval loop.
+
 Keep per-ticker fanout inside bounded worker Lambdas and manifest tasks. Do not model 900 tickers as individual Step Functions states in the first version; that would add noise, cost, and complexity without improving reliability.
 
 ## Operational Source Of Truth
@@ -84,6 +101,37 @@ Planning estimate:
 - This should usually fit inside the free tier or cost cents per month.
 
 Avoid a first design where the state machine loops over every ticker or every article. If per-ticker orchestration becomes necessary later, evaluate Distributed Map, SQS, or Express Workflows separately.
+
+The repair loop must preserve this cost boundary. Targeted collection is only
+allowed for shortlisted candidates, provider budgets are explicit, and the
+second AI review is limited to one attempt per candidate per daily run.
+
+## Review And Evidence Contract
+
+The review payload is a persisted contract, not an informal JSON suggestion.
+At minimum it contains:
+
+- `approved`
+- `rationale`
+- `concerns`
+- `rejection_category`
+- `what_would_make_approvable`
+- `evidence_gaps[]`
+- `model`, `attempt`, and response validation metadata
+
+The evidence-gap registry maps each gap to a capability and an owner:
+
+| Gap class | Current disposition | Next action |
+|---|---|---|
+| Company-specific catalyst | Collector exists | Targeted news/IR retry |
+| Analyst action recency | Partial collector | Targeted Finnhub retry |
+| Technical confirmation | Data exists, context incomplete | Enrich analyzer/reviewer context |
+| SEC filing substance | Feature missing | Add bounded SEC filing-text extraction |
+| Fundamental/valuation context | Partial | Add durable source-backed fundamentals |
+| Provider/auth/quota failure | Operational | Retry with budget, then incident |
+
+Keyword parsing may remain a compatibility fallback for old artifacts, but new
+reviews must emit typed gaps directly.
 
 ## Publication Tiers
 
