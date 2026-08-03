@@ -2168,33 +2168,48 @@ function RelatedNews({
       {items.length === 0 ? (
         <p className={`mt-2 text-sm ${muted}`}>No recent ticker-related articles available.</p>
       ) : (
-        <div className="mt-3 space-y-3">
+        <div
+          className={`mt-3 divide-y ${
+            tone === "red" ? "divide-red-900" : "divide-slate-800"
+          }`}
+        >
           {items.slice(0, 3).map((item) => {
-            const heading = item.url ? (
-              <a
-                href={item.url}
-                target="_blank"
-                rel="noreferrer"
-                className={`${title} underline decoration-slate-500 underline-offset-4`}
-              >
-                {item.title}
-              </a>
-            ) : (
-              <span className={title}>{item.title}</span>
-            );
             return (
-              <article key={`${item.source}-${item.title}`}>
-                <div className="text-sm font-medium leading-5">{heading}</div>
-                <p className={`mt-1 text-xs ${muted}`}>
-                  {item.source}
-                  {item.published_at ? ` · ${formatShortDate(item.published_at)}` : ""}
-                </p>
-                {item.summary && (
-                  <p className={`mt-1 text-sm leading-5 ${tone === "red" ? "text-red-100" : "text-slate-300"}`}>
-                    {item.summary}
-                  </p>
-                )}
-              </article>
+              <details
+                key={`${item.source}-${item.title}`}
+                className="group py-3 first:pt-0 last:pb-0"
+              >
+                <summary className="cursor-pointer list-none rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-sky-400 [&::-webkit-details-marker]:hidden">
+                  <span className={`block text-sm font-medium leading-5 ${title}`}>
+                    {item.title}
+                  </span>
+                  <span className={`mt-1 block text-xs ${muted}`}>
+                    {item.source}
+                    {item.published_at ? ` · ${formatShortDate(item.published_at)}` : ""}
+                  </span>
+                </summary>
+                <div className="hidden pt-2 group-hover:block group-focus-within:block group-open:block">
+                  {item.summary && (
+                    <p
+                      className={`text-sm leading-5 ${
+                        tone === "red" ? "text-red-100" : "text-slate-300"
+                      }`}
+                    >
+                      {item.summary}
+                    </p>
+                  )}
+                  {item.url && (
+                    <a
+                      href={item.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className={`mt-2 inline-block text-xs font-medium underline underline-offset-4 ${muted}`}
+                    >
+                      Read original article ↗
+                    </a>
+                  )}
+                </div>
+              </details>
             );
           })}
         </div>

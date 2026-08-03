@@ -114,13 +114,16 @@ Completed reliability work:
 
 ### 4. Phase 1 UI and Static Artifact Refinement
 
-Status: Proposed/secondary.
+Status: Active secondary priority; ticker-card related-news refinement is complete.
 
 Goal: Improve public/read-only decision-support surfaces after the analysis pipeline and data artifacts are reliable.
 
 Source detail:
 
-- Historical UI tasks remain reference context only; promote active work into a feature backlog before implementation.
+- Active related-news work is tracked in
+  `docs/steering/features/ticker-card-related-news/backlog.md`.
+- Historical UI tasks remain reference context only; promote other active work
+  into a feature backlog before implementation.
 
 Representative open items:
 

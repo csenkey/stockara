@@ -504,6 +504,64 @@ def test_put_news_summary_writes_ticker_fanout_and_status():
     store._put_system_status.assert_called_once()
 
 
+def test_update_news_url_if_missing_updates_canonical_and_ticker_fanout():
+    table = MagicMock()
+    batch = MagicMock()
+    table.batch_writer.return_value.__enter__.return_value = batch
+    table.update_item.return_value = {
+        "Attributes": {
+            "PK": "NEWS#hash123",
+            "SK": "META",
+            "entity": "news",
+            "title": "Apple beats estimates",
+            "source": "Reuters",
+            "published_at": "2026-06-17T10:00:00Z",
+            "tickers": ["AAPL", "MSFT"],
+            "summary": "Apple beat estimates.",
+            "title_source_hash": "hash123",
+            "url": "https://example.com/apple",
+        }
+    }
+    store = _TestableDynamoStore(table)
+
+    updated = store.update_news_url_if_missing(
+        "hash123",
+        "https://example.com/apple",
+    )
+
+    assert updated is True
+    table.update_item.assert_called_once()
+    assert table.update_item.call_args.kwargs["ExpressionAttributeValues"] == {
+        ":url": "https://example.com/apple"
+    }
+    assert batch.put_item.call_count == 2
+    for call in batch.put_item.call_args_list:
+        assert call.kwargs["Item"]["url"] == "https://example.com/apple"
+
+
+def test_update_news_url_if_missing_leaves_existing_url_unchanged():
+    table = MagicMock()
+    table.update_item.side_effect = ClientError(
+        {
+            "Error": {
+                "Code": "ConditionalCheckFailedException",
+                "Message": "URL already exists",
+            }
+        },
+        "UpdateItem",
+    )
+    store = _TestableDynamoStore(table)
+    store._put_news_ticker_items = MagicMock()
+
+    updated = store.update_news_url_if_missing(
+        "hash123",
+        "https://example.com/replacement",
+    )
+
+    assert updated is False
+    store._put_news_ticker_items.assert_not_called()
+
+
 def test_put_stock_data_persists_provider_provenance_and_updates_summary():
     table = MagicMock()
     store = _TestableDynamoStore(table)

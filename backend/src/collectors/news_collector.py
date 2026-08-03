@@ -203,6 +203,7 @@ def fetch_newsapi_source(tickers: list[str] | None = None) -> NewsSourceResult:
                 "published_at": published_at,
                 "content": article.get("description", "") or article.get("content", "") or "",
                 "provider": "newsapi",
+                "url": article.get("url"),
             })
 
         logger.info("NewsAPI articles fetched", count=len(articles), tickers=tickers or [])
@@ -262,6 +263,7 @@ def fetch_finnhub_source(tickers: list[str] | None = None) -> NewsSourceResult:
                 "published_at": published_at,
                 "content": article.get("summary", "") or "",
                 "provider": "finnhub",
+                "url": article.get("url"),
             })
 
         logger.info("Finnhub articles fetched", count=len(articles))
@@ -332,6 +334,7 @@ def _fetch_finnhub_company_news_source(
                         "content": article.get("summary", "") or "",
                         "provider": "finnhub",
                         "provider_tickers": [str(ticker).upper()],
+                        "url": article.get("url"),
                     }
                 )
         except Exception as e:
@@ -786,6 +789,7 @@ def build_news_collection_summary(
     zero_article_sources: list[str] | None = None,
     source_statuses: list[dict[str, Any]] | None = None,
     article_failures: int = 0,
+    urls_enriched: int = 0,
 ) -> dict[str, Any]:
     sources_total = 3
     skipped_sources = skipped_sources or []
@@ -806,6 +810,7 @@ def build_news_collection_summary(
         "articles_processed": articles_processed,
         "duplicates_skipped": duplicates_skipped,
         "article_failures": article_failures,
+        "urls_enriched": urls_enriched,
         "completeness_ratio": (
             round(sources_available / configured_total, 4) if configured_total else 1.0
         ),
@@ -970,11 +975,25 @@ def collect_news(
 
         # Filter to new articles only
         new_articles = [a for a in all_articles if a["_hash"] not in existing_hashes]
+        urls_enriched = 0
+        for article in all_articles:
+            if article["_hash"] not in existing_hashes or not article.get("url"):
+                continue
+            try:
+                if store.update_news_url_if_missing(article["_hash"], str(article["url"])):
+                    urls_enriched += 1
+            except Exception as exc:
+                logger.warning(
+                    "news_url_enrichment_failed",
+                    title_source_hash=article["_hash"],
+                    error=str(exc),
+                )
         logger.info(
             "Deduplication complete",
             total_fetched=len(all_articles),
             already_exists=len(existing_hashes),
             new_articles=len(new_articles),
+            urls_enriched=urls_enriched,
         )
 
         # Generate summaries and store. If no OpenAI key is configured, the
@@ -1035,6 +1054,7 @@ def collect_news(
         zero_article_sources=zero_article_sources,
         source_statuses=source_statuses,
         article_failures=article_failures,
+        urls_enriched=urls_enriched,
     )
     record_news_collection_summary(summary)
     emit_news_collection_summary_metrics(summary)
@@ -1049,6 +1069,7 @@ def collect_news(
         "zero_article_sources": zero_article_sources,
         "total_fetched": len(all_articles),
         "duplicates_skipped": len(all_articles) - len(new_articles),
+        "urls_enriched": urls_enriched,
         "tickers": tickers or [],
         "collection_summary": summary,
     }
@@ -1146,6 +1167,9 @@ def _publish_news_dashboard_artifact(
             ),
             "duplicates_skipped": result.get(
                 "duplicates_skipped", summary.get("duplicates_skipped", 0)
+            ),
+            "urls_enriched": result.get(
+                "urls_enriched", summary.get("urls_enriched", 0)
             ),
             "sources_available": result.get(
                 "sources_available", summary.get("sources_available", 0)

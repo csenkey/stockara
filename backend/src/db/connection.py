@@ -765,6 +765,34 @@ class DynamoStore:
                 return False
             raise
 
+    def update_news_url_if_missing(self, title_source_hash: str, url: str) -> bool:
+        normalized_url = str(url).strip()[:1000]
+        if not title_source_hash or not normalized_url:
+            return False
+        try:
+            response = self.table.update_item(
+                Key={"PK": f"NEWS#{title_source_hash}", "SK": "META"},
+                UpdateExpression="SET #url = :url",
+                ExpressionAttributeNames={"#url": "url"},
+                ExpressionAttributeValues={":url": normalized_url},
+                ConditionExpression=(
+                    Attr("PK").exists()
+                    & Attr("SK").exists()
+                    & Attr("url").not_exists()
+                ),
+                ReturnValues="ALL_NEW",
+            )
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                return False
+            raise
+
+        item = response.get("Attributes")
+        if not item:
+            return False
+        self._put_news_ticker_items(item)
+        return True
+
     def news_for_ticker(self, ticker: str, start_date: date, end_date: date) -> list[dict[str, Any]]:
         rows = self._query(
             KeyConditionExpression=Key("PK").eq(f"NEWS_TICKER#{ticker}")

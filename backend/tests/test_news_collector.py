@@ -120,6 +120,7 @@ class TestFetchNewsapiArticles:
                     "source": {"name": "CNBC"},
                     "publishedAt": "2025-01-15T10:00:00Z",
                     "description": "Markets rallied today.",
+                    "url": "https://example.com/stock-market-rally",
                 },
                 {
                     "title": "Tech Earnings Beat",
@@ -137,6 +138,7 @@ class TestFetchNewsapiArticles:
         assert articles[0]["source"] == "CNBC"
         assert articles[0]["published_at"] == "2025-01-15T10:00:00Z"
         assert articles[0]["content"] == "Markets rallied today."
+        assert articles[0]["url"] == "https://example.com/stock-market-rally"
 
     @patch("requests.get")
     def test_skips_articles_missing_title(self, mock_get):
@@ -273,6 +275,7 @@ class TestFetchFinnhubArticles:
                 "source": "MarketWatch",
                 "datetime": 1736935200,  # 2025-01-15T10:00:00Z
                 "summary": "The Federal Reserve raised interest rates.",
+                "url": "https://example.com/fed-rates",
             },
         ]
         mock_get.return_value = mock_response
@@ -282,6 +285,7 @@ class TestFetchFinnhubArticles:
         assert articles[0]["title"] == "Fed Raises Rates"
         assert articles[0]["source"] == "MarketWatch"
         assert articles[0]["content"] == "The Federal Reserve raised interest rates."
+        assert articles[0]["url"] == "https://example.com/fed-rates"
         # Check published_at is ISO format
         assert "2025-01-15" in articles[0]["published_at"]
 
@@ -340,6 +344,7 @@ class TestFetchFinnhubArticles:
                 "source": "Reuters",
                 "datetime": 1736935200,
                 "summary": "Apple supplier news.",
+                "url": "https://example.com/apple-supplier",
             },
         ]
         mock_get.return_value = mock_response
@@ -347,6 +352,7 @@ class TestFetchFinnhubArticles:
         articles = fetch_finnhub_articles(tickers=["AAPL"])
 
         assert len(articles) == 1
+        assert articles[0]["url"] == "https://example.com/apple-supplier"
         assert "company-news" in mock_get.call_args.args[0]
         assert mock_get.call_args.kwargs["params"]["symbol"] == "AAPL"
 
@@ -789,7 +795,15 @@ class TestCollectNews:
         """Requirement 2.5: Duplicate articles are discarded."""
         mock_newsapi.return_value = NewsSourceResult(
             "newsapi",
-            [{"title": "Existing Article", "source": "Reuters", "published_at": "2025-01-15T10:00:00Z", "content": "Content"}],
+            [
+                {
+                    "title": "Existing Article",
+                    "source": "Reuters",
+                    "published_at": "2025-01-15T10:00:00Z",
+                    "content": "Content",
+                    "url": "https://example.com/existing",
+                }
+            ],
         )
         mock_finnhub.return_value = NewsSourceResult("finnhub", [])
         mock_alpha.return_value = NewsSourceResult("alpha_vantage", [])
@@ -807,11 +821,18 @@ class TestCollectNews:
         mock_client = MagicMock()
         mock_openai.return_value = mock_client
 
-        result = collect_news()
+        with patch("backend.src.collectors.news_collector.store") as mock_store:
+            mock_store.update_news_url_if_missing.return_value = True
+            result = collect_news()
 
         assert result["status"] == "success"
         assert result["articles_processed"] == 0
         assert result["duplicates_skipped"] == 1
+        assert result["urls_enriched"] == 1
+        mock_store.update_news_url_if_missing.assert_called_once_with(
+            existing_hash,
+            "https://example.com/existing",
+        )
 
     @patch("backend.src.collectors.news_collector.emit_metrics")
     @patch("backend.src.collectors.news_collector.store_article")
