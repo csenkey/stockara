@@ -50,6 +50,9 @@
 - [x] Update ranking so decision-grade picks rank first, reduced-confidence suggestions rank separately, and fallback previews do not silently replace reviewed picks.
 - [x] Add frontend sections for reviewed picks, lower-confidence suggestions, fallback previews, blocked data issues, and withheld review rejections.
 - [x] Add tests for publication tier assignment, confidence downgrades, ranking, and artifact compatibility.
+- [x] Treat aggregate price coverage as degraded rather than globally blocking;
+  continue with eligible tickers while individually suppressing stale or
+  missing-price symbols.
 
 ## Milestone 4: Step Functions Orchestrator
 

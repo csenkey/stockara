@@ -48,7 +48,11 @@ EARNINGS_HISTORY_DAYS = int(os.environ.get("PHASE1_EARNINGS_HISTORY_DAYS", "730"
 DIVIDEND_LOOKAHEAD_DAYS = int(os.environ.get("PHASE1_DIVIDEND_LOOKAHEAD_DAYS", "60"))
 DIVIDEND_HISTORY_DAYS = int(os.environ.get("PHASE1_DIVIDEND_HISTORY_DAYS", "730"))
 CLOUDWATCH_NAMESPACE = "StockaraPhase1"
-ADVISORY_COLLECTION_GATES = {"news_freshness"}
+# Aggregate coverage targets describe the completeness of the watchlist, not the
+# safety of an individual recommendation. Price eligibility remains strict per
+# ticker in evaluate_data_freshness(), so a partially collected watchlist can be
+# analyzed without admitting stale or missing-price tickers.
+ADVISORY_COLLECTION_GATES = {"news_freshness", "price_freshness"}
 FALLBACK_CONFIDENCE_CAP = int(os.environ.get("PHASE1_FALLBACK_CONFIDENCE_CAP", "55"))
 ALLOW_FALLBACK_ACTIONABLE_RECOMMENDATIONS = (
     os.environ.get("PHASE1_ALLOW_FALLBACK_ACTIONABLE_RECOMMENDATIONS", "false").lower()
@@ -1123,9 +1127,15 @@ def _collection_manifest_advisory_warnings(manifest: CollectionManifest) -> list
         if gate.passed or gate.name not in ADVISORY_COLLECTION_GATES:
             continue
         message = gate.message or f"{gate.name} is below threshold."
-        warnings.append(
-            f"Publication is continuing with degraded optional data: {message}"
-        )
+        if gate.name == "price_freshness":
+            warnings.append(
+                "Publication is continuing with partial watchlist price coverage; "
+                f"stale or missing-price tickers are excluded: {message}"
+            )
+        else:
+            warnings.append(
+                f"Publication is continuing with degraded optional data: {message}"
+            )
     return warnings
 
 

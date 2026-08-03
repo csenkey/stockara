@@ -2678,7 +2678,7 @@ def test_publish_from_stored_state_suppresses_when_analysis_is_missing():
     ]
 
 
-def test_collection_manifest_coverage_targets_wait_for_collection_gates():
+def test_collection_manifest_price_coverage_is_advisory():
     run_date = date(2026, 6, 17)
     manifest_payload = {
         "manifest_date": run_date.isoformat(),
@@ -2718,22 +2718,61 @@ def test_collection_manifest_coverage_targets_wait_for_collection_gates():
             publish_status_artifact=True,
         )
 
+    assert result is None
+    emit_metric.assert_any_call("collection_coverage_targets_below_threshold", 1)
+    emit_metric.assert_any_call("collection_gates_open", 1)
+    publish_status.assert_not_called()
+
+
+def test_collection_manifest_required_calendar_coverage_still_blocks():
+    run_date = date(2026, 6, 17)
+    manifest_payload = {
+        "manifest_date": run_date.isoformat(),
+        "generated_at": "2026-06-17T07:30:00Z",
+        "updated_at": "2026-06-17T08:00:00Z",
+        "active_ticker_count": 1,
+        "task_types": ["price", "news", "earnings", "dividend"],
+        "tasks": [],
+        "summary": {
+            "total_tasks": 0,
+            "coverage_gates": [
+                {
+                    "name": "calendar_coverage",
+                    "passed": False,
+                    "observed_value": "0.5",
+                    "required_value": "0.9",
+                    "unit": "ratio",
+                    "message": "Calendar coverage is incomplete.",
+                }
+            ],
+        },
+    }
+    body = SimpleNamespace(
+        read=lambda: phase1_pipeline.json.dumps(manifest_payload).encode("utf-8")
+    )
+    with (
+        patch("src.analysis.phase1_pipeline.ARTIFACT_BUCKET", "artifact-bucket"),
+        patch("src.analysis.phase1_pipeline.boto3.client") as client,
+        patch("src.analysis.phase1_pipeline._emit_metric") as emit_metric,
+        patch(
+            "src.analysis.phase1_pipeline.publish_collection_status_payload"
+        ) as publish_status,
+    ):
+        client.return_value.get_object.return_value = {"Body": body}
+        result = phase1_pipeline._collection_gate_response(
+            run_date,
+            publish_status_artifact=True,
+        )
+
     assert result["statusCode"] == 202
     assert result["body"]["stage"] == "waiting_for_collection_gates"
     assert result["body"]["reason"] == "coverage_gates_failed"
-    assert result["body"]["failed_gates"][0]["name"] == "price_freshness"
+    assert result["body"]["failed_gates"][0]["name"] == "calendar_coverage"
     emit_metric.assert_any_call("collection_coverage_targets_below_threshold", 1)
     emit_metric.assert_any_call("collection_gates_closed", 1)
     payload = publish_status.call_args.args[0]
-    assert payload["artifact_type"] == "collection_gate_status"
     assert payload["publication_status"] == "waiting"
     assert payload["suppression_reason"] == "coverage_gates_failed"
-    assert payload["data_quality"]["coverage_status"] == "waiting_for_collection_gates"
-    assert payload["data_quality"]["collection_manifest"]["manifest_key"] == (
-        "collection_manifest/2026-06-17.json"
-    )
-    assert "collection coverage gates" in payload["data_warnings"][0]
-    assert publish_status.call_args.args[1] == run_date
 
 
 def test_collection_manifest_news_gate_is_advisory_when_required_gates_pass():
@@ -2988,6 +3027,52 @@ def test_collection_manifest_quality_warns_when_optional_news_gate_is_degraded()
 
     assert quality["warnings"] == [
         "Publication is continuing with degraded optional data: News chunks are incomplete."
+    ]
+
+
+def test_collection_manifest_quality_warns_when_price_coverage_is_partial():
+    run_date = date(2026, 6, 17)
+    manifest_payload = {
+        "manifest_date": run_date.isoformat(),
+        "generated_at": "2026-06-17T07:30:00Z",
+        "updated_at": "2026-06-17T08:00:00Z",
+        "active_ticker_count": 1003,
+        "task_types": ["price"],
+        "tasks": [],
+        "summary": {
+            "total_tasks": 1,
+            "succeeded_tasks": 0,
+            "total_tickers": 1003,
+            "successful_tickers": 902,
+            "coverage_ratio": "0.8993",
+            "coverage_gates": [
+                {
+                    "name": "price_freshness",
+                    "passed": False,
+                    "observed_value": "0.8993",
+                    "required_value": "0.9",
+                    "unit": "ratio",
+                    "message": "902 of 1003 active tickers have fresh prices.",
+                }
+            ],
+        },
+    }
+    body = SimpleNamespace(
+        read=lambda: phase1_pipeline.json.dumps(manifest_payload).encode("utf-8")
+    )
+    with (
+        patch("src.analysis.phase1_pipeline.ARTIFACT_BUCKET", "artifact-bucket"),
+        patch("src.analysis.phase1_pipeline.boto3.client") as client,
+    ):
+        client.return_value.get_object.return_value = {"Body": body}
+        quality = phase1_pipeline._with_collection_manifest_quality(
+            {"coverage_status": "partial", "warnings": []},
+            run_date,
+        )
+
+    assert quality["warnings"] == [
+        "Publication is continuing with partial watchlist price coverage; stale or "
+        "missing-price tickers are excluded: 902 of 1003 active tickers have fresh prices."
     ]
 
 

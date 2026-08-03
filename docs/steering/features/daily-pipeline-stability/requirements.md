@@ -55,6 +55,10 @@ Acceptance criteria:
 - `reduced_confidence` allows missing optional news/calendar/evidence when the price/history and identity data are fresh; confidence is reduced and missing evidence is visible.
 - `fallback_preview` allows heuristic or AI-review-unavailable results only when clearly labeled, confidence-capped, and excluded from automated/demo trading decisions until explicitly allowed.
 - `blocked` suppresses tickers with unresolved identity metadata, stale/missing current price data, or insufficient history for the analysis window.
+- An aggregate price-coverage target below its operational threshold must not
+  block analysis of otherwise eligible tickers. The artifact must expose the
+  partial watchlist coverage, and stale/missing-price tickers must remain
+  individually blocked and excluded from scoring.
 - The frontend should render degraded/fallback recommendations separately enough that users can evaluate them without mistaking them for fully reviewed picks.
 
 ### 5. Production Drift Detection

@@ -142,6 +142,13 @@ The publication tier is computed per recommendation and summarized at artifact l
 - `fallback_preview`: Heuristic or unreviewed fallback. Useful for debugging and human triage, not default ranked picks unless explicitly enabled.
 - `blocked`: Do not show as a suggestion; show only in data-health/readiness diagnostics.
 
+The manifest's aggregate `price_freshness` target is an operational coverage
+signal, not a global publication safety gate. When it is missed, the workflow
+continues as degraded and publishes opportunities among eligible tickers. The
+analyzer's per-ticker freshness and history checks remain authoritative: every
+stale, missing-price, or under-supported ticker is excluded before scoring, and
+the artifact exposes that the ranking covers only the eligible subset.
+
 ## Readiness Report Shape
 
 Suggested artifact paths:
