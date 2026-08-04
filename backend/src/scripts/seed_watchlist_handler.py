@@ -3,6 +3,7 @@
 import csv
 import logging
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -261,17 +262,22 @@ def _query_stock_metadata(table: Any) -> list[dict[str, Any]]:
 
 def _classify_unseeded_production_rows(
     table: Any, seed_tickers: set[str]
-) -> dict[str, int]:
+) -> tuple[dict[str, int], list[dict[str, Any]], int]:
     summary = {"inactive": 0, "out_of_scope": 0}
+    out_of_scope_rows: list[dict[str, Any]] = []
+    active_count = 0
     for item in _query_stock_metadata(table):
+        if item.get("is_active", True):
+            active_count += 1
         ticker = (item.get("ticker") or item.get("GSI1SK") or "").strip().upper()
         if not ticker or ticker in seed_tickers:
             continue
         if item.get("is_active", True):
             summary["out_of_scope"] += 1
+            out_of_scope_rows.append(item)
         else:
             summary["inactive"] += 1
-    return summary
+    return summary, out_of_scope_rows, active_count
 
 
 def sync_static_metadata(
@@ -280,7 +286,8 @@ def sync_static_metadata(
     *,
     strict: bool = True,
     dry_run: bool = False,
-) -> dict[str, int]:
+    reconcile_out_of_scope: bool = False,
+) -> dict[str, Any]:
     summary = {
         "created": 0,
         "missing": 0,
@@ -325,7 +332,46 @@ def sync_static_metadata(
                     "values": sorted(sell_alert_tickers),
                 }
             )
-    summary.update(_classify_unseeded_production_rows(table, seed_tickers))
+    classification, out_of_scope_rows, active_count = (
+        _classify_unseeded_production_rows(table, seed_tickers)
+    )
+    summary.update(classification)
+    if dry_run or reconcile_out_of_scope:
+        out_of_scope_tickers = sorted(
+            str(item.get("ticker") or item.get("GSI1SK") or "").strip().upper()
+            for item in out_of_scope_rows
+        )
+        summary.update(
+            {
+                "out_of_scope_tickers": out_of_scope_tickers,
+                "active_ticker_count": active_count,
+                "projected_active_ticker_count": active_count
+                - len(out_of_scope_tickers),
+                "reconciled_out_of_scope": 0,
+            }
+        )
+    if reconcile_out_of_scope and not dry_run:
+        reconciled_at = datetime.now(timezone.utc).isoformat()
+        for item in out_of_scope_rows:
+            table.update_item(
+                Key={"PK": item["PK"], "SK": item["SK"]},
+                UpdateExpression=(
+                    "SET #is_active = :inactive, #scope_status = :scope_status, "
+                    "#reconciled_at = :reconciled_at"
+                ),
+                ExpressionAttributeNames={
+                    "#is_active": "is_active",
+                    "#scope_status": "scope_status",
+                    "#reconciled_at": "scope_reconciled_at",
+                },
+                ExpressionAttributeValues={
+                    ":inactive": False,
+                    ":scope_status": "active_not_in_seed",
+                    ":reconciled_at": reconciled_at,
+                },
+                ConditionExpression=Attr("PK").exists(),
+            )
+        summary["reconciled_out_of_scope"] = len(out_of_scope_rows)
     logger.info("watchlist_static_metadata_sync_complete", extra={"summary": summary})
     return summary
 
@@ -363,6 +409,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             table,
             sell_alert_tickers,
             dry_run=repair_request.dry_run,
+            reconcile_out_of_scope=repair_request.reconcile_out_of_scope,
         )
         logger.info(
             "watchlist_static_metadata_manual_sync",

@@ -249,6 +249,55 @@ def test_sync_static_metadata_dry_run_reports_without_writing(monkeypatch):
     assert ("CONFIG#sell_alert_watchlist", "VALUE") not in table.items
 
 
+def test_sync_static_metadata_dry_run_lists_out_of_scope_projection(monkeypatch):
+    canonical = _build_stock_item(_complete_row(ticker="AAPL"), set())
+    drift = _build_stock_item(_complete_row(ticker="DRIFT"), set())
+    table = _FakeTable([canonical, drift])
+    monkeypatch.setattr(
+        "backend.src.scripts.seed_watchlist_handler._load_seed_rows",
+        lambda: [_complete_row(ticker="AAPL")],
+    )
+
+    summary = sync_static_metadata(
+        table,
+        set(),
+        dry_run=True,
+        reconcile_out_of_scope=True,
+    )
+
+    assert summary["out_of_scope_tickers"] == ["DRIFT"]
+    assert summary["active_ticker_count"] == 2
+    assert summary["projected_active_ticker_count"] == 1
+    assert summary["reconciled_out_of_scope"] == 0
+    assert table.items[("STOCK#DRIFT", "META")]["is_active"] is True
+
+
+def test_sync_static_metadata_reconciles_only_out_of_scope_rows(monkeypatch):
+    canonical = _build_stock_item(_complete_row(ticker="AAPL"), set())
+    canonical["latest_close_price"] = "210.50"
+    drift = _build_stock_item(_complete_row(ticker="DRIFT"), set())
+    drift["latest_close_price"] = "12.34"
+    table = _FakeTable([canonical, drift])
+    monkeypatch.setattr(
+        "backend.src.scripts.seed_watchlist_handler._load_seed_rows",
+        lambda: [_complete_row(ticker="AAPL")],
+    )
+
+    summary = sync_static_metadata(
+        table,
+        set(),
+        reconcile_out_of_scope=True,
+    )
+
+    assert summary["reconciled_out_of_scope"] == 1
+    assert table.items[("STOCK#AAPL", "META")]["is_active"] is True
+    assert table.items[("STOCK#AAPL", "META")]["latest_close_price"] == "210.50"
+    reconciled = table.items[("STOCK#DRIFT", "META")]
+    assert reconciled["is_active"] is False
+    assert reconciled["scope_status"] == "active_not_in_seed"
+    assert reconciled["latest_close_price"] == "12.34"
+
+
 def test_handler_syncs_existing_metadata_on_custom_resource_update(monkeypatch):
     existing = _build_stock_item(_complete_row(sector="Technology"), set())
     table = _FakeTable([existing])

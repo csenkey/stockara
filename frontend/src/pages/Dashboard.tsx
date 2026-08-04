@@ -248,7 +248,12 @@ interface WorkflowStatusPayload {
   run_date: string;
   generated_at: string;
   status: "success" | "degraded" | "waiting" | "blocked" | string;
+  business_status?: string;
+  execution_status?: string;
   decision?: string;
+  failed_step?: string | null;
+  degraded_steps?: string[];
+  analysis_reached?: boolean;
   execution?: {
     name?: string;
     started_at?: string;
@@ -830,6 +835,11 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
     !workflowSupersedesStatus;
   const currentStatusWarnings =
     showTransientStatus ? statusPayload.data_warnings : [];
+  const publicationIsStale = Boolean(
+    workflowStatus?.run_date &&
+      payload?.publication_date &&
+      workflowStatus.run_date > payload.publication_date,
+  );
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
@@ -898,7 +908,11 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
         />
         <Metric
           marker="scan"
-          label="Analyzed"
+          label={
+            publicationIsStale
+              ? `Analyzed · publication ${payload?.publication_date ?? ""}`
+              : "Analyzed"
+          }
           value={`${payload?.analyzed_count ?? 0}/${payload?.candidate_count ?? 0}`}
         />
       </section>
@@ -1060,6 +1074,14 @@ function DailyRunSummary({
         : status === "blocked" || status === "suppressed"
           ? "bg-red-400"
           : "bg-slate-500";
+  const publicationIsStale = runDate > publication.publication_date;
+  const operationalMessage = workflowStatus?.failed_step
+    ? `Analysis was not reached; ${workflowStatus.failed_step} blocked the current run.`
+    : workflowStatus?.degraded_steps?.length
+      ? `Eligible-ticker analysis continued with degraded optional data: ${workflowStatus.degraded_steps.join(", ")}.`
+      : publicationIsStale
+        ? `Showing the latest completed publication from ${publication.publication_date}; current-run metrics are reported separately.`
+        : null;
 
   return (
     <section className="border-y border-slate-800 py-4">
@@ -1088,6 +1110,9 @@ function DailyRunSummary({
           </button>
         )}
       </div>
+      {operationalMessage && (
+        <p className="mt-3 text-xs text-slate-400">{operationalMessage}</p>
+      )}
     </section>
   );
 }

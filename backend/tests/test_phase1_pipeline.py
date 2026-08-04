@@ -604,6 +604,10 @@ def test_build_workflow_status_payload_summarizes_daily_execution():
 
     assert payload["run_date"] == "2026-07-29"
     assert payload["status"] == "degraded"
+    assert payload["business_status"] == "degraded"
+    assert payload["execution_status"] == "SUCCEEDED"
+    assert payload["analysis_reached"] is True
+    assert payload["degraded_steps"] == ["CollectNews"]
     assert payload["decision"] == "publish_degraded"
     assert payload["execution"]["name"] == "daily-2026-07-29"
     assert payload["analyzer"]["stage"] == "published"
@@ -616,6 +620,47 @@ def test_build_workflow_status_payload_summarizes_daily_execution():
     assert payload["steps"]["manifest_dispatch"]["task_counts"] == {
         "succeeded": 288
     }
+
+
+def test_workflow_status_attributes_typed_required_failure():
+    payload = build_workflow_status_payload(
+        {
+            "workflow_result": {
+                "workflow_decision": {"decision": "blocked"},
+                "workflow_error": {
+                    "status": "failed",
+                    "step": "CollectPrices",
+                    "required": True,
+                    "error_type": "Sandbox.Timedout",
+                    "message": "Task timed out",
+                },
+            }
+        },
+        date(2026, 8, 3),
+    )
+
+    assert payload["status"] == "blocked"
+    assert payload["failed_step"] == "CollectPrices"
+    assert payload["analysis_reached"] is False
+
+
+def test_optional_collection_quality_records_degradation_warning():
+    quality = phase1_pipeline._with_optional_collection_quality(
+        {"coverage_status": "partial", "warnings": []},
+        {
+            "news": {
+                "status": "degraded",
+                "step": "CollectNews",
+                "message": "Task timed out",
+                "required": False,
+            }
+        },
+    )
+
+    assert quality["warnings"] == [
+        "CollectNews degraded; eligible-ticker analysis continued: Task timed out"
+    ]
+    assert quality["optional_collection"][0]["step"] == "CollectNews"
 
 
 def test_publish_workflow_status_report_writes_latest_and_history_artifacts():
@@ -2724,7 +2769,7 @@ def test_collection_manifest_price_coverage_is_advisory():
     publish_status.assert_not_called()
 
 
-def test_collection_manifest_required_calendar_coverage_still_blocks():
+def test_collection_manifest_unknown_required_coverage_still_blocks():
     run_date = date(2026, 6, 17)
     manifest_payload = {
         "manifest_date": run_date.isoformat(),
@@ -2737,12 +2782,12 @@ def test_collection_manifest_required_calendar_coverage_still_blocks():
             "total_tasks": 0,
             "coverage_gates": [
                 {
-                    "name": "calendar_coverage",
+                    "name": "required_identity_coverage",
                     "passed": False,
                     "observed_value": "0.5",
                     "required_value": "0.9",
                     "unit": "ratio",
-                    "message": "Calendar coverage is incomplete.",
+                    "message": "Required identity coverage is incomplete.",
                 }
             ],
         },
@@ -2767,7 +2812,7 @@ def test_collection_manifest_required_calendar_coverage_still_blocks():
     assert result["statusCode"] == 202
     assert result["body"]["stage"] == "waiting_for_collection_gates"
     assert result["body"]["reason"] == "coverage_gates_failed"
-    assert result["body"]["failed_gates"][0]["name"] == "calendar_coverage"
+    assert result["body"]["failed_gates"][0]["name"] == "required_identity_coverage"
     emit_metric.assert_any_call("collection_coverage_targets_below_threshold", 1)
     emit_metric.assert_any_call("collection_gates_closed", 1)
     payload = publish_status.call_args.args[0]

@@ -255,7 +255,7 @@ class ApiStack(Stack):
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="src.collectors.news_collector.handler",
             code=backend_code,
-            memory_size=256,
+            memory_size=512,
             timeout=Duration.minutes(5),
             role=batch_role,
             environment={
@@ -264,6 +264,8 @@ class ApiStack(Stack):
                 **news_provider_env,
                 "OPENAI_NEWS_MODEL": "gpt-5.6-luna",
                 "ALPHA_VANTAGE_NEWS_MAX_TICKERS": "25",
+                "NEWS_MAX_NEW_ARTICLES_PER_RUN": "25",
+                "NEWS_TIMEOUT_SAFETY_MARGIN_MS": "30000",
                 "NEWS_POLL_INTERVAL_MINUTES": "480",
                 "POWERTOOLS_SERVICE_NAME": "news-collector",
             },
@@ -751,6 +753,7 @@ class ApiStack(Stack):
             {
                 "mode": "repair_news",
                 "max_tickers": 75,
+                "max_articles": 25,
                 "provider_budget": {
                     "newsapi": 20,
                     "finnhub": 50,
@@ -793,10 +796,59 @@ class ApiStack(Stack):
             },
             "$.evidence",
         )
+        record_news_degraded = self._optional_collection_failure_state(
+            "RecordNewsDegraded",
+            "CollectNews",
+            "$.news_error",
+            "$.news",
+        )
+        collect_news.add_catch(
+            record_news_degraded,
+            errors=["States.ALL"],
+            result_path="$.news_error",
+        )
+        record_earnings_degraded = self._optional_collection_failure_state(
+            "RecordEarningsDegraded",
+            "CollectEarnings",
+            "$.earnings_error",
+            "$.earnings",
+        )
+        collect_earnings.add_catch(
+            record_earnings_degraded,
+            errors=["States.ALL"],
+            result_path="$.earnings_error",
+        )
+        record_dividends_degraded = self._optional_collection_failure_state(
+            "RecordDividendsDegraded",
+            "CollectDividends",
+            "$.dividends_error",
+            "$.dividends",
+        )
+        collect_dividends.add_catch(
+            record_dividends_degraded,
+            errors=["States.ALL"],
+            result_path="$.dividends_error",
+        )
+        record_evidence_degraded = self._optional_collection_failure_state(
+            "RecordEvidenceDegraded",
+            "CollectEvidence",
+            "$.evidence_error",
+            "$.evidence",
+        )
+        collect_evidence.add_catch(
+            record_evidence_degraded,
+            errors=["States.ALL"],
+            result_path="$.evidence_error",
+        )
         analyze_and_publish = self._lambda_workflow_step(
             "AnalyzeAndPublish",
             self.ai_analyzer_fn,
-            {"mode": "daily", "workflow": "daily_step_functions"},
+            {
+                "mode": "daily",
+                "workflow": "daily_step_functions",
+                "news": sfn.JsonPath.object_at("$.news"),
+                "optional_evidence": sfn.JsonPath.list_at("$.optional_evidence"),
+            },
             "$.analysis",
         )
         repair_review_news = self._lambda_workflow_step(
@@ -984,32 +1036,32 @@ class ApiStack(Stack):
             comment="Convert caught workflow failures into a terminal status artifact.",
         )
         classify_workflow_failure.next(publish_workflow_status)
-        collect_calendars_and_evidence.add_catch(
-            classify_workflow_failure,
-            errors=["States.ALL"],
-            result_path="$.workflow_error",
-        )
         collect_review_evidence.add_catch(
             classify_workflow_failure,
             errors=["States.ALL"],
             result_path="$.workflow_error",
         )
 
-        for step in [
-            sync_static_metadata,
-            create_or_refresh_manifest,
-            dispatch_manifest_tasks,
-            collect_prices,
-            repair_price_gaps,
-            collect_news,
-            analyze_and_publish,
-            reanalyze_after_evidence,
+        for step, step_name, error_key in [
+            (sync_static_metadata, "SyncStaticMetadata", "sync_static_metadata_error"),
+            (create_or_refresh_manifest, "CreateOrRefreshManifest", "manifest_error"),
+            (dispatch_manifest_tasks, "DispatchManifestTasks", "manifest_dispatch_error"),
+            (collect_prices, "CollectPrices", "prices_error"),
+            (repair_price_gaps, "RepairPriceGaps", "price_gap_repair_error"),
+            (analyze_and_publish, "AnalyzeAndPublish", "analysis_error"),
+            (reanalyze_after_evidence, "ReanalyzeAfterEvidence", "reanalyze_error"),
         ]:
-            step.add_catch(
-                classify_workflow_failure,
-                errors=["States.ALL"],
-                result_path="$.workflow_error",
+            record_failure = self._required_collection_failure_state(
+                f"Record{step_name}Failure",
+                step_name,
+                f"$.{error_key}",
             )
+            step.add_catch(
+                record_failure,
+                errors=["States.ALL"],
+                result_path=f"$.{error_key}",
+            )
+            record_failure.next(classify_workflow_failure)
         manifest_dispatch_decision = (
             sfn.Choice(
                 self,
@@ -1050,6 +1102,7 @@ class ApiStack(Stack):
             .next(analyze_and_publish)
             .next(analyze_progress_decision)
         )
+        record_news_degraded.next(collect_calendars_and_evidence)
 
         return sfn.StateMachine(
             self,
@@ -1204,6 +1257,49 @@ class ApiStack(Stack):
         )
         self._add_workflow_retry(step)
         return step
+
+    def _optional_collection_failure_state(
+        self,
+        construct_id: str,
+        step_name: str,
+        error_path: str,
+        result_path: str,
+    ) -> sfn.Pass:
+        return sfn.Pass(
+            self,
+            construct_id,
+            parameters={
+                "status": "degraded",
+                "step": step_name,
+                "required": False,
+                "error_type": sfn.JsonPath.string_at(f"{error_path}.Error"),
+                "message": sfn.JsonPath.string_at(f"{error_path}.Cause"),
+                "retryable": True,
+                "occurred_at": sfn.JsonPath.string_at("$$.State.EnteredTime"),
+            },
+            result_path=result_path,
+        )
+
+    def _required_collection_failure_state(
+        self,
+        construct_id: str,
+        step_name: str,
+        error_path: str,
+    ) -> sfn.Pass:
+        return sfn.Pass(
+            self,
+            construct_id,
+            parameters={
+                "status": "failed",
+                "step": step_name,
+                "required": True,
+                "error_type": sfn.JsonPath.string_at(f"{error_path}.Error"),
+                "message": sfn.JsonPath.string_at(f"{error_path}.Cause"),
+                "retryable": True,
+                "occurred_at": sfn.JsonPath.string_at("$$.State.EnteredTime"),
+            },
+            result_path="$.workflow_error",
+        )
 
     def _add_workflow_retry(
         self,

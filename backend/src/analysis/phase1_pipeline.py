@@ -52,7 +52,11 @@ CLOUDWATCH_NAMESPACE = "StockaraPhase1"
 # safety of an individual recommendation. Price eligibility remains strict per
 # ticker in evaluate_data_freshness(), so a partially collected watchlist can be
 # analyzed without admitting stale or missing-price tickers.
-ADVISORY_COLLECTION_GATES = {"news_freshness", "price_freshness"}
+ADVISORY_COLLECTION_GATES = {
+    "calendar_coverage",
+    "news_freshness",
+    "price_freshness",
+}
 FALLBACK_CONFIDENCE_CAP = int(os.environ.get("PHASE1_FALLBACK_CONFIDENCE_CAP", "55"))
 ALLOW_FALLBACK_ACTIONABLE_RECOMMENDATIONS = (
     os.environ.get("PHASE1_ALLOW_FALLBACK_ACTIONABLE_RECOMMENDATIONS", "false").lower()
@@ -841,7 +845,13 @@ def _run_daily_orchestration_phase(
             },
         }
 
-    return _publish_from_stored_state(run_date, context, scores, existing_analyses)
+    return _publish_from_stored_state(
+        run_date,
+        context,
+        scores,
+        existing_analyses,
+        optional_collection=event,
+    )
 
 
 def _run_publish_phase(run_date: date) -> dict[str, Any]:
@@ -885,6 +895,7 @@ def _publish_from_stored_state(
     context: dict[str, Any],
     scores: list[dict[str, Any]],
     analyses: list[dict[str, Any]],
+    optional_collection: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     shortlist_tickers = {score["ticker"] for score in select_shortlist(scores)}
     analyses = [
@@ -893,9 +904,12 @@ def _publish_from_stored_state(
     if not analyses:
         logger.warning("phase1_publication_suppressed_no_candidate_analyses")
         _emit_metric("publication_suppressed", 1)
-        data_quality = _with_collection_manifest_quality(
-            publication_data_quality(context["freshness"]),
-            run_date,
+        data_quality = _with_optional_collection_quality(
+            _with_collection_manifest_quality(
+                publication_data_quality(context["freshness"]),
+                run_date,
+            ),
+            optional_collection,
         )
         readiness_summary = _publish_data_readiness(
             run_date,
@@ -935,9 +949,12 @@ def _publish_from_stored_state(
         scores,
         context["eligible_stocks"],
         run_date,
-        data_quality=_with_collection_manifest_quality(
-            publication_data_quality(freshness),
-            run_date,
+        data_quality=_with_optional_collection_quality(
+            _with_collection_manifest_quality(
+                publication_data_quality(freshness),
+                run_date,
+            ),
+            optional_collection,
         ),
         upcoming_earnings=upcoming_earnings_summary(run_date),
         upcoming_dividends=upcoming_dividends_summary(run_date),
@@ -1210,6 +1227,36 @@ def _with_collection_manifest_quality(
             "active_ticker_count": manifest.active_ticker_count,
             "summary": manifest.summary.model_dump(mode="json"),
         },
+    }
+
+
+def _with_optional_collection_quality(
+    data_quality: dict[str, Any],
+    event: dict[str, Any] | None,
+) -> dict[str, Any]:
+    summaries = _optional_collection_summaries(event or {})
+    degraded = [
+        summary
+        for summary in summaries
+        if str(summary.get("status") or "").lower()
+        in {"partial", "degraded", "failed", "error"}
+        or summary.get("error_type")
+    ]
+    if not degraded:
+        return data_quality
+    warnings = list(data_quality.get("warnings") or [])
+    for summary in degraded:
+        step = summary.get("step") or "Optional collection"
+        detail = summary.get("message") or summary.get("reason") or summary.get("status")
+        warning = f"{step} degraded; eligible-ticker analysis continued"
+        if detail:
+            warning = f"{warning}: {detail}"
+        if warning not in warnings:
+            warnings.append(warning)
+    return {
+        **data_quality,
+        "warnings": warnings,
+        "optional_collection": summaries,
     }
 
 
@@ -2020,6 +2067,18 @@ def build_workflow_status_payload(
         or _parse_date(analysis_body.get("publication_date"))
         or fallback_run_date
     )
+    optional_summaries = _optional_collection_summaries(workflow_result)
+    degraded_steps = [
+        str(summary.get("step"))
+        for summary in optional_summaries
+        if str(summary.get("status") or "").lower()
+        in {"partial", "degraded", "failed", "error"}
+        and summary.get("step")
+    ]
+    workflow_error = workflow_result.get("workflow_error")
+    failed_step = None
+    if isinstance(workflow_error, dict):
+        failed_step = workflow_error.get("step")
 
     return {
         "artifact_type": "daily_workflow_status",
@@ -2027,7 +2086,12 @@ def build_workflow_status_payload(
         "generated_at": datetime.utcnow().isoformat(),
         "workflow": str(event.get("workflow") or "daily_step_functions"),
         "status": status_by_decision.get(decision, "blocked"),
+        "business_status": status_by_decision.get(decision, "blocked"),
+        "execution_status": "SUCCEEDED",
         "decision": decision,
+        "failed_step": failed_step,
+        "degraded_steps": sorted(set(degraded_steps)),
+        "analysis_reached": bool(workflow_result.get("analysis")),
         "execution": {
             "id": event.get("execution_id"),
             "name": event.get("execution_name"),
@@ -2069,12 +2133,11 @@ def build_workflow_status_payload(
                 workflow_result.get("price_gap_repair")
             ),
             "news": _workflow_step_summary(workflow_result.get("news")),
-            "optional_evidence": [
-                _workflow_step_summary(item)
-                for item in workflow_result.get("optional_evidence") or []
-            ],
+            "optional_evidence": _optional_collection_summaries(
+                {"optional_evidence": workflow_result.get("optional_evidence") or []}
+            ),
         },
-        "workflow_error": workflow_result.get("workflow_error"),
+        "workflow_error": workflow_error,
     }
 
 
@@ -2112,9 +2175,18 @@ def _workflow_step_summary(value: Any) -> dict[str, Any]:
         body = {"message": str(body)} if body is not None else {}
     summary = {
         "status_code": payload.get("statusCode") or value.get("StatusCode"),
-        "status": body.get("status"),
+        "status": body.get("status") or payload.get("status"),
+        "step": body.get("step") or payload.get("step"),
+        "required": body.get("required")
+        if "required" in body
+        else payload.get("required"),
+        "error_type": body.get("error_type") or payload.get("error_type"),
+        "retryable": body.get("retryable")
+        if "retryable" in body
+        else payload.get("retryable"),
+        "occurred_at": body.get("occurred_at") or payload.get("occurred_at"),
         "stage": body.get("stage"),
-        "message": body.get("message"),
+        "message": body.get("message") or payload.get("message"),
         "reason": body.get("reason"),
         "processed_count": body.get("processed_count"),
         "collected_count": body.get("collected_count"),
@@ -2136,6 +2208,33 @@ def _workflow_step_summary(value: Any) -> dict[str, Any]:
         "warnings": body.get("warnings"),
     }
     return {key: item for key, item in summary.items() if item is not None}
+
+
+def _optional_collection_summaries(event: dict[str, Any]) -> list[dict[str, Any]]:
+    summaries: list[dict[str, Any]] = []
+    news = event.get("news")
+    if news is not None:
+        summary = _workflow_step_summary(news)
+        summary.setdefault("step", "CollectNews")
+        summaries.append(summary)
+    for item in event.get("optional_evidence") or []:
+        if not isinstance(item, dict):
+            continue
+        matched = False
+        for key, step_name in (
+            ("earnings", "CollectEarnings"),
+            ("dividends", "CollectDividends"),
+            ("evidence", "CollectEvidence"),
+        ):
+            if key not in item:
+                continue
+            summary = _workflow_step_summary(item[key])
+            summary.setdefault("step", step_name)
+            summaries.append(summary)
+            matched = True
+        if not matched:
+            summaries.append(_workflow_step_summary(item))
+    return summaries
 
 
 def _readiness_counts(items: list[dict[str, Any]], field: str) -> dict[str, int]:

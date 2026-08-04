@@ -1059,8 +1059,178 @@ class TestHandler:
             provider_budget={"newsapi": 1, "finnhub": 0},
             dry_run=True,
             operation_mode="repair_news",
+            max_articles=None,
+            remaining_time_ms=None,
         )
         mock_db_pool.close.assert_called_once()
+
+    @patch("backend.src.collectors.news_collector.store.active_stock_metadata")
+    @patch("backend.src.collectors.news_collector.DatabasePool")
+    @patch("backend.src.collectors.news_collector.collect_news")
+    def test_handler_bounds_untargeted_repair_news_to_active_tickers(
+        self,
+        mock_collect,
+        mock_db_pool,
+        mock_active_stocks,
+    ):
+        mock_active_stocks.return_value = [
+            {"ticker": "MSFT"},
+            {"ticker": "AAPL"},
+            {"ticker": "NVDA"},
+        ]
+        mock_collect.return_value = {
+            "status": "success",
+            "mode": "repair_news",
+            "articles_processed": 0,
+        }
+
+        result = handler(
+            {
+                "mode": "repair_news",
+                "run_date": "2026-08-03",
+                "max_tickers": 2,
+                "max_articles": 10,
+                "provider_budget": {"newsapi": 1, "finnhub": 2},
+            },
+            None,
+        )
+
+        assert result["statusCode"] == 200
+        selected = mock_collect.call_args.kwargs["tickers"]
+        assert len(selected) == 2
+        assert set(selected).issubset({"AAPL", "MSFT", "NVDA"})
+        assert mock_collect.call_args.kwargs["max_articles"] == 10
+
+
+    @patch("backend.src.collectors.news_collector._publish_news_dashboard_artifact")
+    @patch("backend.src.collectors.news_collector.emit_news_collection_summary_metrics")
+    @patch("backend.src.collectors.news_collector.record_news_collection_summary")
+    @patch("backend.src.collectors.news_collector.emit_metrics")
+    @patch("backend.src.collectors.news_collector.get_openai_api_key", return_value=None)
+    @patch("backend.src.collectors.news_collector._active_ticker_universe", return_value={"AAPL"})
+    @patch("backend.src.collectors.news_collector.get_existing_hashes", return_value=set())
+    @patch("backend.src.collectors.news_collector.DatabasePool")
+    @patch("backend.src.collectors.news_collector.fetch_alpha_vantage_source")
+    @patch("backend.src.collectors.news_collector.fetch_finnhub_source")
+    @patch("backend.src.collectors.news_collector.fetch_newsapi_source")
+    def test_collect_news_stops_cleanly_before_lambda_timeout(
+        self,
+        mock_newsapi,
+        mock_finnhub,
+        mock_alpha,
+        mock_db_pool,
+        _mock_hashes,
+        _mock_tickers,
+        _mock_key,
+        _mock_metrics,
+        _mock_record,
+        _mock_summary_metrics,
+        _mock_artifact,
+    ):
+        mock_newsapi.return_value = NewsSourceResult(
+            "newsapi",
+            [
+                {
+                    "title": "Apple update",
+                    "source": "Reuters",
+                    "published_at": "2026-08-03T20:00:00Z",
+                    "content": "AAPL update",
+                    "url": "https://example.com/apple",
+                }
+            ],
+        )
+        mock_finnhub.return_value = NewsSourceResult("finnhub", [])
+        mock_alpha.return_value = NewsSourceResult("alpha_vantage", [])
+        mock_db_pool.table.return_value = MagicMock()
+
+        result = collect_news(
+            tickers=["AAPL"],
+            provider_budget={"newsapi": 1, "finnhub": 1, "alpha_vantage": 1},
+            max_articles=1,
+            remaining_time_ms=lambda: 20_000,
+            operation_mode="repair_news",
+        )
+
+        assert result["status"] == "partial"
+        assert result["articles_processed"] == 0
+        assert result["deferred_article_count"] == 1
+        assert result["stopped_for_time"] is True
+        assert result["continuation"] == {
+            "required": True,
+            "deferred_article_count": 1,
+        }
+
+    def test_partial_news_rerun_processes_deferred_article_without_regenerating_stored(
+        self,
+    ):
+        articles = [
+            {
+                "title": "Newer Apple update",
+                "source": "Reuters",
+                "published_at": "2026-08-03T20:00:00Z",
+                "content": "AAPL newer update",
+                "url": "https://example.com/newer",
+            },
+            {
+                "title": "Older Apple update",
+                "source": "Reuters",
+                "published_at": "2026-08-03T19:00:00Z",
+                "content": "AAPL older update",
+                "url": "https://example.com/older",
+            },
+        ]
+        newer_hash = compute_title_source_hash(
+            articles[0]["title"], articles[0]["source"]
+        )
+        with (
+            patch(
+                "backend.src.collectors.news_collector.fetch_newsapi_source",
+                return_value=NewsSourceResult("newsapi", articles),
+            ),
+            patch(
+                "backend.src.collectors.news_collector.fetch_finnhub_source",
+                return_value=NewsSourceResult("finnhub", []),
+            ),
+            patch(
+                "backend.src.collectors.news_collector.fetch_alpha_vantage_source",
+                return_value=NewsSourceResult("alpha_vantage", []),
+            ),
+            patch(
+                "backend.src.collectors.news_collector.get_existing_hashes",
+                side_effect=[set(), {newer_hash}],
+            ),
+            patch("backend.src.collectors.news_collector.DatabasePool") as db_pool,
+            patch(
+                "backend.src.collectors.news_collector.get_openai_api_key",
+                return_value=None,
+            ),
+            patch(
+                "backend.src.collectors.news_collector._active_ticker_universe",
+                return_value={"AAPL"},
+            ),
+            patch(
+                "backend.src.collectors.news_collector.generate_summary",
+                return_value={
+                    "summary": "Summary",
+                    "tickers": ["AAPL"],
+                    "sentiment": "neutral",
+                },
+            ),
+            patch("backend.src.collectors.news_collector.store_article") as store,
+            patch("backend.src.collectors.news_collector.emit_metrics"),
+            patch("backend.src.collectors.news_collector.record_news_collection_summary"),
+            patch("backend.src.collectors.news_collector.emit_news_collection_summary_metrics"),
+            patch("backend.src.collectors.news_collector._publish_news_dashboard_artifact"),
+        ):
+            db_pool.table.return_value = MagicMock()
+            first = collect_news(tickers=["AAPL"], max_articles=1)
+            second = collect_news(tickers=["AAPL"], max_articles=1)
+
+        assert first["deferred_article_count"] == 1
+        assert second["deferred_article_count"] == 0
+        assert store.call_count == 2
+        stored_hashes = [call.args[3] for call in store.call_args_list]
+        assert len(set(stored_hashes)) == 2
 
     @patch("backend.src.collectors.news_collector.logger")
     @patch("backend.src.collectors.news_collector.DatabasePool")

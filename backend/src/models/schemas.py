@@ -171,8 +171,10 @@ class RepairModeRequest(BaseModel):
     run_date: Optional[date] = None
     tickers: list[str] = Field(default_factory=list)
     max_tickers: Optional[int] = Field(default=None, ge=1)
+    max_articles: Optional[int] = Field(default=None, ge=1)
     provider_budget: dict[str, int] = Field(default_factory=dict)
     dry_run: bool = False
+    reconcile_out_of_scope: bool = False
 
     @model_validator(mode="after")
     def validate_mode_requirements(self) -> "RepairModeRequest":

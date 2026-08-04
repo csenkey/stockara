@@ -54,6 +54,15 @@ NEWS_ARTIFACT_MAX_TICKERS = int(os.environ.get("NEWS_ARTIFACT_MAX_TICKERS", "250
 NEWS_ARTIFACT_MAX_ARTICLES_PER_TICKER = int(
     os.environ.get("NEWS_ARTIFACT_MAX_ARTICLES_PER_TICKER", "10")
 )
+NEWS_MAX_NEW_ARTICLES_PER_RUN = int(
+    os.environ.get("NEWS_MAX_NEW_ARTICLES_PER_RUN", "25")
+)
+NEWS_TIMEOUT_SAFETY_MARGIN_MS = int(
+    os.environ.get("NEWS_TIMEOUT_SAFETY_MARGIN_MS", "30000")
+)
+NEWS_OPENAI_TIMEOUT_SECONDS = float(
+    os.environ.get("NEWS_OPENAI_TIMEOUT_SECONDS", "20")
+)
 COMMON_WORD_SHORT_TICKERS = {
     "A",
     "AI",
@@ -219,7 +228,10 @@ def fetch_newsapi_articles(tickers: list[str] | None = None) -> list[dict[str, A
     return fetch_newsapi_source(tickers=tickers).articles
 
 
-def fetch_finnhub_source(tickers: list[str] | None = None) -> NewsSourceResult:
+def fetch_finnhub_source(
+    tickers: list[str] | None = None,
+    remaining_time_ms: Any | None = None,
+) -> NewsSourceResult:
     """Fetch recent market news from Finnhub.
 
     Returns:
@@ -233,7 +245,11 @@ def fetch_finnhub_source(tickers: list[str] | None = None) -> NewsSourceResult:
         return NewsSourceResult("finnhub", [], "skipped", "api_key_not_configured")
 
     if tickers:
-        return _fetch_finnhub_company_news_source(tickers, api_key)
+        return _fetch_finnhub_company_news_source(
+            tickers,
+            api_key,
+            remaining_time_ms=remaining_time_ms,
+        )
 
     url = "https://finnhub.io/api/v1/news"
     params = {"category": "general", "token": api_key}
@@ -297,6 +313,7 @@ def _fetch_finnhub_company_news(
 def _fetch_finnhub_company_news_source(
     tickers: list[str],
     api_key: str,
+    remaining_time_ms: Any | None = None,
 ) -> NewsSourceResult:
     import requests
 
@@ -306,6 +323,16 @@ def _fetch_finnhub_company_news_source(
     to_date = date.today()
     from_date = to_date - timedelta(days=7)
     for ticker in tickers[:FINNHUB_TICKER_NEWS_MAX_TICKERS]:
+        if (
+            remaining_time_ms is not None
+            and int(remaining_time_ms()) <= NEWS_TIMEOUT_SAFETY_MARGIN_MS
+        ):
+            return NewsSourceResult(
+                "finnhub",
+                articles,
+                "partial",
+                "lambda_time_budget_exhausted",
+            )
         attempted += 1
         url = "https://finnhub.io/api/v1/company-news"
         params = {
@@ -867,6 +894,8 @@ def collect_news(
     provider_budget: dict[str, int] | None = None,
     dry_run: bool = False,
     operation_mode: str = "news_collection",
+    max_articles: int | None = None,
+    remaining_time_ms: Any | None = None,
 ) -> dict[str, Any]:
     """Main news collection logic.
 
@@ -896,7 +925,11 @@ def collect_news(
         }
 
     # Fetch from all sources and track source health separately from article count.
-    source_results = _fetch_budgeted_news_sources(tickers, provider_budget or {})
+    source_results = _fetch_budgeted_news_sources(
+        tickers,
+        provider_budget or {},
+        remaining_time_ms=remaining_time_ms,
+    )
     sources_available = sum(1 for result in source_results if result.is_available)
     failed_sources = [
         result.source for result in source_results if result.status == "failed"
@@ -975,6 +1008,16 @@ def collect_news(
 
         # Filter to new articles only
         new_articles = [a for a in all_articles if a["_hash"] not in existing_hashes]
+        new_articles.sort(
+            key=lambda article: (
+                str(article.get("published_at") or ""),
+                str(article.get("_hash") or ""),
+            ),
+            reverse=True,
+        )
+        article_limit = max_articles or NEWS_MAX_NEW_ARTICLES_PER_RUN
+        deferred_articles = new_articles[article_limit:]
+        articles_to_process = new_articles[:article_limit]
         urls_enriched = 0
         for article in all_articles:
             if article["_hash"] not in existing_hashes or not article.get("url"):
@@ -999,12 +1042,27 @@ def collect_news(
         # Generate summaries and store. If no OpenAI key is configured, the
         # summary function falls back to title-based summaries and ticker matching.
         openai_api_key = get_openai_api_key()
-        openai_client = OpenAI(api_key=openai_api_key) if openai_api_key else None
+        openai_client = (
+            OpenAI(
+                api_key=openai_api_key,
+                timeout=NEWS_OPENAI_TIMEOUT_SECONDS,
+                max_retries=1,
+            )
+            if openai_api_key
+            else None
+        )
         active_tickers = _active_ticker_universe()
         articles_stored = 0
         article_failures = 0
 
-        for article in new_articles:
+        stopped_for_time = False
+        for article in articles_to_process:
+            if (
+                remaining_time_ms is not None
+                and int(remaining_time_ms()) <= NEWS_TIMEOUT_SAFETY_MARGIN_MS
+            ):
+                stopped_for_time = True
+                break
             try:
                 summary_data = generate_summary(
                     openai_client,
@@ -1041,7 +1099,12 @@ def collect_news(
     )
 
     status = "success"
-    if failed_sources or article_failures:
+    deferred_count = len(deferred_articles) + (
+        len(articles_to_process) - articles_stored - article_failures
+        if stopped_for_time
+        else 0
+    )
+    if failed_sources or article_failures or deferred_count or stopped_for_time:
         status = "partial"
     summary = build_news_collection_summary(
         status=status,
@@ -1069,6 +1132,13 @@ def collect_news(
         "zero_article_sources": zero_article_sources,
         "total_fetched": len(all_articles),
         "duplicates_skipped": len(all_articles) - len(new_articles),
+        "new_article_count": len(new_articles),
+        "deferred_article_count": deferred_count,
+        "stopped_for_time": stopped_for_time,
+        "continuation": {
+            "required": deferred_count > 0,
+            "deferred_article_count": deferred_count,
+        },
         "urls_enriched": urls_enriched,
         "tickers": tickers or [],
         "collection_summary": summary,
@@ -1108,7 +1178,9 @@ def _planned_news_sources(
 
 
 def _fetch_budgeted_news_sources(
-    tickers: list[str] | None, provider_budget: dict[str, int]
+    tickers: list[str] | None,
+    provider_budget: dict[str, int],
+    remaining_time_ms: Any | None = None,
 ) -> list[NewsSourceResult]:
     results: list[NewsSourceResult] = []
     if _provider_budget_allows("newsapi", provider_budget):
@@ -1119,11 +1191,18 @@ def _fetch_budgeted_news_sources(
         )
 
     if _provider_budget_allows("finnhub", provider_budget):
-        results.append(
-            fetch_finnhub_source(
-                tickers=_budgeted_provider_tickers("finnhub", tickers, provider_budget)
-            )
+        budgeted_tickers = _budgeted_provider_tickers(
+            "finnhub", tickers, provider_budget
         )
+        if remaining_time_ms is None:
+            results.append(fetch_finnhub_source(tickers=budgeted_tickers))
+        else:
+            results.append(
+                fetch_finnhub_source(
+                    tickers=budgeted_tickers,
+                    remaining_time_ms=remaining_time_ms,
+                )
+            )
     else:
         results.append(
             NewsSourceResult("finnhub", [], "skipped", "provider_budget_exhausted")
@@ -1253,14 +1332,19 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     try:
         repair_request = _news_repair_request_from_event(event)
         if repair_request:
-            tickers = repair_request.tickers or None
-            if tickers and repair_request.max_tickers is not None:
-                tickers = tickers[: repair_request.max_tickers]
+            tickers = _repair_news_tickers(repair_request)
             result = collect_news(
                 tickers=tickers,
                 provider_budget=repair_request.provider_budget,
                 dry_run=repair_request.dry_run,
                 operation_mode=repair_request.mode.value,
+                max_articles=repair_request.max_articles,
+                remaining_time_ms=(
+                    context.get_remaining_time_in_millis
+                    if context
+                    and callable(getattr(context, "get_remaining_time_in_millis", None))
+                    else None
+                ),
             )
         else:
             manifest_task_run, tickers = _prepare_manifest_task_run(event, context)
@@ -1294,6 +1378,27 @@ def _news_repair_request_from_event(event: dict[str, Any]) -> RepairModeRequest 
     if str(event.get("mode") or "") != RepairMode.REPAIR_NEWS.value:
         return None
     return RepairModeRequest.model_validate(event)
+
+
+def _repair_news_tickers(request: RepairModeRequest) -> list[str] | None:
+    if request.tickers:
+        return request.tickers[: request.max_tickers]
+    if request.max_tickers is None:
+        return None
+    stocks = store.active_stock_metadata()
+    tickers = sorted(
+        {
+            str(stock.get("ticker") or "").strip().upper()
+            for stock in stocks
+            if str(stock.get("ticker") or "").strip()
+        }
+    )
+    if not tickers:
+        return []
+    run_date = request.run_date or date.today()
+    start = run_date.toordinal() % len(tickers)
+    rotated = tickers[start:] + tickers[:start]
+    return rotated[: request.max_tickers]
 
 
 def _event_tickers(event: dict[str, Any]) -> list[str] | None:

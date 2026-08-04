@@ -10,6 +10,16 @@ on:
         type: choice
         options:
           - prod
+      dry_run:
+        description: "Report changes without writing"
+        required: true
+        default: true
+        type: boolean
+      reconcile_out_of_scope:
+        description: "Mark confirmed active_not_in_seed rows inactive"
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
   group: sync-watchlist-metadata-now-${{ inputs.deployment_stage }}
@@ -58,9 +68,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          payload="$(printf '{\"mode\":\"sync_static_metadata\",\"tickers\":[],\"provider_budget\":{},\"dry_run\":%s,\"reconcile_out_of_scope\":%s}' \
+            '${{ inputs.dry_run }}' '${{ inputs.reconcile_out_of_scope }}')"
           aws lambda invoke \
             --function-name "$WATCHLIST_SEED_FN" \
-            --payload '{"mode":"sync_static_metadata","tickers":[],"provider_budget":{},"dry_run":false}' \
+            --payload "$payload" \
             --log-type Tail \
             --cli-read-timeout 900 \
             --cli-binary-format raw-in-base64-out \

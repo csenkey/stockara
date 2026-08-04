@@ -16,9 +16,10 @@ Other backlog-like files are reference material unless this file links to them a
 
 ### 1. Daily Pipeline Stability And Evidence Recovery
 
-Status: Core production recovery complete. Structured review responses and the
-bounded review-directed evidence-repair loop are implemented locally and await
-deployment plus production replay verification.
+Status: Active production resilience correction. The 2026-08-03 scheduled run
+was blocked before analysis when `CollectNews` exhausted its 300-second Lambda
+timeout. The correction is specified in Kiro style under the linked resilience
+feature documents.
 
 Goal: Make the once-daily Stockara publication stable, explainable, and useful even when optional data is degraded, by replacing independent schedule timing assumptions with one observable daily workflow.
 
@@ -27,6 +28,9 @@ Canonical feature docs:
 - `docs/steering/features/daily-pipeline-stability/requirements.md`
 - `docs/steering/features/daily-pipeline-stability/design.md`
 - `docs/steering/features/daily-pipeline-stability/backlog.md`
+- `docs/steering/features/daily-pipeline-resilience/requirements.md`
+- `docs/steering/features/daily-pipeline-resilience/design.md`
+- `docs/steering/features/daily-pipeline-resilience/backlog.md`
 
 Completed stability work:
 
@@ -39,6 +43,10 @@ Completed stability work:
 
 Next executable item:
 
+- Execute the Kiro-style daily-pipeline-resilience backlog in order: bound news
+  collection, make optional collector failures degraded/non-blocking, improve
+  status attribution, reconcile the active universe, and verify a current
+  production publication end to end.
 - Deploy the typed review contract and targeted evidence repair loop, then
   replay the affected malformed reviews and verify every withheld recommendation
   has a reviewer rationale or an explicit invalid-response incident.
