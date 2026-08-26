@@ -34,6 +34,9 @@ class MonitoringStack(Stack):
         )
 
         function_names = {
+            "workflow_reporter": resource_name(
+                deployment_stage, "stockara-workflow-reporter", "workflow-reporter"
+            ),
             "stock_collector": resource_name(
                 deployment_stage, "stockara-stock-collector", "stock-collector"
             ),
@@ -105,6 +108,15 @@ class MonitoringStack(Stack):
             alarm.add_alarm_action(cw_actions.SnsAction(self.alerts_topic))
 
         threshold_alarms = [
+            (
+                "WorkflowReportOverdueAlarm",
+                "stockara-workflow-report-overdue",
+                "workflow-report-overdue",
+                "workflow_report_overdue",
+                1,
+                cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                "Daily workflow status was not reconciled by the publication deadline",
+            ),
             (
                 "ArtifactPublishFailuresAlarm",
                 "stockara-artifact-publish-failures",
@@ -189,7 +201,8 @@ class MonitoringStack(Stack):
                 metric=cloudwatch.Metric(
                     namespace=(
                         "StockaraPhase1"
-                        if metric_name == "artifact_publish_failures"
+                        if metric_name
+                        in {"artifact_publish_failures", "workflow_report_overdue"}
                         else "StockMonitoring"
                     ),
                     metric_name=metric_name,

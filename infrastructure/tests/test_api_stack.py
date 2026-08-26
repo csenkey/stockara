@@ -21,9 +21,7 @@ def test_calendar_collector_lambdas_and_schedules_are_created():
     table = dynamodb.Table(
         stack,
         "DataTable",
-        partition_key=dynamodb.Attribute(
-            name="PK", type=dynamodb.AttributeType.STRING
-        ),
+        partition_key=dynamodb.Attribute(name="PK", type=dynamodb.AttributeType.STRING),
         sort_key=dynamodb.Attribute(name="SK", type=dynamodb.AttributeType.STRING),
     )
     bucket = s3.Bucket(stack, "Artifacts")
@@ -288,9 +286,7 @@ def test_daily_pipeline_state_machine_is_created_for_daily_production_run():
     table = dynamodb.Table(
         stack,
         "DataTable",
-        partition_key=dynamodb.Attribute(
-            name="PK", type=dynamodb.AttributeType.STRING
-        ),
+        partition_key=dynamodb.Attribute(name="PK", type=dynamodb.AttributeType.STRING),
         sort_key=dynamodb.Attribute(name="SK", type=dynamodb.AttributeType.STRING),
     )
     bucket = s3.Bucket(stack, "Artifacts")
@@ -310,6 +306,15 @@ def test_daily_pipeline_state_machine_is_created_for_daily_production_run():
     state_machine = next(iter(resources.values()))
     properties = state_machine["Properties"]
     definition = json.dumps(properties["DefinitionString"])
+
+    # Resolve only CDK's ARN tokens; exercise the actual synthesized data paths.
+    asl = json.loads(
+        "".join(
+            part if isinstance(part, str) else "arn:test"
+            for part in properties["DefinitionString"]["Fn::Join"][1]
+        )
+    )
+    _assert_bounded_parallel_payloads(asl["States"])
 
     assert properties["StateMachineName"] == "stockara-codex-test-daily-pipeline"
     assert properties["StateMachineType"] == "STANDARD"
@@ -375,8 +380,13 @@ def test_daily_pipeline_state_machine_is_created_for_daily_production_run():
     assert "ArtifactPublishFailed" in definition
     assert "Parallel" in definition
     assert "Wait only until the manifest's configured analysis timestamp." in definition
-    assert "Continue bounded analyzer batches until publication is terminal." in definition
-    assert "Wait for leased manifest worker Lambdas before dispatching more chunks." in definition
+    assert (
+        "Continue bounded analyzer batches until publication is terminal." in definition
+    )
+    assert (
+        "Wait for leased manifest worker Lambdas before dispatching more chunks."
+        in definition
+    )
     assert "dispatch_ready_for_analysis" in definition
     assert "dispatch_deadline_exceeded" in definition
     assert "analysis_not_before" in definition
@@ -411,10 +421,78 @@ def test_daily_pipeline_state_machine_is_created_for_daily_production_run():
     template.has_output(
         "DailyWorkflowStateMachineName",
         assertions.Match.object_like(
-            {"Description": "Manual/shadow Step Functions workflow for the daily pipeline"}
+            {
+                "Description": "Manual/shadow Step Functions workflow for the daily pipeline"
+            }
         ),
     )
-    template.resource_count_is("AWS::Events::Rule", 9)
+    template.resource_count_is("AWS::Events::Rule", 11)
+    template.has_resource_properties(
+        "AWS::Lambda::Function",
+        {
+            "Handler": "src.services.workflow_reporter.handler",
+            "ReservedConcurrentExecutions": 1,
+            "Timeout": 120,
+        },
+    )
+    template.has_resource_properties(
+        "AWS::Events::Rule",
+        {
+            "EventPattern": assertions.Match.object_like(
+                {
+                    "source": ["aws.states"],
+                    "detail": assertions.Match.object_like(
+                        {"status": ["SUCCEEDED", "FAILED", "TIMED_OUT", "ABORTED"]}
+                    ),
+                }
+            ),
+        },
+    )
+    template.has_resource_properties(
+        "AWS::Events::Rule",
+        {
+            "ScheduleExpression": "cron(20 0,1,6 * * ? *)",
+        },
+    )
+
+
+def _assert_bounded_parallel_payloads(states):
+    """Model Parallel input/result processing with production-sized context."""
+    from copy import deepcopy
+
+    original = {
+        "prices": {"details": "x" * 90_000},
+        "analysis": {"Payload": {"body": {"run_date": "2026-08-25"}}},
+    }
+    data = deepcopy(original)
+    for name in ["CollectCalendarsAndEvidence"] + ["CollectReviewEvidence"] * 5:
+        state = states[name]
+        branch_input = data
+        if "Parameters" in state:
+            branch_input = {
+                key.removesuffix(".$"): deepcopy(data[value[2:]])
+                if key.endswith(".$")
+                else value
+                for key, value in state["Parameters"].items()
+            }
+        outputs = []
+        for branch in state["Branches"]:
+            # Success, skipped and caught-error paths must all remain bounded.
+            for end in (s for s in branch["States"].values() if s.get("End")):
+                result = deepcopy(branch_input)
+                if end.get("Type") == "Pass" and "Result" in end:
+                    result = end["Result"]
+                elif "ResultPath" in end:
+                    result[end["ResultPath"][2:]] = {"status": "partial"}
+                if end.get("OutputPath", "$") != "$":
+                    result = result[end["OutputPath"][2:]]
+                assert len(json.dumps(result).encode()) < 32_768
+            outputs.append(result)
+        assert len(json.dumps(outputs).encode()) < 65_536
+        if state.get("ResultPath") is not None:
+            data[state["ResultPath"][2:]] = outputs
+        assert len(json.dumps(data).encode()) < 196_608
+    assert data["analysis"] == original["analysis"]
 
 
 def test_daily_pipeline_state_machine_iam_is_scoped_to_workflow_lambdas():
@@ -423,9 +501,7 @@ def test_daily_pipeline_state_machine_iam_is_scoped_to_workflow_lambdas():
     table = dynamodb.Table(
         stack,
         "DataTable",
-        partition_key=dynamodb.Attribute(
-            name="PK", type=dynamodb.AttributeType.STRING
-        ),
+        partition_key=dynamodb.Attribute(name="PK", type=dynamodb.AttributeType.STRING),
         sort_key=dynamodb.Attribute(name="SK", type=dynamodb.AttributeType.STRING),
     )
     bucket = s3.Bucket(stack, "Artifacts")
@@ -480,7 +556,22 @@ def test_daily_pipeline_state_machine_iam_is_scoped_to_workflow_lambdas():
         "DividendCollectorFunction8FB42B38",
         "EvidenceCollectorFunctionE44F8DC8",
         "Phase1AnalyzerPublisherFunction7EEB9A09",
+        "WorkflowReporterFunctionC7A7F0C7",
     }
+    reporter_policy = next(
+        resource["Properties"]["PolicyDocument"]
+        for resource in resources.values()
+        if resource["Type"] == "AWS::IAM::Policy"
+        and resource["Properties"]["PolicyName"].startswith(
+            "WorkflowReporterFunctionServiceRoleDefaultPolicy"
+        )
+    )
+    policy_text = json.dumps(reporter_policy)
+    assert "states:GetExecutionHistory" in policy_text
+    assert "workflow/*" in policy_text
+    assert "secretsmanager:" not in policy_text
+    assert "dynamodb:" not in policy_text
+    assert "lambda:InvokeFunction" not in policy_text
     template.has_resource_properties(
         "AWS::IAM::Policy",
         {
@@ -506,9 +597,7 @@ def test_watchlist_seed_lambda_uses_dependency_bundled_backend_asset():
     table = dynamodb.Table(
         stack,
         "DataTable",
-        partition_key=dynamodb.Attribute(
-            name="PK", type=dynamodb.AttributeType.STRING
-        ),
+        partition_key=dynamodb.Attribute(name="PK", type=dynamodb.AttributeType.STRING),
         sort_key=dynamodb.Attribute(name="SK", type=dynamodb.AttributeType.STRING),
     )
     bucket = s3.Bucket(stack, "Artifacts")

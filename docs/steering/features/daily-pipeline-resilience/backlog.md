@@ -1,5 +1,28 @@
 # Daily Pipeline Resilience Backlog
 
+## 2026-08-26 Recovery Release
+
+- [x] Reproduce payload growth using the synthesized parallel-state data paths;
+  bound branch inputs, strip integration metadata, and discard unused repair results.
+- [x] Add an independent reporter, terminal-event subscription, scheduled
+  reconciliation, serialized report ordering, and scoped IAM.
+- [x] Test failure attribution, duplicate/delayed events, original run dates,
+  deadline boundaries, and preservation of recommendation artifacts.
+- [x] Show overdue updates when both artifacts are stale; distinguish failures
+  before/after analysis; run frontend regression tests in deployment CI.
+- [x] Inspect terminal error/history tail and notification configuration;
+  expose explicitly requested status reconciliation without running analysis.
+- [x] Complete final local suites and production packaging/synthesis checks:
+  459 backend tests, 21 infrastructure tests, 6 frontend tests, lint/build,
+  Docker-backed CDK synthesis, and rendered overdue-dashboard check passed.
+- [ ] Deploy through `main` and pass deployed smoke tests.
+- [ ] Verify independent reporting against the actual August 25 failed execution.
+- [ ] Start a fresh execution on the corrected definition and verify current
+  publication, accurate terminal status, and the public dashboard.
+
+Do not close the incident based only on a green deployment. Do not backdate new
+analysis or overwrite historical recommendations to fill the missing days.
+
 This is the Kiro-style executable task plan for the requirements and design in
 this feature directory. Tasks are ordered by dependency and should be completed
 test-first where specified.

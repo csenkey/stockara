@@ -30,6 +30,36 @@ and the dashboard continued to display the 2026-07-31 publication.
 
 ## Requirements
 
+### 2026-08-26 Incident: Payload Limits And Missing Reports
+
+The August 11–25 executions failed after the August 10 publication. AWS confirmed
+`States.DataLimitExceeded` in `CollectReviewEvidence` on August 11 and August 25.
+Parallel branch results retained copies of their input workflow context. The
+`States.ALL` catch did not catch that terminal error, leaving both public dates
+stale. The following requirements extend, rather than replace, the earlier work.
+
+- Parallel branches receive only required inputs. Success, skipped, and degraded
+  outputs cannot retain recursive copies of the parent workflow. Repeated repair
+  passes must remain bounded below the 256 KiB service limit with headroom.
+- Detailed evidence remains in its existing durable storage. Recommendation
+  eligibility, confidence adjustments, review gates, and repair budgets remain
+  unchanged.
+- Actual `FAILED`, `TIMED_OUT`, and `ABORTED` executions produce independent
+  workflow reports even when the workflow's own status step cannot run. Successful
+  execution events confirm completion and can repair missing final reports.
+- Reports preserve the original UTC run date, actual execution status, failure
+  attribution, and available analysis progress. They never expose raw execution
+  inputs, secrets, or overwrite recommendation artifacts.
+- Duplicate and delayed reports cannot replace newer daily/latest results;
+  per-execution reports remain available. Reporting is serialized.
+- A scheduled reconciliation after the 21:05 UTC start plus three-hour timeout
+  and 15-minute grace detects missing executions and recovers missed terminal
+  events. Reconciliation failures and overdue reports are alarmed.
+- Dashboard freshness uses that deadline independently of artifact-date equality;
+  failures after analysis must not be described as analysis never reached.
+- Diagnostic workflows show terminal errors and the tail of execution history,
+  and inspect public status even when the execution failed.
+
 ### Requirement 1: Bounded News Collection
 
 **User story:** As an operator, I want news collection to finish within its
@@ -158,4 +188,3 @@ in production and produces a current, explainable result.
 6. IF no recommendation passes the AI review gate, THEN every withheld current
    recommendation SHALL contain a valid rationale or an explicit
    `invalid_response` incident.
-

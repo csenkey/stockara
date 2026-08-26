@@ -16,10 +16,11 @@ Other backlog-like files are reference material unless this file links to them a
 
 ### 1. Daily Pipeline Stability And Evidence Recovery
 
-Status: Active production resilience correction. The 2026-08-03 scheduled run
-was blocked before analysis when `CollectNews` exhausted its 300-second Lambda
-timeout. The correction is specified in Kiro style under the linked resilience
-feature documents.
+Status: Active production recovery (2026-08-26). All scheduled executions from
+August 11–25 failed; August 11 and August 25 were confirmed to exceed the Step
+Functions payload limit in `CollectReviewEvidence`. August 10 remains the last
+publication. Compact parallel-state data and independent status reconciliation
+are the immediate release priority; production verification is still required.
 
 Goal: Make the once-daily Stockara publication stable, explainable, and useful even when optional data is degraded, by replacing independent schedule timing assumptions with one observable daily workflow.
 
@@ -43,6 +44,10 @@ Completed stability work:
 
 Next executable item:
 
+- Complete the payload-growth regression, independent execution reporting,
+  deadline reconciliation, and stale-dashboard safeguards in the resilience
+  backlog. Deploy on `main`, verify an actual failed execution report, and follow
+  a fresh production execution through current publication before closing it.
 - Execute the Kiro-style daily-pipeline-resilience backlog in order: bound news
   collection, make optional collector failures degraded/non-blocking, improve
   status attribution, reconcile the active universe, and verify a current

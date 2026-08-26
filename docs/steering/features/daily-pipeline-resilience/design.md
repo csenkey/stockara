@@ -2,6 +2,40 @@
 
 ## Overview
 
+### 2026-08-26 Payload And Reporting Correction
+
+`CollectCalendarsAndEvidence` starts each branch with an empty context because
+its collector requests are constants. It retains only each branch's own result.
+`CollectReviewEvidence` receives only the bounded analysis repair plan, produces
+small skipped/results objects, and discards its aggregate result: reanalysis
+reads evidence already persisted by the collectors. Lambda integration results
+keep `Payload`, removing unused SDK response metadata. Parent state used by later
+readiness/status decisions remains intact.
+
+An independent `stockara-workflow-reporter` Lambda handles normal status writes,
+terminal Step Functions events, and reconciliation at 00:20, 01:20, and 06:20 UTC.
+It has no database, provider, or AI-secret permissions. It can read only the
+configured state machine's execution history and write only `workflow/*` artifacts.
+Its reserved concurrency is one; the analyzer's legacy status mode forwards to
+it so all production status writes share the same serialized ordering.
+
+Normal workflow reporting and external reporting use the same compact contract.
+External reporting reads `DescribeExecution` and a bounded reverse history tail
+for progress/failure attribution; raw inputs and causes are not published.
+Failure causes use safe summaries because AWS runtime errors can include input
+data. Actual terminal observations take precedence over provisional in-workflow
+reports. The reporter compares UTC run/start times before replacing daily/latest
+artifacts, saves per-execution history, and leaves recommendation artifacts alone.
+
+EventBridge delivery is backed by reconciliation, Lambda retries and a dead-letter
+queue. Existing SNS-backed alarms cover workflow failures; reporter Lambda errors
+and the overdue-report metric add coverage for the reporting path. Subscribing an
+email recipient remains a separate operator authorization.
+
+The frontend computes the expected completed UTC run using the same deadline,
+refreshes its clock every minute, labels old recommendations, and reports whether
+analysis was reached before a later step failed. No investment logic changes.
+
 The correction separates required-data safety from optional-enrichment
 availability. The analyzer remains strict per ticker, while optional collectors
 become bounded producers of typed degraded context.
@@ -205,4 +239,3 @@ workflow artifact contains current analyzer counters.
    analyzer progress, review validity, and final artifact dates.
 6. Treat deployment as incomplete until the production workflow publishes a
    terminal current-day artifact and smoke checks validate it.
-

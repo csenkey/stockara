@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { failureMessage, workflowFreshness } from "../services/workflowFreshness";
 
 interface SignalSource {
   provider: string;
@@ -730,6 +731,11 @@ interface DashboardProps {
 }
 
 export default function Dashboard({ onNavigate }: DashboardProps) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
   const [payload, setPayload] = useState<TopPicksPayload | null>(null);
   const [statusPayload, setStatusPayload] = useState<PublicationStatusPayload | null>(null);
   const [workflowStatus, setWorkflowStatus] = useState<WorkflowStatusPayload | null>(null);
@@ -835,11 +841,9 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
     !workflowSupersedesStatus;
   const currentStatusWarnings =
     showTransientStatus ? statusPayload.data_warnings : [];
-  const publicationIsStale = Boolean(
-    workflowStatus?.run_date &&
-      payload?.publication_date &&
-      workflowStatus.run_date > payload.publication_date,
-  );
+  const publicationIsStale = payload
+    ? workflowFreshness(payload.publication_date, workflowStatus?.run_date, now).publicationIsStale
+    : false;
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
@@ -884,6 +888,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
       {!loading && payload && (
         <div className="mx-auto max-w-7xl px-5 pt-5">
           <DailyRunSummary
+            now={now}
             workflowStatus={workflowStatus}
             publicationStatus={statusPayload}
             publication={payload}
@@ -1042,11 +1047,13 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
 }
 
 function DailyRunSummary({
+  now,
   workflowStatus,
   publicationStatus,
   publication,
   onOpenDataHealth,
 }: {
+  now: number;
   workflowStatus: WorkflowStatusPayload | null;
   publicationStatus: PublicationStatusPayload | null;
   publication: TopPicksPayload;
@@ -1059,7 +1066,8 @@ function DailyRunSummary({
     publicationStatus?.publication_date ??
     publication.publication_date;
   const updatedAt = workflowStatus?.generated_at ?? publicationStatus?.generated_at;
-  const statusLabel = {
+  const freshness = workflowFreshness(publication.publication_date, workflowStatus?.run_date, now);
+  const statusLabel = freshness.workflowOverdue ? "Update overdue" : {
     success: "Completed",
     degraded: "Completed with gaps",
     waiting: "In progress",
@@ -1067,16 +1075,16 @@ function DailyRunSummary({
     suppressed: "Needs attention",
   }[status] ?? "Status unavailable";
   const statusTone =
-    status === "success"
+    freshness.workflowOverdue ? "bg-red-400" : status === "success"
       ? "bg-emerald-400"
       : status === "degraded" || status === "waiting"
         ? "bg-amber-400"
         : status === "blocked" || status === "suppressed"
           ? "bg-red-400"
           : "bg-slate-500";
-  const publicationIsStale = runDate > publication.publication_date;
+  const publicationIsStale = freshness.publicationIsStale;
   const operationalMessage = workflowStatus?.failed_step
-    ? `Analysis was not reached; ${workflowStatus.failed_step} blocked the current run.`
+    ? failureMessage(workflowStatus.failed_step, workflowStatus.analysis_reached)
     : workflowStatus?.degraded_steps?.length
       ? `Eligible-ticker analysis continued with degraded optional data: ${workflowStatus.degraded_steps.join(", ")}.`
       : publicationIsStale
@@ -1085,6 +1093,17 @@ function DailyRunSummary({
 
   return (
     <section className="border-y border-slate-800 py-4">
+      {freshness.workflowOverdue && (
+        <p role="alert" className="mb-3 text-sm text-amber-300">
+          Daily workflow update overdue. Expected a completed run for {freshness.expected} or later.
+          The last displayed report is from {workflowStatus?.run_date ?? "an unknown date"}.
+        </p>
+      )}
+      {publicationIsStale && (
+        <p className="mb-3 text-sm text-amber-300">
+          Recommendations are from the latest completed publication ({publication.publication_date}), not a current market analysis.
+        </p>
+      )}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-[1.2fr_1fr_1fr_1.4fr_auto] lg:items-center">
         <div>
           <div className="text-xs font-semibold uppercase text-slate-500">

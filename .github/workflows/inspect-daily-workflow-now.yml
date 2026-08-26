@@ -14,6 +14,11 @@ on:
         description: "Only treat executions at or after this UTC ISO timestamp as candidates"
         required: true
         default: "2026-07-30T21:05:00Z"
+      reconcile_status:
+        description: "Repair public status from actual AWS execution state (no analysis or collection)"
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: inspect-daily-workflow-now-${{ inputs.deployment_stage }}
@@ -97,7 +102,7 @@ jobs:
           executions = payload.get("executions", [])
           print(f"cutoff={cutoff.isoformat()}")
           print("recent_executions:")
-          for item in executions[:10]:
+          for item in executions[:25]:
               started = item["startDate"]
               if isinstance(started, str):
                   started_text = started
@@ -138,20 +143,41 @@ jobs:
           set -euo pipefail
           aws stepfunctions describe-execution \
             --execution-arn "$SELECTED_EXECUTION_ARN" \
-            --query "{name:name,status:status,startDate:startDate,stopDate:stopDate,input:input,output:output}" \
+            --query "{name:name,status:status,startDate:startDate,stopDate:stopDate,error:error,cause:cause}" \
             --output json > selected-execution.json
           python -m json.tool selected-execution.json
 
           aws stepfunctions get-execution-history \
             --execution-arn "$SELECTED_EXECUTION_ARN" \
+            --reverse-order \
+            --no-include-execution-data \
             --max-items 80 \
-            --query "events[].{id:id,type:type,state:stateEnteredEventDetails.name,stateExited:stateExitedEventDetails.name,error:taskFailedEventDetails.error,cause:taskFailedEventDetails.cause}" \
+            --query "events[].{id:id,type:type,state:stateEnteredEventDetails.name,stateExited:stateExitedEventDetails.name,error:taskFailedEventDetails.error,cause:taskFailedEventDetails.cause,terminalError:executionFailedEventDetails.error,terminalCause:executionFailedEventDetails.cause}" \
             --output table
 
-          if [[ "$SELECTED_EXECUTION_STATUS" == "FAILED" || "$SELECTED_EXECUTION_STATUS" == "TIMED_OUT" || "$SELECTED_EXECUTION_STATUS" == "ABORTED" ]]; then
-            echo "Selected Step Functions execution ended with terminal status: $SELECTED_EXECUTION_STATUS"
-            exit 1
-          fi
+      - name: Reconcile public status when explicitly requested
+        if: inputs.reconcile_status
+        run: |
+          aws lambda invoke --function-name stockara-workflow-reporter \
+            --cli-binary-format raw-in-base64-out --payload '{"mode":"reconcile"}' \
+            reporter-result.json > reporter-invocation.json
+          python - <<'PY'
+          import json
+          invocation = json.load(open("reporter-invocation.json"))
+          result = json.load(open("reporter-result.json"))
+          print(json.dumps(result, indent=2))
+          if invocation.get("FunctionError") or result.get("statusCode") != 200:
+              raise SystemExit("Workflow reporter reconciliation failed")
+          PY
+
+      - name: Inspect workflow alarms and notification delivery configuration
+        run: |
+          aws cloudwatch describe-alarms \
+            --alarm-names stockara-daily-workflow-failed stockara-workflow_reporter-failure stockara-workflow-report-overdue \
+            --query 'MetricAlarms[].{name:AlarmName,state:StateValue,actionsEnabled:ActionsEnabled,actions:AlarmActions}'
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          aws sns list-subscriptions-by-topic --topic-arn "arn:aws:sns:${AWS_REGION}:${account_id}:stockara-alerts" \
+            --query '{total:length(Subscriptions),confirmed:length(Subscriptions[?SubscriptionArn!=`PendingConfirmation`])}'
 
       - name: Validate workflow/latest.json from S3
         shell: bash
@@ -204,3 +230,14 @@ jobs:
                       f"error={step.get('error')}"
                   )
           PY
+
+      - name: Assert execution outcome
+        if: always() && env.SELECTED_EXECUTION_STATUS != ''
+        shell: bash
+        run: |
+          case "$SELECTED_EXECUTION_STATUS" in
+            FAILED|TIMED_OUT|ABORTED)
+              echo "Selected execution ended with $SELECTED_EXECUTION_STATUS; see terminal error and artifact above."
+              exit 1
+              ;;
+          esac

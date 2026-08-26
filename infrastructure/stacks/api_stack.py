@@ -4,6 +4,7 @@ import hashlib
 import os
 
 from aws_cdk import (
+    ArnFormat,
     BundlingOptions,
     CfnOutput,
     CustomResource,
@@ -30,9 +31,7 @@ from .naming import resource_name
 BACKEND_ASSET_PATH = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "backend")
 )
-PROJECT_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..")
-)
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 BACKEND_WATCHLIST_SEED_PATH = os.path.join(
     BACKEND_ASSET_PATH, "src", "data", "watchlist_seed.csv"
 )
@@ -79,7 +78,9 @@ class ApiStack(Stack):
                 resources=["*"],
             )
         )
-        openai_api_key_secret_name = f"stockara/{deployment_stage}/openai-api-key-current"
+        openai_api_key_secret_name = (
+            f"stockara/{deployment_stage}/openai-api-key-current"
+        )
         openai_api_key_secret = secretsmanager.Secret.from_secret_name_v2(
             self,
             "OpenAiApiKeySecret",
@@ -501,9 +502,95 @@ class ApiStack(Stack):
         health_resource = api_resource.add_resource("health")
         health_resource.add_method("GET", apigw.LambdaIntegration(self.api_handler_fn))
 
+        workflow_name = resource_name(
+            deployment_stage, "stockara-daily-pipeline", "daily-pipeline"
+        )
+        workflow_arn = self.format_arn(
+            service="states",
+            resource="stateMachine",
+            resource_name=workflow_name,
+            arn_format=ArnFormat.COLON_RESOURCE_NAME,
+        )
+        self.workflow_reporter_fn = _lambda.Function(
+            self,
+            "WorkflowReporterFunction",
+            function_name=resource_name(
+                deployment_stage, "stockara-workflow-reporter", "workflow-reporter"
+            ),
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            handler="src.services.workflow_reporter.handler",
+            code=backend_code,
+            memory_size=256,
+            timeout=Duration.minutes(2),
+            reserved_concurrent_executions=1,
+            dead_letter_queue_enabled=True,
+            environment={
+                "STOCKARA_ARTIFACT_BUCKET": artifact_bucket.bucket_name,
+                "STOCKARA_DAILY_WORKFLOW_ARN": workflow_arn,
+            },
+            description="Serialized daily status publication and independent execution reconciliation",
+        )
+        artifact_bucket.grant_read(self.workflow_reporter_fn, "workflow/*")
+        artifact_bucket.grant_put(self.workflow_reporter_fn, "workflow/*")
+        self.workflow_reporter_fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["states:ListExecutions"],
+                resources=[workflow_arn],
+            )
+        )
+        self.workflow_reporter_fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["states:DescribeExecution", "states:GetExecutionHistory"],
+                resources=[
+                    self.format_arn(
+                        service="states",
+                        resource="execution",
+                        resource_name=f"{workflow_name}:*",
+                        arn_format=ArnFormat.COLON_RESOURCE_NAME,
+                    )
+                ],
+            )
+        )
+        self.workflow_reporter_fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["cloudwatch:PutMetricData"],
+                resources=["*"],
+                conditions={"StringEquals": {"cloudwatch:namespace": "StockaraPhase1"}},
+            )
+        )
+        self.ai_analyzer_fn.add_environment(
+            "STOCKARA_WORKFLOW_REPORTER_FUNCTION",
+            self.workflow_reporter_fn.function_name,
+        )
+        self.workflow_reporter_fn.grant_invoke(self.ai_analyzer_fn)
         self.daily_workflow = self._create_daily_workflow(deployment_stage)
         self.daily_workflow_schedule = self._create_daily_workflow_schedule(
             deployment_stage
+        )
+        events.Rule(
+            self,
+            "DailyWorkflowTerminalEvents",
+            event_pattern=events.EventPattern(
+                source=["aws.states"],
+                detail_type=["Step Functions Execution Status Change"],
+                detail={
+                    "stateMachineArn": [workflow_arn],
+                    "status": ["SUCCEEDED", "FAILED", "TIMED_OUT", "ABORTED"],
+                },
+            ),
+            targets=[targets.LambdaFunction(self.workflow_reporter_fn)],
+        )
+        events.Rule(
+            self,
+            "DailyWorkflowReconciliation",
+            schedule=events.Schedule.cron(minute="20", hour="0,1,6"),
+            targets=[
+                targets.LambdaFunction(
+                    self.workflow_reporter_fn,
+                    event=events.RuleTargetInput.from_object({"mode": "reconcile"}),
+                )
+            ],
+            description="Reconcile terminal status after the daily deadline and retry missed status events",
         )
 
         stock_collection_rule = events.Rule(
@@ -856,12 +943,8 @@ class ApiStack(Stack):
             self.news_collector_fn,
             {
                 "mode": "repair_news",
-                "run_date": sfn.JsonPath.string_at(
-                    "$.analysis.Payload.body.run_date"
-                ),
-                "tickers": sfn.JsonPath.list_at(
-                    "$.analysis.Payload.body.news_tickers"
-                ),
+                "run_date": sfn.JsonPath.string_at("$.analysis.Payload.body.run_date"),
+                "tickers": sfn.JsonPath.list_at("$.analysis.Payload.body.news_tickers"),
                 "max_tickers": 10,
                 "provider_budget": {
                     "newsapi": 5,
@@ -877,9 +960,7 @@ class ApiStack(Stack):
             self.evidence_collector_fn,
             {
                 "mode": "repair_evidence",
-                "run_date": sfn.JsonPath.string_at(
-                    "$.analysis.Payload.body.run_date"
-                ),
+                "run_date": sfn.JsonPath.string_at("$.analysis.Payload.body.run_date"),
                 "tickers": sfn.JsonPath.list_at(
                     "$.analysis.Payload.body.evidence_tickers"
                 ),
@@ -892,11 +973,18 @@ class ApiStack(Stack):
         collect_review_evidence = sfn.Parallel(
             self,
             "CollectReviewEvidence",
-            result_path="$.review_evidence_repair",
+            parameters={"analysis.$": "$.analysis"},
+            result_path=sfn.JsonPath.DISCARD,
             comment="Collect only evidence requested by rejected shortlist reviews.",
         )
-        skip_review_news = sfn.Pass(self, "SkipReviewNews")
-        skip_review_evidence = sfn.Pass(self, "SkipReviewEvidence")
+        skip_review_news = sfn.Pass(
+            self, "SkipReviewNews", result=sfn.Result.from_object({"status": "skipped"})
+        )
+        skip_review_evidence = sfn.Pass(
+            self,
+            "SkipReviewEvidence",
+            result=sfn.Result.from_object({"status": "skipped"}),
+        )
         collect_review_evidence.branch(
             sfn.Choice(self, "IsReviewNewsRepairRequired")
             .when(
@@ -922,9 +1010,7 @@ class ApiStack(Stack):
             self.ai_analyzer_fn,
             {
                 "mode": "repair_review_evidence",
-                "run_date": sfn.JsonPath.string_at(
-                    "$.analysis.Payload.body.run_date"
-                ),
+                "run_date": sfn.JsonPath.string_at("$.analysis.Payload.body.run_date"),
                 "tickers": sfn.JsonPath.list_at(
                     "$.analysis.Payload.body.targeted_tickers"
                 ),
@@ -936,7 +1022,7 @@ class ApiStack(Stack):
         publish_workflow_status = sfn_tasks.LambdaInvoke(
             self,
             "PublishWorkflowStatus",
-            lambda_function=self.ai_analyzer_fn,
+            lambda_function=self.workflow_reporter_fn,
             payload=sfn.TaskInput.from_object(
                 {
                     "mode": "publish_workflow_status",
@@ -959,6 +1045,7 @@ class ApiStack(Stack):
         collect_calendars_and_evidence = sfn.Parallel(
             self,
             "CollectCalendarsAndEvidence",
+            parameters={},
             result_path="$.optional_evidence",
         )
         collect_calendars_and_evidence.branch(collect_earnings)
@@ -1045,7 +1132,11 @@ class ApiStack(Stack):
         for step, step_name, error_key in [
             (sync_static_metadata, "SyncStaticMetadata", "sync_static_metadata_error"),
             (create_or_refresh_manifest, "CreateOrRefreshManifest", "manifest_error"),
-            (dispatch_manifest_tasks, "DispatchManifestTasks", "manifest_dispatch_error"),
+            (
+                dispatch_manifest_tasks,
+                "DispatchManifestTasks",
+                "manifest_dispatch_error",
+            ),
             (collect_prices, "CollectPrices", "prices_error"),
             (repair_price_gaps, "RepairPriceGaps", "price_gap_repair_error"),
             (analyze_and_publish, "AnalyzeAndPublish", "analysis_error"),
@@ -1089,8 +1180,7 @@ class ApiStack(Stack):
         )
 
         definition = (
-            sync_static_metadata
-            .next(create_or_refresh_manifest)
+            sync_static_metadata.next(create_or_refresh_manifest)
             .next(dispatch_manifest_tasks)
             .next(manifest_dispatch_decision)
         )
@@ -1254,6 +1344,7 @@ class ApiStack(Stack):
             lambda_function=lambda_function,
             payload=sfn.TaskInput.from_object(payload),
             result_path=result_path,
+            result_selector={"Payload.$": "$.Payload"},
         )
         self._add_workflow_retry(step)
         return step
