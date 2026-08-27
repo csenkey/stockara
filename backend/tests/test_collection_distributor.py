@@ -204,6 +204,49 @@ def test_dispatch_ready_tasks_round_robins_task_types(mock_boto_client, monkeypa
     assert invoked_functions == ["price-fn", "news-fn", "earnings-fn", "dividend-fn"]
 
 
+@patch("src.collectors.collection_distributor.boto3.client")
+def test_dispatch_persists_terminal_failure_when_worker_is_not_configured(
+    mock_boto_client, monkeypatch
+):
+    mock_boto_client.return_value = MagicMock()
+    monkeypatch.setattr(collection_distributor, "PRICE_COLLECTOR_FUNCTION_NAME", "")
+    now = datetime(2026, 7, 31, 21, 5, tzinfo=timezone.utc)
+    manifest = build_manifest(
+        [{"ticker": "AAPL"}],
+        manifest_date=now.date(),
+        generated_at=now,
+        task_types=[CollectionTaskType.PRICE],
+    )
+    failed = manifest.tasks[0].model_copy(deep=True)
+    failed.status = CollectionTaskStatus.FAILED
+    failed.failure_reason = "worker_not_configured:price"
+
+    with patch(
+        "src.collectors.collection_distributor.complete_persisted_manifest_task",
+        return_value=failed,
+    ) as complete_task:
+        dispatched = collection_distributor._dispatch_ready_tasks(
+            "stockara-artifacts",
+            manifest.s3_key,
+            manifest,
+            now,
+            max_tasks_per_run=1,
+        )
+
+    assert dispatched == []
+    assert manifest.tasks[0].status == CollectionTaskStatus.FAILED
+    assert manifest.tasks[0].failure_reason == "worker_not_configured:price"
+    complete_task.assert_called_once_with(
+        manifest.manifest_date,
+        manifest.tasks[0].task_id,
+        manifest.tasks[0].output_counts,
+        failed=True,
+        failure_reason="worker_not_configured:price",
+        now=now,
+    )
+    mock_boto_client.return_value.invoke.assert_not_called()
+
+
 def test_production_sized_manifest_uses_bounded_chunk_tasks():
     generated_at = datetime(2026, 7, 31, 21, 5, tzinfo=timezone.utc)
     stocks = [{"ticker": f"T{index:04d}"} for index in range(900)]

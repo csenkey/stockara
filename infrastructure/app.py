@@ -61,6 +61,21 @@ api_stack.add_dependency(frontend_stack)
 monitoring_stack = MonitoringStack(
     app,
     stack_id("StockMonitoringMonitoring", deployment_stage),
+    monitored_functions={
+        "workflow_reporter": api_stack.workflow_reporter_fn,
+        "stock_collector": api_stack.stock_collector_fn,
+        "stooq_zip_extractor": api_stack.stooq_zip_extractor_fn,
+        "stock_gap_scanner": api_stack.stock_gap_scanner_fn,
+        "watchlist_seed": api_stack.watchlist_seed_fn,
+        "news_collector": api_stack.news_collector_fn,
+        "evidence_collector": api_stack.evidence_collector_fn,
+        "earnings_collector": api_stack.earnings_collector_fn,
+        "dividend_collector": api_stack.dividend_collector_fn,
+        "collection_distributor": api_stack.collection_distributor_fn,
+        "publisher": api_stack.ai_analyzer_fn,
+        "health_api": api_stack.api_handler_fn,
+    },
+    daily_workflow=api_stack.daily_workflow,
     deployment_stage=deployment_stage,
     env=env,
 )

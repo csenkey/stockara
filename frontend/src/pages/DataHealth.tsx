@@ -304,8 +304,13 @@ async function loadJson<T>(
     const response = await fetch(url, { cache: "no-store" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     setState({ data: await response.json(), error: "", loading: false });
-  } catch {
-    setState({ data: null, error: `Missing static artifact: ${url}`, loading: false });
+  } catch (loadError) {
+    const detail = loadError instanceof Error ? loadError.message : "unknown error";
+    setState({
+      data: null,
+      error: `Static artifact fetch failed (${detail}): ${url}`,
+      loading: false,
+    });
   }
 }
 

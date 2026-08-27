@@ -3,6 +3,8 @@
 from datetime import date, timedelta
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from src.collectors import evidence_collector
 
 
@@ -30,6 +32,22 @@ def test_latest_material_filing_selects_recent_sec_8k():
         "primary_document": "nvda-20260617.htm",
         "primary_doc_description": "Results of Operations and Financial Condition",
     }
+
+
+def test_handler_raises_fatal_collection_errors():
+    with (
+        patch.object(
+            evidence_collector,
+            "collect_evidence",
+            side_effect=RuntimeError("database unavailable"),
+        ),
+        patch.object(evidence_collector.DatabasePool, "initialize"),
+        patch.object(evidence_collector.DatabasePool, "close") as close,
+    ):
+        with pytest.raises(RuntimeError, match="database unavailable"):
+            evidence_collector.handler({}, None)
+
+    close.assert_called_once()
 
 
 def test_recommendation_signal_from_counts_creates_bullish_analyst_action():

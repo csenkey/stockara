@@ -1366,10 +1366,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         logger.error("News collector Lambda failed", error=str(e))
         if manifest_task_run:
             _fail_manifest_task_run(manifest_task_run, str(e))
-        return {
-            "statusCode": 500,
-            "body": {"status": "error", "message": str(e)},
-        }
+        raise
     finally:
         DatabasePool.close()
 

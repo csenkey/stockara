@@ -25,6 +25,7 @@ from src.models.schemas import (
 )
 from src.services.collection_manifest import emit_manifest_metrics, recompute_summary
 from src.services.collection_manifest import (
+    complete_persisted_manifest_task,
     lease_persisted_manifest_task,
     refresh_manifest_task_state,
 )
@@ -321,9 +322,15 @@ def _dispatch_ready_tasks(
             break
         function_name = _worker_function_name(task.task_type)
         if not function_name:
-            task.status = CollectionTaskStatus.FAILED
-            task.failure_reason = f"worker_not_configured:{task.task_type.value}"
-            task.updated_at = now
+            failed_task = complete_persisted_manifest_task(
+                manifest.manifest_date,
+                task.task_id,
+                task.output_counts,
+                failed=True,
+                failure_reason=f"worker_not_configured:{task.task_type.value}",
+                now=now,
+            )
+            _replace_manifest_task(manifest, failed_task)
             continue
         leased_task = lease_persisted_manifest_task(
             manifest.manifest_date,

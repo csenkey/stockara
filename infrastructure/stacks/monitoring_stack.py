@@ -1,17 +1,31 @@
 """CloudWatch monitoring for Stockara Phase 1."""
 
+from collections.abc import Mapping
+
 from aws_cdk import (
-    ArnFormat,
     Duration,
     Stack,
     aws_cloudwatch as cloudwatch,
     aws_cloudwatch_actions as cw_actions,
+    aws_lambda as _lambda,
     aws_logs as logs,
     aws_sns as sns,
+    aws_stepfunctions as sfn,
 )
 from constructs import Construct
 
 from .naming import resource_name
+
+MANAGED_LOG_GROUPS = {
+    "workflow_reporter",
+    "stock_collector",
+    "news_collector",
+    "earnings_collector",
+    "dividend_collector",
+    "collection_distributor",
+    "publisher",
+    "health_api",
+}
 
 
 class MonitoringStack(Stack):
@@ -21,6 +35,8 @@ class MonitoringStack(Stack):
         self,
         scope: Construct,
         construct_id: str,
+        monitored_functions: Mapping[str, _lambda.IFunction],
+        daily_workflow: sfn.IStateMachine,
         deployment_stage: str = "prod",
         **kwargs,
     ) -> None:
@@ -34,54 +50,23 @@ class MonitoringStack(Stack):
         )
 
         function_names = {
-            "workflow_reporter": resource_name(
-                deployment_stage, "stockara-workflow-reporter", "workflow-reporter"
-            ),
-            "stock_collector": resource_name(
-                deployment_stage, "stockara-stock-collector", "stock-collector"
-            ),
-            "news_collector": resource_name(
-                deployment_stage, "stockara-news-collector", "news-collector"
-            ),
-            "earnings_collector": resource_name(
-                deployment_stage, "stockara-earnings-collector", "earnings-collector"
-            ),
-            "dividend_collector": resource_name(
-                deployment_stage, "stockara-dividend-collector", "dividend-collector"
-            ),
-            "collection_distributor": resource_name(
-                deployment_stage,
-                "stockara-collection-distributor",
-                "collection-distributor",
-            ),
-            "publisher": resource_name(
-                deployment_stage,
-                "stockara-phase1-analyzer-publisher",
-                "phase1-analyzer-publisher",
-            ),
-            "health_api": resource_name(
-                deployment_stage, "stockara-health-api", "health-api"
-            ),
+            logical_name: function.function_name
+            for logical_name, function in monitored_functions.items()
         }
-        daily_workflow_name = resource_name(
-            deployment_stage,
-            "stockara-daily-pipeline",
-            "daily-pipeline",
-        )
-        daily_workflow_arn = self.format_arn(
-            service="states",
-            resource="stateMachine",
-            resource_name=daily_workflow_name,
-            arn_format=ArnFormat.COLON_RESOURCE_NAME,
-        )
+        daily_workflow_arn = daily_workflow.state_machine_arn
 
         for logical_name, function_name in function_names.items():
-            logs.LogGroup(
-                self,
-                f"{logical_name}LogGroup",
-                log_group_name=f"/aws/lambda/{function_name}",
-                retention=logs.RetentionDays.ONE_MONTH,
-            )
+            # Preserve the existing eight CDK-owned log groups. The four newly
+            # monitored functions may already have service-created groups in
+            # production, so adopting them during an alarm-only fix would make
+            # CloudFormation fail with "resource already exists".
+            if logical_name in MANAGED_LOG_GROUPS:
+                logs.LogGroup(
+                    self,
+                    f"{logical_name}LogGroup",
+                    log_group_name=f"/aws/lambda/{function_name}",
+                    retention=logs.RetentionDays.ONE_MONTH,
+                )
             alarm = cloudwatch.Alarm(
                 self,
                 f"{logical_name}FailureAlarm",
@@ -508,14 +493,14 @@ class MonitoringStack(Stack):
                 "StockPriceGapsDetectedAlarm",
                 "stockara-stock-price-gaps-detected",
                 "stock-price-gaps-detected",
-                "stock_price_gaps_detected",
+                "stock_price_gap_ticker_percent",
                 "StockMonitoring",
-                "Sum",
+                "Maximum",
                 Duration.hours(26),
-                1,
+                2,
                 cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
                 cloudwatch.TreatMissingData.NOT_BREACHING,
-                "Recent OHLCV gaps were detected and need backfill follow-up",
+                "Recent OHLCV gaps affect at least 2% of the active watchlist",
             ),
             (
                 "InvalidAIReviewResponseAlarm",

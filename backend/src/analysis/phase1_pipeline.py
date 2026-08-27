@@ -3,6 +3,7 @@
 import csv
 import json
 import os
+import re
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -2804,8 +2805,20 @@ def _chat_completion_options(
     model: str, max_tokens: int, temperature: float
 ) -> dict[str, Any]:
     if model.startswith("gpt-5"):
-        return {"max_completion_tokens": max_tokens}
+        return {
+            "max_completion_tokens": max_tokens,
+            "temperature": temperature,
+        }
     return {"max_tokens": max_tokens, "temperature": temperature}
+
+
+def _keyword_hits(text: str, keywords: tuple[str, ...]) -> int:
+    """Count distinct keywords as complete words or phrases."""
+    return sum(
+        1
+        for keyword in keywords
+        if re.search(rf"(?<!\w){re.escape(keyword)}(?!\w)", text)
+    )
 
 
 def _price_volume_signals(ticker: str, run_date: date) -> list[dict[str, Any]]:
@@ -3076,8 +3089,8 @@ def _news_signals(ticker: str, run_date: date) -> list[dict[str, Any]]:
         return []
     score = min(30, len(articles) * 5)
     text = " ".join((article.get("title", "") + " " + article.get("summary", "")).lower() for article in articles)
-    negative_hits = sum(1 for keyword in NEGATIVE_KEYWORDS if keyword in text)
-    positive_hits = sum(1 for keyword in POSITIVE_KEYWORDS if keyword in text)
+    negative_hits = _keyword_hits(text, NEGATIVE_KEYWORDS)
+    positive_hits = _keyword_hits(text, POSITIVE_KEYWORDS)
     if negative_hits > positive_hits:
         direction = "negative"
         score = -max(score, 35 + negative_hits * 10)
@@ -3296,8 +3309,8 @@ def _earnings_prediction(
         f"{article.get('title', '')} {article.get('summary', '')}".lower()
         for article in recent_news
     )
-    positive_hits = sum(1 for keyword in POSITIVE_KEYWORDS if keyword in news_text)
-    negative_hits = sum(1 for keyword in NEGATIVE_KEYWORDS if keyword in news_text)
+    positive_hits = _keyword_hits(news_text, POSITIVE_KEYWORDS)
+    negative_hits = _keyword_hits(news_text, NEGATIVE_KEYWORDS)
     has_reaction_history = len(moves) >= 3
     has_surprise_history = len(surprises) >= 3
     has_news_catalyst = positive_hits > 0 or negative_hits > 0

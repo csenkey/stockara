@@ -297,7 +297,13 @@ class DynamoStore:
                             record_collected_at,
                         )
                     )
-        except Exception:
+        except Exception as exc:
+            logger.exception(
+                "stock_data_backfill_batch_failed",
+                ticker=ticker,
+                attempted_records=len(new_records),
+                error=str(exc),
+            )
             return {
                 "inserted_records": 0,
                 "duplicate_records": duplicate_records,

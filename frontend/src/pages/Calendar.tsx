@@ -26,8 +26,13 @@ interface DividendEvent {
 }
 
 interface CalendarPayload {
+  artifact_type?: string;
   publication_date: string;
   generated_at: string;
+  publication_status?: string;
+  suppression_reason?: string;
+  candidate_count?: number;
+  analyzed_count?: number;
   upcoming_earnings?: EarningsEvent[];
   upcoming_dividends?: DividendEvent[];
   data_warnings?: string[];
@@ -41,22 +46,66 @@ type CalendarTab = "earnings" | "dividends";
 
 const TOP_PICKS_URL =
   import.meta.env.VITE_TOP_PICKS_URL || "/top-picks/latest.json";
+const TRANSIENT_GATE_REASONS = new Set([
+  "collection_manifest_missing",
+  "analysis_not_before",
+  "coverage_gates_failed",
+]);
+
+function historyUrlFor(publicationDate: string) {
+  return TOP_PICKS_URL.replace(
+    "/top-picks/latest.json",
+    `/top-picks/history/${publicationDate}.json`,
+  );
+}
+
+function previousPublicationDate(publicationDate: string) {
+  const date = new Date(`${publicationDate}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() - 1);
+  return date.toISOString().slice(0, 10);
+}
+
+function isTransientGatePayload(payload: CalendarPayload) {
+  if (payload.artifact_type === "collection_gate_status") return true;
+  if (payload.publication_status === "waiting") return true;
+  return (
+    payload.publication_status === "suppressed" &&
+    TRANSIENT_GATE_REASONS.has(payload.suppression_reason ?? "") &&
+    (payload.candidate_count ?? 0) === 0 &&
+    (payload.analyzed_count ?? 0) === 0
+  );
+}
 
 export default function Calendar({ onNavigate }: CalendarProps) {
   const [payload, setPayload] = useState<CalendarPayload | null>(null);
   const [activeTab, setActiveTab] = useState<CalendarTab>("earnings");
   const [error, setError] = useState("");
+  const [fallbackNotice, setFallbackNotice] = useState("");
   const [loading, setLoading] = useState(true);
 
   async function loadCalendar() {
     setLoading(true);
     setError("");
+    setFallbackNotice("");
     try {
       const response = await fetch(TOP_PICKS_URL, { cache: "no-store" });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      setPayload(await response.json());
-    } catch {
-      setError("Published calendar data is not available yet.");
+      const latest = (await response.json()) as CalendarPayload;
+      if (isTransientGatePayload(latest) && latest.publication_date) {
+        const previousDate = previousPublicationDate(latest.publication_date);
+        const previous = await fetch(historyUrlFor(previousDate), { cache: "no-store" });
+        if (previous.ok) {
+          setPayload((await previous.json()) as CalendarPayload);
+          setFallbackNotice(
+            `Today's publication is still pending; showing the completed ${previousDate} calendar.`,
+          );
+          return;
+        }
+      }
+      setPayload(latest);
+    } catch (loadError) {
+      const detail = loadError instanceof Error ? loadError.message : "unknown error";
+      setError(`Calendar fetch failed (${detail}). Check ${TOP_PICKS_URL}.`);
     } finally {
       setLoading(false);
     }
@@ -135,6 +184,12 @@ export default function Calendar({ onNavigate }: CalendarProps) {
         {!loading && error && (
           <div className="border border-amber-700 bg-amber-950 p-5 text-sm text-amber-100">
             {error}
+          </div>
+        )}
+
+        {!loading && fallbackNotice && (
+          <div className="border border-amber-700 bg-amber-950 p-5 text-sm text-amber-100">
+            {fallbackNotice}
           </div>
         )}
 

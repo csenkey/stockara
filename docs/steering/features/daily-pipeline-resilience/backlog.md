@@ -1,5 +1,21 @@
 # Daily Pipeline Resilience Backlog
 
+## 2026-08-27 Architecture Review Hardening
+
+- [x] Verify current OpenAI model identifiers against the official catalog;
+  retain valid Luna/Terra workload roles and the existing fallback alarm.
+- [x] Re-raise fatal news/evidence exceptions and add handler regression tests.
+- [x] Persist missing-worker manifest failures and count them as exhausted.
+- [x] Guard minimal workflow reports and log silent backfill failures.
+- [x] Bind monitoring to deployed CDK constructs and cover all twelve Lambdas.
+- [x] Replace single-gap paging with an affected-universe percentage threshold.
+- [x] Restore GPT-5 temperature forwarding, word-boundary sentiment matching,
+  actionable frontend fetch errors, and calendar fallback behavior.
+- [x] Fail deployment smoke testing on hard operational failures.
+- [ ] Deploy through `main`, monitor CI/CD to green, and smoke test production.
+- [ ] Follow a fresh production execution through terminal status and current
+  publication; do not close the ongoing recovery incident on deployment alone.
+
 ## 2026-08-26 Recovery Release
 
 - [x] Reproduce payload growth using the synthesized parallel-state data paths;

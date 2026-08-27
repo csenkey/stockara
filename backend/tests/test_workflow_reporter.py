@@ -250,3 +250,25 @@ def test_running_reconciliation_still_emits_overdue_metric(monkeypatch, states):
         result = reporter.handler({"mode": "reconcile"}, None)
     assert result["body"]["status"] == "running"
     assert cloudwatch.put_metric_data.call_args.kwargs["MetricData"][0]["Value"] == 1
+
+
+def test_publish_report_mode_accepts_minimal_caller_payload(monkeypatch):
+    monkeypatch.setenv("STOCKARA_ARTIFACT_BUCKET", "bucket")
+    monkeypatch.setenv("STOCKARA_DAILY_WORKFLOW_ARN", MACHINE)
+    s3 = MemoryS3()
+    report = {
+        "run_date": "2026-08-25",
+        "generated_at": NOW.isoformat(),
+        "status": "degraded",
+    }
+
+    with patch.object(
+        reporter.boto3,
+        "client",
+        side_effect=lambda name: s3 if name == "s3" else Mock(),
+    ):
+        result = reporter.handler({"mode": "publish_report", "report": report}, None)
+
+    assert result["statusCode"] == 200
+    assert result["body"]["workflow_status"] == "degraded"
+    assert reporter._read(s3, "bucket", "workflow/latest.json") == report

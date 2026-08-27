@@ -233,7 +233,10 @@ def emit_manifest_metrics(manifest: CollectionManifest) -> None:
         1
         for task in manifest.tasks
         if task.status == CollectionTaskStatus.FAILED
-        and task.attempts >= task.max_attempts
+        and (
+            task.attempts >= task.max_attempts
+            or str(task.failure_reason or "").startswith("worker_not_configured:")
+        )
     )
     provider_failure_tasks = sum(
         1
@@ -375,6 +378,8 @@ def _completion_status(
 ) -> CollectionTaskStatus:
     if not failed:
         return CollectionTaskStatus.SUCCEEDED
+    if str(failure_reason or "").startswith("worker_not_configured:"):
+        return CollectionTaskStatus.FAILED
     if task.attempts >= task.max_attempts:
         return CollectionTaskStatus.FAILED
     if retry_delay_for_failure(task, failure_reason) is None:

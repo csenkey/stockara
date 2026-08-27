@@ -2,7 +2,7 @@
 
 from datetime import date, datetime, timezone
 from io import BytesIO
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from src.collectors.collection_distributor import build_manifest
 from src.collectors.stock_gap_scanner import (
@@ -121,4 +121,9 @@ def test_handler_appends_gap_tasks_to_existing_manifest(
     gap_payload = gap_call["Body"].decode("utf-8")
     assert '"gap_ticker_count": 1' in gap_payload
     assert "price-backfill-AAPL-2026-06-16-2026-06-16" in gap_payload
-    mock_metric.assert_called_once_with("stock_price_gaps_detected", 1)
+    assert mock_metric.call_args_list == [
+        call("stock_price_gaps_detected", 1),
+        call(
+            "stock_price_gap_ticker_percent", 100.0, unit="Percent"
+        ),
+    ]

@@ -1235,13 +1235,12 @@ class TestHandler:
     @patch("backend.src.collectors.news_collector.logger")
     @patch("backend.src.collectors.news_collector.DatabasePool")
     @patch("backend.src.collectors.news_collector.collect_news")
-    def test_handler_returns_500_on_error(self, mock_collect, mock_db_pool, mock_logger):
-        """Test handler returns 500 when collect_news raises."""
+    def test_handler_raises_on_error(self, mock_collect, mock_db_pool, mock_logger):
+        """Fatal failures must be visible to Lambda and Step Functions."""
         mock_collect.side_effect = Exception("Database connection failed")
 
-        result = handler({}, None)
-        assert result["statusCode"] == 500
-        assert "error" in result["body"]["status"]
+        with pytest.raises(Exception, match="Database connection failed"):
+            handler({}, None)
         mock_db_pool.close.assert_called_once()
 
     @patch("backend.src.collectors.news_collector.complete_persisted_manifest_task")

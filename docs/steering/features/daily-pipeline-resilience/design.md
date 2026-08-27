@@ -2,6 +2,26 @@
 
 ## Overview
 
+### 2026-08-27 Architecture Review Hardening
+
+The optional collector contract now distinguishes typed partial results from
+unexpected exceptions. Partial results return normally; unexpected news or
+evidence failures are logged and re-raised so the existing Step Functions catch
+states can publish accurate degraded-step context. Missing manifest worker
+configuration is persisted through the optimistic task mutation path as a
+terminal `worker_not_configured:*` failure.
+
+Monitoring receives the actual `IFunction` and `IStateMachine` constructs from
+`ApiStack`, creating a synthesis-time dependency on deployed resource identity
+and covering all twelve Lambdas. Gap paging uses affected active-ticker percent;
+the raw gap count remains available on the dashboard. Deployment smoke checks
+fail on hard database or collection failures while retaining warnings for
+recoverable degradation.
+
+The reviewed GPT-5.6 Luna/Terra IDs remain unchanged because the current official
+OpenAI catalog confirms both IDs and Chat Completions support. Existing fallback
+analysis metrics, alarms, and dashboard widgets remain the operational guard.
+
 ### 2026-08-26 Payload And Reporting Correction
 
 `CollectCalendarsAndEvidence` starts each branch with an empty context because

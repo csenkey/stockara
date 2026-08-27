@@ -97,7 +97,19 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
     finally:
         DatabasePool.close()
 
+    gap_ticker_count = len(
+        {
+            str(task.tickers[0] if task.tickers else task.ticker_range_start)
+            for task in tasks
+            if task.tickers or task.ticker_range_start
+        }
+    )
     _emit_metric("stock_price_gaps_detected", len(tasks))
+    _emit_metric(
+        "stock_price_gap_ticker_percent",
+        gap_ticker_count / max(len(stocks), 1) * 100,
+        unit="Percent",
+    )
     logger.info(
         "stock_gap_scan_completed",
         manifest_key=key,
@@ -326,11 +338,11 @@ def _task_id(ticker: str, start: date, end: date) -> str:
     return f"price-backfill-{ticker}-{start.isoformat()}-{end.isoformat()}"
 
 
-def _emit_metric(name: str, value: float) -> None:
+def _emit_metric(name: str, value: float, unit: str = "Count") -> None:
     try:
         boto3.client("cloudwatch").put_metric_data(
             Namespace="StockMonitoring",
-            MetricData=[{"MetricName": name, "Value": value, "Unit": "Count"}],
+            MetricData=[{"MetricName": name, "Value": value, "Unit": unit}],
         )
     except Exception:
         return

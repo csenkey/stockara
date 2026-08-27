@@ -4,13 +4,55 @@ import json
 
 import aws_cdk as cdk
 import aws_cdk.assertions as assertions
+from aws_cdk import aws_lambda as lambda_
+from aws_cdk import aws_stepfunctions as sfn
 
 from stacks.monitoring_stack import MonitoringStack
 
 
+FUNCTION_NAMES = {
+    "workflow_reporter": "stockara-codex-test-workflow-reporter",
+    "stock_collector": "stockara-codex-test-stock-collector",
+    "stooq_zip_extractor": "stockara-codex-test-stooq-zip-extractor",
+    "stock_gap_scanner": "stockara-codex-test-stock-gap-scanner",
+    "watchlist_seed": "stockara-codex-test-watchlist-seed",
+    "news_collector": "stockara-codex-test-news-collector",
+    "evidence_collector": "stockara-codex-test-evidence-collector",
+    "earnings_collector": "stockara-codex-test-earnings-collector",
+    "dividend_collector": "stockara-codex-test-dividend-collector",
+    "collection_distributor": "stockara-codex-test-collection-distributor",
+    "publisher": "stockara-codex-test-phase1-analyzer-publisher",
+    "health_api": "stockara-codex-test-health-api",
+}
+
+
+def _monitoring_stack(app: cdk.App, construct_id: str) -> MonitoringStack:
+    dependencies = cdk.Stack(app, f"{construct_id}Dependencies")
+    functions = {
+        logical_name: lambda_.Function.from_function_name(
+            dependencies,
+            f"{construct_id}{logical_name}",
+            function_name,
+        )
+        for logical_name, function_name in FUNCTION_NAMES.items()
+    }
+    workflow = sfn.StateMachine.from_state_machine_name(
+        dependencies,
+        f"{construct_id}DailyWorkflow",
+        "stockara-codex-test-daily-pipeline",
+    )
+    return MonitoringStack(
+        app,
+        construct_id,
+        monitored_functions=functions,
+        daily_workflow=workflow,
+        deployment_stage="codex-test",
+    )
+
+
 def test_collector_completeness_alarms_are_created():
     app = cdk.App()
-    stack = MonitoringStack(app, "TestMonitoring", deployment_stage="codex-test")
+    stack = _monitoring_stack(app, "TestMonitoring")
     template = assertions.Template.from_stack(stack)
 
     for metric_name in [
@@ -30,9 +72,25 @@ def test_collector_completeness_alarms_are_created():
         )
 
 
+def test_every_runtime_function_has_a_lambda_error_alarm():
+    app = cdk.App()
+    stack = _monitoring_stack(app, "TestFunctionMonitoring")
+    template = assertions.Template.from_stack(stack)
+
+    lambda_error_alarms = template.find_resources(
+        "AWS::CloudWatch::Alarm",
+        {
+            "Properties": assertions.Match.object_like(
+                {"Namespace": "AWS/Lambda", "MetricName": "Errors"}
+            )
+        },
+    )
+    assert len(lambda_error_alarms) == len(FUNCTION_NAMES) == 12
+
+
 def test_collection_manifest_health_alarms_are_created():
     app = cdk.App()
-    stack = MonitoringStack(app, "TestManifestMonitoring", deployment_stage="codex-test")
+    stack = _monitoring_stack(app, "TestManifestMonitoring")
     template = assertions.Template.from_stack(stack)
 
     for metric_name in [
@@ -54,7 +112,7 @@ def test_collection_manifest_health_alarms_are_created():
 
 def test_missing_collector_metric_alarms_breach_on_missing_data():
     app = cdk.App()
-    stack = MonitoringStack(app, "TestMissingMetricMonitoring", deployment_stage="codex-test")
+    stack = _monitoring_stack(app, "TestMissingMetricMonitoring")
     template = assertions.Template.from_stack(stack)
 
     for metric_name in [
@@ -77,7 +135,7 @@ def test_missing_collector_metric_alarms_breach_on_missing_data():
 
 def test_publication_artifact_alarms_are_created():
     app = cdk.App()
-    stack = MonitoringStack(app, "TestPublicationMonitoring", deployment_stage="codex-test")
+    stack = _monitoring_stack(app, "TestPublicationMonitoring")
     template = assertions.Template.from_stack(stack)
 
     template.has_resource_properties(
@@ -107,7 +165,7 @@ def test_publication_artifact_alarms_are_created():
 
 def test_daily_workflow_alarms_are_created():
     app = cdk.App()
-    stack = MonitoringStack(app, "TestDailyWorkflowMonitoring", deployment_stage="codex-test")
+    stack = _monitoring_stack(app, "TestDailyWorkflowMonitoring")
     template = assertions.Template.from_stack(stack)
 
     state_machine_arn = {
@@ -167,9 +225,7 @@ def test_daily_workflow_alarms_are_created():
 
 def test_product_quality_alarms_are_created():
     app = cdk.App()
-    stack = MonitoringStack(
-        app, "TestProductQualityMonitoring", deployment_stage="codex-test"
-    )
+    stack = _monitoring_stack(app, "TestProductQualityMonitoring")
     template = assertions.Template.from_stack(stack)
 
     expected_alarms = [
@@ -223,10 +279,10 @@ def test_product_quality_alarms_are_created():
         ),
         (
             "StockMonitoring",
-            "stock_price_gaps_detected",
-            "Sum",
+            "stock_price_gap_ticker_percent",
+            "Maximum",
             "GreaterThanOrEqualToThreshold",
-            1,
+            2,
             "notBreaching",
         ),
         (
@@ -294,9 +350,7 @@ def test_product_quality_alarms_are_created():
 
 def test_product_quality_dashboard_widgets_are_created():
     app = cdk.App()
-    stack = MonitoringStack(
-        app, "TestProductQualityDashboard", deployment_stage="codex-test"
-    )
+    stack = _monitoring_stack(app, "TestProductQualityDashboard")
     template = assertions.Template.from_stack(stack)
     resources = template.to_json()["Resources"]
     dashboard = next(

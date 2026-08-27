@@ -57,6 +57,30 @@ def test_manifest_task_lifecycle_recomputes_summary():
     assert manifest.summary.coverage_ratio > 0
 
 
+def test_worker_not_configured_is_terminal_without_consuming_retry_budget():
+    generated_at = datetime(2026, 8, 27, 21, 5, tzinfo=timezone.utc)
+    manifest = build_manifest(
+        [{"ticker": "AAPL"}],
+        manifest_date=generated_at.date(),
+        generated_at=generated_at,
+        task_types=[CollectionTaskType.PRICE],
+    )
+    task = manifest.tasks[0]
+
+    complete_task(
+        manifest,
+        task.task_id,
+        CollectionOutputCounts(),
+        failed=True,
+        failure_reason="worker_not_configured:price",
+        now=generated_at,
+    )
+
+    assert task.status == CollectionTaskStatus.FAILED
+    assert task.next_retry_at is None
+    assert task.attempts == 0
+
+
 def test_failed_task_moves_to_retry_wait_before_max_attempts():
     generated_at = datetime(2026, 6, 20, 7, 30, tzinfo=timezone.utc)
     manifest = build_manifest(

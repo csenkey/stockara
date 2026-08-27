@@ -178,22 +178,28 @@ jobs:
 
           payload = json.load(open("health-response.json"))
           warnings = []
+          failures = []
+
+          if str(payload.get("components", {}).get("database", "")).lower() == "error":
+              failures.append("health API cannot read the database")
 
           stock = payload.get("last_stock_collection_summary")
           if stock:
               status = str(stock.get("status", "")).lower()
-              if status in {"failed", "error", "degraded"}:
+              if status in {"failed", "error"}:
+                  failures.append(f"latest stock collection status is {status}")
+              elif status == "degraded":
                   warnings.append(f"latest stock collection status is {status}")
               if stock.get("completeness_threshold_met") is False:
                   warnings.append("latest stock collection is below completeness threshold")
               if int(stock.get("selected_ticker_count", 0) or 0) > 0 and int(stock.get("successful_ticker_count", 0) or 0) == 0:
-                  warnings.append("latest stock collection has zero successful tickers")
+                  failures.append("latest stock collection has zero successful tickers")
 
           news = payload.get("last_news_collection_summary")
           if news:
               status = str(news.get("status", "")).lower()
               if status in {"failed", "error"}:
-                  warnings.append(f"latest news collection status is {status}")
+                  failures.append(f"latest news collection status is {status}")
               if float(news.get("completeness_ratio", 0) or 0) < 1.0:
                   failed_sources = ", ".join(news.get("failed_sources") or [])
                   if failed_sources:
@@ -207,6 +213,10 @@ jobs:
 
           for warning in warnings:
               print(f"::warning::{warning}")
+          for failure in failures:
+              print(f"::error::{failure}")
+          if failures:
+              raise SystemExit("Deployed health check reported hard operational failures")
           PY
         working-directory: infrastructure
 

@@ -1137,7 +1137,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return {"statusCode": 200, "body": result}
     except Exception as exc:
         logger.error("Evidence collector Lambda failed", error=str(exc))
-        return {"statusCode": 500, "body": {"status": "error", "message": str(exc)}}
+        raise
     finally:
         DatabasePool.close()
 

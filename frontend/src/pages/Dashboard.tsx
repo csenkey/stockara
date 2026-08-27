@@ -793,14 +793,15 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
       }
       setPayload(latestPayload);
       setStatusPayload(latestStatus);
-    } catch {
+    } catch (loadError) {
       if (import.meta.env.DEV) {
         setPayload(DEV_DEMO_PAYLOAD);
         setStatusPayload(null);
         setWorkflowStatus(null);
         return;
       }
-      setError("Daily top picks have not been published yet.");
+      const detail = loadError instanceof Error ? loadError.message : "unknown error";
+      setError(`Top-picks fetch failed (${detail}). Check ${TOP_PICKS_URL}.`);
     } finally {
       setLoading(false);
     }

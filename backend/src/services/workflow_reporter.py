@@ -270,15 +270,15 @@ def handler(event, context):
         return {"statusCode": 200, "body": {"status": "running"}}
     logger.info(
         "workflow_report_processed",
-        run_date=payload["run_date"],
-        execution_status=payload["execution_status"],
+        run_date=payload.get("run_date", "unknown"),
+        execution_status=payload.get("execution_status", "unknown"),
         changed=changed,
     )
     return {
         "statusCode": 200,
         "body": {
             "status": "published",
-            "workflow_status": payload["status"],
+            "workflow_status": payload.get("status", "unknown"),
             "artifact": "workflow/latest.json",
         },
     }

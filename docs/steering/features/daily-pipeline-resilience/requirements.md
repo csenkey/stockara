@@ -60,6 +60,23 @@ stale. The following requirements extend, rather than replace, the earlier work.
 - Diagnostic workflows show terminal errors and the tail of execution history,
   and inspect public status even when the execution failed.
 
+### 2026-08-27 Architecture Review Hardening
+
+- Fatal collector exceptions must fail the Lambda invocation so Step Functions
+  catches can record optional degradation; a response body containing an HTTP
+  500 status is not a valid fatal-failure contract.
+- A manifest task whose worker is not configured must be persisted as terminally
+  failed and included in retry-exhaustion metrics.
+- Workflow report logging and responses must tolerate caller-supplied reports
+  that omit execution-observer-only fields.
+- Lambda and state-machine alarms must consume the deployed CDK constructs rather
+  than independently reconstructing their physical names. Every production
+  Lambda must have an error alarm.
+- Price-gap paging must use the percentage of the active universe affected so a
+  single exceptional ticker does not create a standing incident.
+- Fatal health outcomes must fail deployment smoke testing; degraded historical
+  data may remain a warning while a corrective deployment is in progress.
+
 ### Requirement 1: Bounded News Collection
 
 **User story:** As an operator, I want news collection to finish within its

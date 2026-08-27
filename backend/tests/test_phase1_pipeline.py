@@ -15,6 +15,7 @@ from src.analysis.phase1_pipeline import (
     _chat_completion_options,
     _dividend_signals,
     _event_signals,
+    _keyword_hits,
     _news_signals,
     _price_volume_signals,
     _sector_relative_signals,
@@ -1798,10 +1799,15 @@ def test_analyze_shortlist_falls_back_when_openai_client_init_fails():
 def test_chat_completion_options_use_gpt5_token_parameter():
     assert _chat_completion_options(
         "gpt-5.6-luna", max_tokens=500, temperature=0.25
-    ) == {"max_completion_tokens": 500}
+    ) == {"max_completion_tokens": 500, "temperature": 0.25}
     assert _chat_completion_options(
         "gpt-4o-mini", max_tokens=500, temperature=0.25
     ) == {"max_tokens": 500, "temperature": 0.25}
+
+
+def test_keyword_hits_require_complete_words_or_phrases():
+    assert _keyword_hits("the sec opened an investigation", ("sec", "beat")) == 1
+    assert _keyword_hits("cybersecurity protected a steady heartbeat", ("sec", "beat")) == 0
 
 
 def test_analyze_shortlist_reviews_actionable_ai_recommendations():
