@@ -206,7 +206,7 @@ def reconcile(states, machine_arn, now):
     return payload
 
 
-def handler(event, context):
+def _handle_event(event, context):
     now = datetime.now(timezone.utc)
     bucket = os.environ["STOCKARA_ARTIFACT_BUCKET"]
     machine_arn = os.environ["STOCKARA_DAILY_WORKFLOW_ARN"]
@@ -282,3 +282,14 @@ def handler(event, context):
             "artifact": "workflow/latest.json",
         },
     }
+
+
+def handler(event, context):
+    """Process direct test invocations or FIFO SQS records one at a time."""
+    records = (event or {}).get("Records")
+    if records is None:
+        return _handle_event(event or {}, context)
+    results = []
+    for record in records:
+        results.append(_handle_event(json.loads(record["body"]), context))
+    return {"batchItemFailures": [], "results": results}

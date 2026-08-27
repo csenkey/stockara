@@ -18,8 +18,10 @@ from aws_cdk import (
     aws_events_targets as targets,
     aws_iam as iam,
     aws_lambda as _lambda,
+    aws_lambda_event_sources as lambda_event_sources,
     aws_s3 as s3,
     aws_secretsmanager as secretsmanager,
+    aws_sqs as sqs,
     aws_stepfunctions as sfn,
     aws_stepfunctions_tasks as sfn_tasks,
 )
@@ -511,6 +513,25 @@ class ApiStack(Stack):
             resource_name=workflow_name,
             arn_format=ArnFormat.COLON_RESOURCE_NAME,
         )
+        self.workflow_reporter_dlq = sqs.Queue(
+            self,
+            "WorkflowReporterDeadLetterQueue",
+            queue_name=f"{resource_name(deployment_stage, 'stockara-workflow-reporter-dlq', 'workflow-reporter-dlq')}.fifo",
+            fifo=True,
+            retention_period=Duration.days(14),
+        )
+        self.workflow_reporter_queue = sqs.Queue(
+            self,
+            "WorkflowReporterQueue",
+            queue_name=f"{resource_name(deployment_stage, 'stockara-workflow-reporter', 'workflow-reporter')}.fifo",
+            fifo=True,
+            content_based_deduplication=True,
+            visibility_timeout=Duration.minutes(3),
+            dead_letter_queue=sqs.DeadLetterQueue(
+                queue=self.workflow_reporter_dlq,
+                max_receive_count=5,
+            ),
+        )
         self.workflow_reporter_fn = _lambda.Function(
             self,
             "WorkflowReporterFunction",
@@ -522,13 +543,17 @@ class ApiStack(Stack):
             code=backend_code,
             memory_size=256,
             timeout=Duration.minutes(2),
-            reserved_concurrent_executions=1,
-            dead_letter_queue_enabled=True,
             environment={
                 "STOCKARA_ARTIFACT_BUCKET": artifact_bucket.bucket_name,
                 "STOCKARA_DAILY_WORKFLOW_ARN": workflow_arn,
             },
-            description="Serialized daily status publication and independent execution reconciliation",
+            description="FIFO-serialized daily status publication and independent execution reconciliation",
+        )
+        self.workflow_reporter_fn.add_event_source(
+            lambda_event_sources.SqsEventSource(
+                self.workflow_reporter_queue,
+                batch_size=1,
+            )
         )
         artifact_bucket.grant_read(self.workflow_reporter_fn, "workflow/*")
         artifact_bucket.grant_put(self.workflow_reporter_fn, "workflow/*")
@@ -559,10 +584,10 @@ class ApiStack(Stack):
             )
         )
         self.ai_analyzer_fn.add_environment(
-            "STOCKARA_WORKFLOW_REPORTER_FUNCTION",
-            self.workflow_reporter_fn.function_name,
+            "STOCKARA_WORKFLOW_REPORTER_QUEUE_URL",
+            self.workflow_reporter_queue.queue_url,
         )
-        self.workflow_reporter_fn.grant_invoke(self.ai_analyzer_fn)
+        self.workflow_reporter_queue.grant_send_messages(self.ai_analyzer_fn)
         self.daily_workflow = self._create_daily_workflow(deployment_stage)
         self.daily_workflow_schedule = self._create_daily_workflow_schedule(
             deployment_stage
@@ -578,16 +603,22 @@ class ApiStack(Stack):
                     "status": ["SUCCEEDED", "FAILED", "TIMED_OUT", "ABORTED"],
                 },
             ),
-            targets=[targets.LambdaFunction(self.workflow_reporter_fn)],
+            targets=[
+                targets.SqsQueue(
+                    self.workflow_reporter_queue,
+                    message_group_id="workflow-reports",
+                )
+            ],
         )
         events.Rule(
             self,
             "DailyWorkflowReconciliation",
             schedule=events.Schedule.cron(minute="20", hour="0,1,6"),
             targets=[
-                targets.LambdaFunction(
-                    self.workflow_reporter_fn,
-                    event=events.RuleTargetInput.from_object({"mode": "reconcile"}),
+                targets.SqsQueue(
+                    self.workflow_reporter_queue,
+                    message=events.RuleTargetInput.from_object({"mode": "reconcile"}),
+                    message_group_id="workflow-reports",
                 )
             ],
             description="Reconcile terminal status after the daily deadline and retry missed status events",
@@ -1019,11 +1050,11 @@ class ApiStack(Stack):
             },
             "$.analysis",
         )
-        publish_workflow_status = sfn_tasks.LambdaInvoke(
+        publish_workflow_status = sfn_tasks.SqsSendMessage(
             self,
             "PublishWorkflowStatus",
-            lambda_function=self.workflow_reporter_fn,
-            payload=sfn.TaskInput.from_object(
+            queue=self.workflow_reporter_queue,
+            message_body=sfn.TaskInput.from_object(
                 {
                     "mode": "publish_workflow_status",
                     "workflow": "daily_step_functions",
@@ -1033,6 +1064,7 @@ class ApiStack(Stack):
                     "execution_started_at": sfn.JsonPath.execution_start_time,
                 }
             ),
+            message_group_id="workflow-reports",
             result_path="$.workflow_status",
         )
         self._add_workflow_retry(publish_workflow_status)

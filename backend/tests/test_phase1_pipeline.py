@@ -1,5 +1,6 @@
 """Tests for Phase 1 scoring and publication ranking."""
 
+import json
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -685,6 +686,28 @@ def test_publish_workflow_status_report_writes_latest_and_history_artifacts():
         "workflow/latest.json",
         "workflow/history/2026-07-29.json",
     ]
+
+
+def test_publish_workflow_status_report_queues_fifo_single_writer(monkeypatch):
+    payload = {
+        "run_date": "2026-08-27",
+        "status": "degraded",
+    }
+    monkeypatch.setenv(
+        "STOCKARA_WORKFLOW_REPORTER_QUEUE_URL",
+        "https://sqs.us-east-1.amazonaws.com/123/reporter.fifo",
+    )
+
+    with patch("src.analysis.phase1_pipeline.boto3.client") as boto_client:
+        publish_workflow_status_report(payload)
+
+    boto_client.assert_called_once_with("sqs")
+    send = boto_client.return_value.send_message.call_args.kwargs
+    assert send["MessageGroupId"] == "workflow-reports"
+    assert json.loads(send["MessageBody"]) == {
+        "mode": "publish_report",
+        "report": payload,
+    }
 
 
 def test_run_publish_workflow_status_emits_status_metrics():

@@ -12,6 +12,8 @@
 - [x] Restore GPT-5 temperature forwarding, word-boundary sentiment matching,
   actionable frontend fetch errors, and calendar fallback behavior.
 - [x] Fail deployment smoke testing on hard operational failures.
+- [x] Replace the undeployable reserved-concurrency reporter with FIFO SQS
+  serialization after production rejected the reservation at the account quota.
 - [ ] Deploy through `main`, monitor CI/CD to green, and smoke test production.
 - [ ] Follow a fresh production execution through terminal status and current
   publication; do not close the ongoing recovery incident on deployment alone.

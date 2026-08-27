@@ -36,8 +36,9 @@ An independent `stockara-workflow-reporter` Lambda handles normal status writes,
 terminal Step Functions events, and reconciliation at 00:20, 01:20, and 06:20 UTC.
 It has no database, provider, or AI-secret permissions. It can read only the
 configured state machine's execution history and write only `workflow/*` artifacts.
-Its reserved concurrency is one; the analyzer's legacy status mode forwards to
-it so all production status writes share the same serialized ordering.
+All producers enqueue reports to one FIFO SQS message group, and the reporter
+consumes one message per invocation. This serializes production status writes
+without consuming scarce account-level reserved Lambda concurrency.
 
 Normal workflow reporting and external reporting use the same compact contract.
 External reporting reads `DescribeExecution` and a bounded reverse history tail

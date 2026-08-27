@@ -2047,14 +2047,15 @@ def publish_data_readiness_report(payload: dict[str, Any]) -> None:
 
 def publish_workflow_status_report(payload: dict[str, Any]) -> None:
     """Publish latest and dated Step Functions workflow status artifacts."""
-    reporter = os.environ.get("STOCKARA_WORKFLOW_REPORTER_FUNCTION")
-    if reporter:
-        response = boto3.client("lambda").invoke(
-            FunctionName=reporter,
-            Payload=json.dumps({"mode": "publish_report", "report": payload}, default=str).encode(),
+    reporter_queue_url = os.environ.get("STOCKARA_WORKFLOW_REPORTER_QUEUE_URL")
+    if reporter_queue_url:
+        boto3.client("sqs").send_message(
+            QueueUrl=reporter_queue_url,
+            MessageBody=json.dumps(
+                {"mode": "publish_report", "report": payload}, default=str
+            ),
+            MessageGroupId="workflow-reports",
         )
-        if response.get("FunctionError"):
-            raise RuntimeError("Workflow status reporter failed")
         return
     if not ARTIFACT_BUCKET:
         return

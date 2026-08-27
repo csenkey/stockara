@@ -272,3 +272,33 @@ def test_publish_report_mode_accepts_minimal_caller_payload(monkeypatch):
     assert result["statusCode"] == 200
     assert result["body"]["workflow_status"] == "degraded"
     assert reporter._read(s3, "bucket", "workflow/latest.json") == report
+
+
+def test_fifo_sqs_handler_processes_single_report(monkeypatch):
+    monkeypatch.setenv("STOCKARA_ARTIFACT_BUCKET", "bucket")
+    monkeypatch.setenv("STOCKARA_DAILY_WORKFLOW_ARN", MACHINE)
+    s3 = MemoryS3()
+    report = {
+        "run_date": "2026-08-27",
+        "generated_at": NOW.isoformat(),
+        "status": "success",
+    }
+    event = {
+        "Records": [
+            {
+                "body": json.dumps(
+                    {"mode": "publish_report", "report": report}
+                )
+            }
+        ]
+    }
+
+    with patch.object(
+        reporter.boto3,
+        "client",
+        side_effect=lambda name: s3 if name == "s3" else Mock(),
+    ):
+        result = reporter.handler(event, None)
+
+    assert result["batchItemFailures"] == []
+    assert reporter._read(s3, "bucket", "workflow/latest.json") == report

@@ -431,9 +431,20 @@ def test_daily_pipeline_state_machine_is_created_for_daily_production_run():
         "AWS::Lambda::Function",
         {
             "Handler": "src.services.workflow_reporter.handler",
-            "ReservedConcurrentExecutions": 1,
             "Timeout": 120,
         },
+    )
+    template.has_resource_properties(
+        "AWS::SQS::Queue",
+        {
+            "FifoQueue": True,
+            "ContentBasedDeduplication": True,
+            "VisibilityTimeout": 180,
+        },
+    )
+    template.has_resource_properties(
+        "AWS::Lambda::EventSourceMapping",
+        {"BatchSize": 1},
     )
     template.has_resource_properties(
         "AWS::Events::Rule",
@@ -556,7 +567,6 @@ def test_daily_pipeline_state_machine_iam_is_scoped_to_workflow_lambdas():
         "DividendCollectorFunction8FB42B38",
         "EvidenceCollectorFunctionE44F8DC8",
         "Phase1AnalyzerPublisherFunction7EEB9A09",
-        "WorkflowReporterFunctionC7A7F0C7",
     }
     reporter_policy = next(
         resource["Properties"]["PolicyDocument"]
