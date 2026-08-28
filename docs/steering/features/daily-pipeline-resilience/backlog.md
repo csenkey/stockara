@@ -9,8 +9,9 @@
 - [x] Guard minimal workflow reports and log silent backfill failures.
 - [x] Bind monitoring to deployed CDK constructs and cover all twelve Lambdas.
 - [x] Replace single-gap paging with an affected-universe percentage threshold.
-- [x] Restore GPT-5 temperature forwarding, word-boundary sentiment matching,
-  actionable frontend fetch errors, and calendar fallback behavior.
+- [x] Omit unsupported non-default GPT-5 Chat Completions temperatures, use
+  word-boundary sentiment matching, expose actionable frontend fetch errors,
+  and add calendar fallback behavior.
 - [x] Fail deployment smoke testing on hard operational failures.
 - [x] Replace the undeployable reserved-concurrency reporter with FIFO SQS
   serialization after production rejected the reservation at the account quota.

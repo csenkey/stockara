@@ -2806,10 +2806,9 @@ def _chat_completion_options(
     model: str, max_tokens: int, temperature: float
 ) -> dict[str, Any]:
     if model.startswith("gpt-5"):
-        return {
-            "max_completion_tokens": max_tokens,
-            "temperature": temperature,
-        }
+        # Current GPT-5 chat-completions models reject non-default temperature
+        # values. Omitting the field uses the only supported default (1).
+        return {"max_completion_tokens": max_tokens}
     return {"max_tokens": max_tokens, "temperature": temperature}
 
 

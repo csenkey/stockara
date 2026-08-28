@@ -1822,7 +1822,7 @@ def test_analyze_shortlist_falls_back_when_openai_client_init_fails():
 def test_chat_completion_options_use_gpt5_token_parameter():
     assert _chat_completion_options(
         "gpt-5.6-luna", max_tokens=500, temperature=0.25
-    ) == {"max_completion_tokens": 500, "temperature": 0.25}
+    ) == {"max_completion_tokens": 500}
     assert _chat_completion_options(
         "gpt-4o-mini", max_tokens=500, temperature=0.25
     ) == {"max_tokens": 500, "temperature": 0.25}
