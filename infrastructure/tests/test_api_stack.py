@@ -315,6 +315,22 @@ def test_daily_pipeline_state_machine_is_created_for_daily_production_run():
         )
     )
     _assert_bounded_parallel_payloads(asl["States"])
+    readiness_choices = asl["States"]["DecidePublicationReadiness"]["Choices"]
+    optional_paths = {
+        "$.analysis.Payload.body.workflow_decision",
+        "$.analysis.Payload.body.stage",
+    }
+    for choice in readiness_choices:
+        referenced_optional_paths = {
+            condition.get("Variable")
+            for condition in choice.get("And", [])
+            if condition.get("Variable") in optional_paths
+        }
+        for path in referenced_optional_paths:
+            assert {
+                "Variable": path,
+                "IsPresent": True,
+            } in choice["And"]
 
     assert properties["StateMachineName"] == "stockara-codex-test-daily-pipeline"
     assert properties["StateMachineType"] == "STANDARD"

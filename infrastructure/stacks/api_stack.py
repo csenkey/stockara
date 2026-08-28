@@ -1309,44 +1309,68 @@ class ApiStack(Stack):
                 wait_or_repair,
             )
             .when(
-                sfn.Condition.string_equals(
-                    "$.analysis.Payload.body.workflow_decision",
-                    "publish",
+                sfn.Condition.and_(
+                    sfn.Condition.is_present(
+                        "$.analysis.Payload.body.workflow_decision"
+                    ),
+                    sfn.Condition.string_equals(
+                        "$.analysis.Payload.body.workflow_decision",
+                        "publish",
+                    ),
                 ),
                 publish,
             )
             .when(
-                sfn.Condition.string_equals(
-                    "$.analysis.Payload.body.workflow_decision",
-                    "publish_degraded",
+                sfn.Condition.and_(
+                    sfn.Condition.is_present(
+                        "$.analysis.Payload.body.workflow_decision"
+                    ),
+                    sfn.Condition.string_equals(
+                        "$.analysis.Payload.body.workflow_decision",
+                        "publish_degraded",
+                    ),
                 ),
                 publish_degraded,
             )
             .when(
-                sfn.Condition.string_equals(
-                    "$.analysis.Payload.body.workflow_decision",
-                    "blocked",
+                sfn.Condition.and_(
+                    sfn.Condition.is_present(
+                        "$.analysis.Payload.body.workflow_decision"
+                    ),
+                    sfn.Condition.string_equals(
+                        "$.analysis.Payload.body.workflow_decision",
+                        "blocked",
+                    ),
                 ),
                 blocked,
             )
             .when(
-                sfn.Condition.string_equals(
-                    "$.analysis.Payload.body.stage",
-                    "already_published",
+                sfn.Condition.and_(
+                    sfn.Condition.is_present("$.analysis.Payload.body.stage"),
+                    sfn.Condition.string_equals(
+                        "$.analysis.Payload.body.stage",
+                        "already_published",
+                    ),
                 ),
                 publish,
             )
             .when(
-                sfn.Condition.string_equals(
-                    "$.analysis.Payload.body.stage",
-                    "scored",
+                sfn.Condition.and_(
+                    sfn.Condition.is_present("$.analysis.Payload.body.stage"),
+                    sfn.Condition.string_equals(
+                        "$.analysis.Payload.body.stage",
+                        "scored",
+                    ),
                 ),
                 wait_or_repair,
             )
             .when(
-                sfn.Condition.string_equals(
-                    "$.analysis.Payload.body.stage",
-                    "analyzed_batch",
+                sfn.Condition.and_(
+                    sfn.Condition.is_present("$.analysis.Payload.body.stage"),
+                    sfn.Condition.string_equals(
+                        "$.analysis.Payload.body.stage",
+                        "analyzed_batch",
+                    ),
                 ),
                 wait_or_repair,
             )

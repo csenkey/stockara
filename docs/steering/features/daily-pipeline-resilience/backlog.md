@@ -146,6 +146,10 @@ test-first where specified.
   publication.
   - Depends on 6.5.
   - Covers Requirements 6.2–6.5.
+  - A 2026-08-27 shadow run succeeded and published; the subsequent scheduled
+    run exposed an unguarded optional analyzer response path in the publication
+    Choice state. Guard optional `workflow_decision` and `stage` fields before
+    repeating terminal verification.
 - [ ] 6.7 Validate current workflow, top-picks, sell-alerts, and data-readiness
   artifacts for matching dates and internally consistent counters.
   - Depends on 6.6.
