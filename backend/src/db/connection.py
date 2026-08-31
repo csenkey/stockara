@@ -623,7 +623,12 @@ class DynamoStore:
         )
         return sorted((_strip_keys(row) for row in rows), key=lambda row: row["event_date"])
 
-    def upcoming_earnings(self, start_date: date, end_date: date, limit: int = 25) -> list[dict[str, Any]]:
+    def upcoming_earnings(
+        self,
+        start_date: date,
+        end_date: date,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
         rows = self._query(
             IndexName=GSI1,
             KeyConditionExpression=Key("GSI1PK").eq("EARNINGS")
@@ -637,7 +642,8 @@ class DynamoStore:
             for row in rows
             if bool(row.get("is_upcoming", False))
         ]
-        return sorted(upcoming, key=lambda row: (row["event_date"], row["ticker"]))[:limit]
+        ordered = sorted(upcoming, key=lambda row: (row["event_date"], row["ticker"]))
+        return ordered[:limit] if limit is not None else ordered
 
     def put_dividend_event(self, event: dict[str, Any]) -> None:
         ticker = str(event["ticker"]).upper()

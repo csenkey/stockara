@@ -195,6 +195,13 @@ def test_calendar_collector_lambdas_and_schedules_are_created():
             "ScheduleExpression": "cron(0 20 * * ? *)",
         },
     )
+    earnings_rules = template.find_resources(
+        "AWS::Events::Rule",
+        {"Properties": {"Name": "stockara-codex-test-earnings-collection"}},
+    )
+    assert len(earnings_rules) == 1
+    earnings_target = next(iter(earnings_rules.values()))["Properties"]["Targets"][0]
+    assert "Input" not in earnings_target
     template.has_resource_properties(
         "AWS::Lambda::Function",
         {

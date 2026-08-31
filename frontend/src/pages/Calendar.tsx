@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
+import { calendarUrlFor } from "../services/calendarArtifacts.mjs";
+
 interface EarningsEvent {
   ticker: string;
   company_name?: string | null;
@@ -26,14 +28,24 @@ interface DividendEvent {
 }
 
 interface CalendarPayload {
-  artifact_type?: string;
+  collection_date: string;
+  generated_at: string;
+  upcoming_earnings?: EarningsEvent[];
+  upcoming_dividends?: DividendEvent[];
+  data_warnings?: string[];
+}
+
+interface NormalizedCalendarPayload<T> {
+  collection_date: string;
+  generated_at: string;
+  collection_status?: string;
+  warnings?: string[];
+  events?: T[];
+}
+
+interface PublishedCalendarPayload {
   publication_date: string;
   generated_at: string;
-  publication_status?: string;
-  suppression_reason?: string;
-  candidate_count?: number;
-  analyzed_count?: number;
-  upcoming_earnings?: EarningsEvent[];
   upcoming_dividends?: DividendEvent[];
   data_warnings?: string[];
 }
@@ -46,66 +58,84 @@ type CalendarTab = "earnings" | "dividends";
 
 const TOP_PICKS_URL =
   import.meta.env.VITE_TOP_PICKS_URL || "/top-picks/latest.json";
-const TRANSIENT_GATE_REASONS = new Set([
-  "collection_manifest_missing",
-  "analysis_not_before",
-  "coverage_gates_failed",
-]);
 
-function historyUrlFor(publicationDate: string) {
-  return TOP_PICKS_URL.replace(
-    "/top-picks/latest.json",
-    `/top-picks/history/${publicationDate}.json`,
-  );
+async function fetchCalendar<T>(url: string): Promise<NormalizedCalendarPayload<T>> {
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
+  return (await response.json()) as NormalizedCalendarPayload<T>;
 }
 
-function previousPublicationDate(publicationDate: string) {
-  const date = new Date(`${publicationDate}T00:00:00Z`);
-  date.setUTCDate(date.getUTCDate() - 1);
-  return date.toISOString().slice(0, 10);
-}
-
-function isTransientGatePayload(payload: CalendarPayload) {
-  if (payload.artifact_type === "collection_gate_status") return true;
-  if (payload.publication_status === "waiting") return true;
-  return (
-    payload.publication_status === "suppressed" &&
-    TRANSIENT_GATE_REASONS.has(payload.suppression_reason ?? "") &&
-    (payload.candidate_count ?? 0) === 0 &&
-    (payload.analyzed_count ?? 0) === 0
-  );
+async function fetchPublication(url: string): Promise<PublishedCalendarPayload> {
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
+  return (await response.json()) as PublishedCalendarPayload;
 }
 
 export default function Calendar({ onNavigate }: CalendarProps) {
   const [payload, setPayload] = useState<CalendarPayload | null>(null);
   const [activeTab, setActiveTab] = useState<CalendarTab>("earnings");
   const [error, setError] = useState("");
-  const [fallbackNotice, setFallbackNotice] = useState("");
   const [loading, setLoading] = useState(true);
 
   async function loadCalendar() {
     setLoading(true);
     setError("");
-    setFallbackNotice("");
     try {
-      const response = await fetch(TOP_PICKS_URL, { cache: "no-store" });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const latest = (await response.json()) as CalendarPayload;
-      if (isTransientGatePayload(latest) && latest.publication_date) {
-        const previousDate = previousPublicationDate(latest.publication_date);
-        const previous = await fetch(historyUrlFor(previousDate), { cache: "no-store" });
-        if (previous.ok) {
-          setPayload((await previous.json()) as CalendarPayload);
-          setFallbackNotice(
-            `Today's publication is still pending; showing the completed ${previousDate} calendar.`,
-          );
-          return;
-        }
+      const [earningsResult, dividendsResult] = await Promise.allSettled([
+        fetchCalendar<EarningsEvent>(calendarUrlFor(TOP_PICKS_URL, "earnings")),
+        fetchPublication(TOP_PICKS_URL),
+      ]);
+      if (earningsResult.status === "rejected" && dividendsResult.status === "rejected") {
+        throw new Error(
+          `${String(earningsResult.reason)}; ${String(dividendsResult.reason)}`,
+        );
       }
-      setPayload(latest);
+      setPayload((previous) => {
+        const earnings = earningsResult.status === "fulfilled" ? earningsResult.value : null;
+        const dividendsPublication =
+          dividendsResult.status === "fulfilled" ? dividendsResult.value : null;
+        const warnings = [
+          ...(earnings?.warnings ?? []).map((warning) => `Earnings: ${warning}`),
+          ...(dividendsPublication?.data_warnings ?? [])
+            .filter((warning) => warning.toLowerCase().includes("dividend"))
+            .map((warning) => `Dividends: ${warning}`),
+        ];
+        if (earningsResult.status === "rejected") {
+          warnings.push("Earnings calendar refresh failed; retaining the previous in-page result.");
+        }
+        if (dividendsResult.status === "rejected") {
+          warnings.push("Dividend publication refresh failed; retaining the previous in-page result.");
+        }
+        if (earnings?.collection_status === "degraded") {
+          warnings.push("Earnings calendar collection is degraded.");
+        }
+        const collectionDates = [
+          earnings?.collection_date,
+          dividendsPublication?.publication_date,
+          previous?.collection_date,
+        ].filter((value): value is string => Boolean(value));
+        const generatedTimes = [
+          earnings?.generated_at,
+          dividendsPublication?.generated_at,
+          previous?.generated_at,
+        ].filter((value): value is string => Boolean(value));
+        return {
+          collection_date: collectionDates.sort().slice(-1)[0] ?? "",
+          generated_at: generatedTimes.sort().slice(-1)[0] ?? "",
+          upcoming_earnings:
+            earnings?.collection_status === "degraded" && previous?.upcoming_earnings
+              ? previous.upcoming_earnings
+              : earnings?.events?.filter((event) => event.is_upcoming !== false) ??
+                previous?.upcoming_earnings ??
+                [],
+          upcoming_dividends:
+            dividendsPublication?.upcoming_dividends ?? previous?.upcoming_dividends ?? [],
+          data_warnings: warnings,
+        };
+      });
     } catch (loadError) {
       const detail = loadError instanceof Error ? loadError.message : "unknown error";
-      setError(`Calendar fetch failed (${detail}). Check ${TOP_PICKS_URL}.`);
+      setError(`Calendar fetch failed (${detail}).`);
     } finally {
       setLoading(false);
     }
@@ -123,10 +153,7 @@ export default function Calendar({ onNavigate }: CalendarProps) {
     () => sortByDate(payload?.upcoming_dividends ?? [], (row) => row.ex_dividend_date),
     [payload],
   );
-  const calendarWarning =
-    payload?.data_warnings?.find((warning) =>
-      warning.toLowerCase().includes("earnings-calendar"),
-    ) ?? null;
+  const calendarWarnings = payload?.data_warnings ?? [];
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
@@ -172,7 +199,7 @@ export default function Calendar({ onNavigate }: CalendarProps) {
           <Metric label="Generated" value={payload?.generated_at ? formatDate(payload.generated_at) : "-"} />
           <Metric label="Earnings" value={String(earnings.length)} />
           <Metric label="Dividends" value={String(dividends.length)} />
-          <Metric label="Publication" value={payload?.publication_date ?? "-"} />
+          <Metric label="Collection" value={payload?.collection_date ?? "-"} />
         </section>
 
         {loading && (
@@ -184,12 +211,6 @@ export default function Calendar({ onNavigate }: CalendarProps) {
         {!loading && error && (
           <div className="border border-amber-700 bg-amber-950 p-5 text-sm text-amber-100">
             {error}
-          </div>
-        )}
-
-        {!loading && fallbackNotice && (
-          <div className="border border-amber-700 bg-amber-950 p-5 text-sm text-amber-100">
-            {fallbackNotice}
           </div>
         )}
 
@@ -208,9 +229,11 @@ export default function Calendar({ onNavigate }: CalendarProps) {
                   label={`Dividends (${dividends.length})`}
                 />
               </div>
-              {calendarWarning && (
+              {calendarWarnings.length > 0 && (
                 <div className="mt-4 border border-amber-700 bg-amber-950 p-3 text-sm text-amber-100">
-                  {calendarWarning}
+                  {calendarWarnings.map((warning) => (
+                    <div key={warning}>{warning}</div>
+                  ))}
                 </div>
               )}
             </section>

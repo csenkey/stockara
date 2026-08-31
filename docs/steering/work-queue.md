@@ -120,24 +120,28 @@ Next executable items:
 - Add S3-backed historical OHLCV/ETF loader and artifact writer.
 - Add cached recommendation artifact loading keyed by analysis strategy, ticker, date, model, prompt version, evidence hash, and schema version.
 
-### 4. Calendar and Historical Evidence Foundation
+### 4. Earnings Calendar And Event Opportunities
 
 Status: Active supporting priority.
 
-Goal: Make earnings/dividend data reliable enough for both daily analysis and decision-grade backtesting.
+Goal: Make upcoming earnings and historical reaction evidence complete enough
+for daily analysis, then develop a separately validated seven-day earnings-event
+opportunity screen that estimates both result surprise and tradable price reaction.
 
-Source detail:
+Canonical feature docs:
 
-- Calendar follow-up tasks are maintained in this queue until promoted to a dedicated feature backlog.
+- `docs/steering/features/earnings/requirements.md`
+- `docs/steering/features/earnings/design.md`
+- `docs/steering/features/earnings/backlog.md`
 
 Next executable items:
 
-- Roll out dividend-calendar backfill safely after Alpha Vantage throttling.
-- Verify the deployed full-watchlist earnings query and bounded rotating
-  fallback produce upcoming events; alert on continued zero-event degraded runs.
-- Build an S3 calendar data lake for earnings and dividends.
-- Index normalized calendar events into DynamoDB for analysis.
-- Backfill historical earnings and dividend events.
+- Decouple the public calendar from the capped daily top-picks payload and stop
+  partial independent collection from replacing full-watchlist artifacts.
+- Add multi-provider upcoming-date reconciliation and expose date confidence.
+- Audit and backfill historical earnings, estimates, actuals, and price reactions.
+- Implement leakage-safe event studies and shadow predictions before exposing
+  any actionable earnings-event classification.
 
 Why this matters:
 

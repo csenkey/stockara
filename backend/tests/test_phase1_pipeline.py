@@ -1601,6 +1601,7 @@ def test_upcoming_earnings_summary_returns_jsonable_events():
             "is_upcoming": True,
         }
     ]
+    assert upcoming.call_args.kwargs["limit"] is None
 
 
 def test_upcoming_dividends_summary_returns_jsonable_events():

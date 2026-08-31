@@ -41,6 +41,9 @@ Legacy Kiro planning documents have been removed. Do not recreate Kiro-compatibl
 - `features/on-demand-holding-review/requirements.md`
 - `features/on-demand-holding-review/design.md`
 - `features/on-demand-holding-review/backlog.md`
+- `features/earnings/requirements.md`
+- `features/earnings/design.md`
+- `features/earnings/backlog.md`
 - `features/backtest-support-with-shadowed-portfolios/requirements.md`
 - `features/backtest-support-with-shadowed-portfolios/design.md`
 - `features/backtest-support-with-shadowed-portfolios/backlog.md`

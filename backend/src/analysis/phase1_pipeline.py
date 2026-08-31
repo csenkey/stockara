@@ -3179,7 +3179,10 @@ def _earnings_signals(ticker: str, run_date: date) -> list[dict[str, Any]]:
     ]
 
 
-def upcoming_earnings_summary(run_date: date, limit: int = 20) -> list[dict[str, Any]]:
+def upcoming_earnings_summary(
+    run_date: date,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
     events = store.upcoming_earnings(
         run_date,
         run_date + timedelta(days=EARNINGS_LOOKAHEAD_DAYS),

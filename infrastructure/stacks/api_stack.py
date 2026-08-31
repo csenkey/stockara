@@ -894,12 +894,7 @@ class ApiStack(Stack):
             schedule=events.Schedule.cron(
                 minute="0", hour="20", day="*", month="*", year="*"
             ),
-            targets=[
-                targets.LambdaFunction(
-                    self.earnings_collector_fn,
-                    event=events.RuleTargetInput.from_object({"max_tickers": 50}),
-                )
-            ],
+            targets=[targets.LambdaFunction(self.earnings_collector_fn)],
         )
 
         events.Rule(

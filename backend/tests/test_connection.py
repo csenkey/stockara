@@ -403,6 +403,29 @@ def test_upcoming_earnings_queries_gsi_and_filters_past_events():
     store._query.assert_called_once()
 
 
+def test_upcoming_earnings_is_uncapped_by_default():
+    store = _TestableDynamoStore()
+    store._query = MagicMock(
+        return_value=[
+            {
+                "PK": f"EARNINGS#T{index:03d}",
+                "SK": "DATE#2026-07-20",
+                "GSI1PK": "EARNINGS",
+                "GSI1SK": f"2026-07-20#T{index:03d}",
+                "entity": "earnings_event",
+                "ticker": f"T{index:03d}",
+                "event_date": "2026-07-20",
+                "is_upcoming": True,
+            }
+            for index in range(40)
+        ]
+    )
+
+    events = store.upcoming_earnings(date(2026, 6, 17), date(2026, 8, 1))
+
+    assert len(events) == 40
+
+
 def test_put_dividend_event_writes_date_indexed_item_and_status():
     table = MagicMock()
     store = _TestableDynamoStore(table)
