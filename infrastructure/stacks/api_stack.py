@@ -254,6 +254,14 @@ class ApiStack(Stack):
             ),
             managed_login_version=cognito.ManagedLoginVersion.NEWER_MANAGED_LOGIN,
         )
+        self.managed_login_branding = cognito.CfnManagedLoginBranding(
+            self,
+            "ManagedLoginBranding",
+            user_pool_id=self.user_pool.user_pool_id,
+            client_id=self.user_pool_client.user_pool_client_id,
+            use_cognito_provided_values=True,
+        )
+        self.managed_login_branding.node.add_dependency(self.user_pool_domain)
 
         common_env = {
             "POWERTOOLS_SERVICE_NAME": "stockara-phase1",
@@ -977,7 +985,7 @@ class ApiStack(Stack):
                 resources=[artifact_bucket.arn_for_objects("auth-config.json")]
             ),
         )
-        publish_auth_config.node.add_dependency(self.user_pool_domain)
+        publish_auth_config.node.add_dependency(self.managed_login_branding)
 
         CfnOutput(
             self,

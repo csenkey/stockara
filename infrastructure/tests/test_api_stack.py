@@ -681,6 +681,10 @@ def test_authentication_and_protected_holding_review_api_are_created():
         },
     )
     template.has_resource_properties(
+        "AWS::Cognito::ManagedLoginBranding",
+        {"UseCognitoProvidedValues": True},
+    )
+    template.has_resource_properties(
         "AWS::ApiGateway::Method",
         {
             "HttpMethod": "POST",
