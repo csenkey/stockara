@@ -17,8 +17,17 @@ tests, deployment, and production verification requirements are satisfied.
   the dividend tab's existing source until dividend aggregation is corrected.
 - [ ] EARN-1.5 Add backend, frontend contract, and CDK regression tests for full
   coverage, uncapped rendering, partial-run publication safety, and stale data.
-- [ ] EARN-1.6 Deploy through `main`; verify the public calendar contains all
+- [x] EARN-1.6 Deploy through `main`; verify the public calendar contains all
   collected watchlist events and no partial schedule replaces the full artifact.
+  - Commit `d991981`; deployment run `33436735732` passed all CI/CD and smoke
+    checks on 2026-08-31.
+  - Full-watchlist refresh run `33438509558` selected 907 tickers, collected 123
+    Finnhub events, and reported no failed tickers.
+  - The public artifact reported `selected_ticker_count=907` and
+    `event_count=123`; the deployed frontend bundle referenced
+    `calendar/normalized/earnings/latest.json`.
+  - The same verification found zero events through 2026-09-08, confirming that
+    provider reconciliation in Section 2 remains the next correctness blocker.
 
 ## 2. Multi-provider upcoming-event reconciliation
 
