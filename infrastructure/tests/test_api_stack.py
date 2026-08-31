@@ -638,3 +638,99 @@ def test_watchlist_seed_lambda_uses_dependency_bundled_backend_asset():
         )
 
     assert [call.args[0] for call in asset.call_args_list] == [BACKEND_ASSET_PATH]
+
+
+def test_authentication_and_protected_holding_review_api_are_created():
+    app = cdk.App()
+    stack = cdk.Stack(app, "Deps")
+    table = dynamodb.Table(
+        stack,
+        "DataTable",
+        partition_key=dynamodb.Attribute(name="PK", type=dynamodb.AttributeType.STRING),
+        sort_key=dynamodb.Attribute(name="SK", type=dynamodb.AttributeType.STRING),
+    )
+    bucket = s3.Bucket(stack, "Artifacts")
+    code = lambda_.Code.from_inline("def handler(event, context): return {}")
+    with patch("stacks.api_stack._lambda.Code.from_asset", return_value=code):
+        api_stack = ApiStack(
+            app,
+            "ApiTest",
+            data_table=table,
+            artifact_bucket=bucket,
+            site_url="https://stocks.example.com",
+            deployment_stage="codex-test",
+        )
+    template = assertions.Template.from_stack(api_stack)
+
+    template.has_resource_properties(
+        "AWS::Cognito::UserPool",
+        {
+            "AutoVerifiedAttributes": ["email"],
+            "UsernameAttributes": ["email"],
+            "AdminCreateUserConfig": {"AllowAdminCreateUserOnly": False},
+        },
+    )
+    template.has_resource_properties(
+        "AWS::Cognito::UserPoolClient",
+        {
+            "AllowedOAuthFlows": ["code"],
+            "AllowedOAuthScopes": ["openid", "email", "profile"],
+            "CallbackURLs": ["https://stocks.example.com/?auth=callback"],
+            "LogoutURLs": ["https://stocks.example.com"],
+            "SupportedIdentityProviders": ["COGNITO"],
+        },
+    )
+    template.has_resource_properties(
+        "AWS::ApiGateway::Method",
+        {
+            "HttpMethod": "POST",
+            "AuthorizationType": "COGNITO_USER_POOLS",
+        },
+    )
+
+
+def test_optional_google_facebook_and_apple_identity_providers_are_created():
+    app = cdk.App()
+    stack = cdk.Stack(app, "Deps")
+    table = dynamodb.Table(
+        stack,
+        "DataTable",
+        partition_key=dynamodb.Attribute(name="PK", type=dynamodb.AttributeType.STRING),
+        sort_key=dynamodb.Attribute(name="SK", type=dynamodb.AttributeType.STRING),
+    )
+    bucket = s3.Bucket(stack, "Artifacts")
+    code = lambda_.Code.from_inline("def handler(event, context): return {}")
+    with patch("stacks.api_stack._lambda.Code.from_asset", return_value=code):
+        api_stack = ApiStack(
+            app,
+            "ApiTest",
+            data_table=table,
+            artifact_bucket=bucket,
+            google_oauth_client_id="google-client",
+            google_oauth_client_secret_name="stockara/test/google-secret",
+            facebook_oauth_client_id="facebook-client",
+            facebook_oauth_client_secret_name="stockara/test/facebook-secret",
+            apple_oauth_client_id="apple-service-id",
+            apple_oauth_team_id="apple-team",
+            apple_oauth_key_id="apple-key",
+            apple_oauth_private_key_secret_name="stockara/test/apple-key",
+            deployment_stage="codex-test",
+        )
+    template = assertions.Template.from_stack(api_stack)
+
+    for provider_type in ["Google", "Facebook", "SignInWithApple"]:
+        template.has_resource_properties(
+            "AWS::Cognito::UserPoolIdentityProvider",
+            {"ProviderType": provider_type},
+        )
+    template.has_resource_properties(
+        "AWS::Cognito::UserPoolClient",
+        {
+            "SupportedIdentityProviders": [
+                "COGNITO",
+                "Google",
+                "Facebook",
+                "SignInWithApple",
+            ]
+        },
+    )

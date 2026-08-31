@@ -54,6 +54,39 @@ api_stack = ApiStack(
     stack_id("StockMonitoringApi", deployment_stage),
     data_table=database_stack.table,
     artifact_bucket=frontend_stack.site_bucket,
+    site_url=frontend_stack.site_url,
+    google_oauth_client_id=(
+        app.node.try_get_context("googleOAuthClientId")
+        or os.environ.get("GOOGLE_OAUTH_CLIENT_ID")
+    ),
+    google_oauth_client_secret_name=(
+        app.node.try_get_context("googleOAuthClientSecretName")
+        or os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET_NAME")
+    ),
+    facebook_oauth_client_id=(
+        app.node.try_get_context("facebookOAuthClientId")
+        or os.environ.get("FACEBOOK_OAUTH_CLIENT_ID")
+    ),
+    facebook_oauth_client_secret_name=(
+        app.node.try_get_context("facebookOAuthClientSecretName")
+        or os.environ.get("FACEBOOK_OAUTH_CLIENT_SECRET_NAME")
+    ),
+    apple_oauth_client_id=(
+        app.node.try_get_context("appleOAuthClientId")
+        or os.environ.get("APPLE_OAUTH_CLIENT_ID")
+    ),
+    apple_oauth_team_id=(
+        app.node.try_get_context("appleOAuthTeamId")
+        or os.environ.get("APPLE_OAUTH_TEAM_ID")
+    ),
+    apple_oauth_key_id=(
+        app.node.try_get_context("appleOAuthKeyId")
+        or os.environ.get("APPLE_OAUTH_KEY_ID")
+    ),
+    apple_oauth_private_key_secret_name=(
+        app.node.try_get_context("appleOAuthPrivateKeySecretName")
+        or os.environ.get("APPLE_OAUTH_PRIVATE_KEY_SECRET_NAME")
+    ),
     deployment_stage=deployment_stage,
     env=env,
 )

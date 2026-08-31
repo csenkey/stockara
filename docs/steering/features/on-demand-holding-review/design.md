@@ -5,11 +5,41 @@
 This feature reviews capital already allocated to a real-user holding. It is
 not a new-opportunity scanner and does not reuse daily shortlist eligibility.
 
-The first implementation slice is an internal, synchronous engine invoked with
-`mode=holding_review` on the existing analyzer Lambda. It validates the domain
-contract and AI prompts without exposing portfolio data publicly. Production
-API, encrypted portfolio loading, isolated result persistence, and asynchronous
-orchestration follow in later backlog slices.
+The first implementation slice includes the internal synchronous engine plus an
+authenticated preview API and page. The preview accepts manually entered
+holding context and does not persist it; it validates the domain contract and
+AI prompts before encrypted portfolio loading, isolated result persistence, and
+asynchronous orchestration are added.
+
+## Authentication slice
+
+The frontend sends users to Cognito Managed Login using Authorization Code with
+PKCE. Cognito owns email/password registration, email verification, sessions,
+and optional Google, Facebook, and Apple federation. API Gateway's Cognito User
+Pool authorizer validates the ID token before `POST /api/holding-reviews`
+reaches FastAPI. FastAPI reads only the already-verified `sub` claim.
+
+The deployed frontend loads `/auth-config.json`, which contains public runtime
+values only: API URL, Cognito domain, app client ID, redirect/logout URLs, and
+enabled provider names. OAuth client secrets and the Apple private key remain
+in AWS Secrets Manager. Provider integrations are activated through deployment
+context or environment variables containing client IDs and secret *names*.
+
+Deployment inputs:
+
+| Provider | Public metadata | Secrets Manager reference |
+| --- | --- | --- |
+| Google | `GOOGLE_OAUTH_CLIENT_ID` | `GOOGLE_OAUTH_CLIENT_SECRET_NAME` |
+| Facebook | `FACEBOOK_OAUTH_CLIENT_ID` | `FACEBOOK_OAUTH_CLIENT_SECRET_NAME` |
+| Apple | `APPLE_OAUTH_CLIENT_ID`, `APPLE_OAUTH_TEAM_ID`, `APPLE_OAUTH_KEY_ID` | `APPLE_OAUTH_PRIVATE_KEY_SECRET_NAME` |
+
+Equivalent camel-case CDK context keys are supported. Each external provider is
+configured with Cognito's `/oauth2/idpresponse` URL for the deployed managed
+login domain; incomplete provider configuration leaves that provider disabled.
+
+Managed Login is intentionally an adapter at the edge. Branding and a custom
+auth domain can be added later; a fully custom login UI can retain the same
+user pool, app client, PKCE flow, and API authorizer.
 
 ## Decision layers
 
@@ -40,8 +70,9 @@ safe, useful income can be `HOLD` plus `KEEP_INCOME`.
 }
 ```
 
-This path is for direct, authorized operator invocation only. It does not
-persist the supplied holding context. Production must replace it with an
+The Lambda `mode=holding_review` path remains for direct, authorized operator
+invocation. The authenticated preview route also does not persist manually
+supplied holding context. Production replaces the preview payload with an
 authenticated request containing only user and request identifiers; the worker
 then decrypts the portfolio in memory.
 

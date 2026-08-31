@@ -1,6 +1,7 @@
 """CDK stack for the Phase 1 API, collectors, analyzer, and publisher."""
 
 import hashlib
+import json
 import os
 
 from aws_cdk import (
@@ -9,9 +10,12 @@ from aws_cdk import (
     CfnOutput,
     CustomResource,
     Duration,
+    RemovalPolicy,
+    SecretValue,
     Size,
     Stack,
     aws_apigateway as apigw,
+    aws_cognito as cognito,
     custom_resources as cr,
     aws_dynamodb as dynamodb,
     aws_events as events,
@@ -57,6 +61,15 @@ class ApiStack(Stack):
         construct_id: str,
         data_table: dynamodb.ITable,
         artifact_bucket: s3.IBucket,
+        site_url: str = "http://localhost:5173",
+        google_oauth_client_id: str | None = None,
+        google_oauth_client_secret_name: str | None = None,
+        facebook_oauth_client_id: str | None = None,
+        facebook_oauth_client_secret_name: str | None = None,
+        apple_oauth_client_id: str | None = None,
+        apple_oauth_team_id: str | None = None,
+        apple_oauth_key_id: str | None = None,
+        apple_oauth_private_key_secret_name: str | None = None,
         deployment_stage: str = "prod",
         **kwargs,
     ) -> None:
@@ -114,7 +127,132 @@ class ApiStack(Stack):
             "HealthApiRole",
             assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
             managed_policies=[lambda_base_policy],
-            description="Role for public health API",
+            description="Role for public health and authenticated analysis APIs",
+        )
+
+        self.user_pool = cognito.UserPool(
+            self,
+            "UserPool",
+            user_pool_name=resource_name(
+                deployment_stage, "stockara-users", "users"
+            ),
+            self_sign_up_enabled=True,
+            sign_in_aliases=cognito.SignInAliases(email=True),
+            auto_verify=cognito.AutoVerifiedAttrs(email=True),
+            password_policy=cognito.PasswordPolicy(
+                min_length=10,
+                require_lowercase=True,
+                require_uppercase=True,
+                require_digits=True,
+                require_symbols=False,
+            ),
+            account_recovery=cognito.AccountRecovery.EMAIL_ONLY,
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+        identity_providers = [cognito.UserPoolClientIdentityProvider.COGNITO]
+        identity_provider_resources: list[cognito.CfnUserPoolIdentityProvider] = []
+        social_providers: list[str] = []
+
+        if google_oauth_client_id and google_oauth_client_secret_name:
+            google_provider = cognito.CfnUserPoolIdentityProvider(
+                self,
+                "GoogleIdentityProvider",
+                user_pool_id=self.user_pool.user_pool_id,
+                provider_name="Google",
+                provider_type="Google",
+                provider_details={
+                    "client_id": google_oauth_client_id,
+                    "client_secret": SecretValue.secrets_manager(
+                        google_oauth_client_secret_name
+                    ).to_string(),
+                    "authorize_scopes": "openid email profile",
+                },
+                attribute_mapping={"email": "email", "name": "name"},
+            )
+            identity_providers.append(cognito.UserPoolClientIdentityProvider.GOOGLE)
+            identity_provider_resources.append(google_provider)
+            social_providers.append("Google")
+
+        if facebook_oauth_client_id and facebook_oauth_client_secret_name:
+            facebook_provider = cognito.CfnUserPoolIdentityProvider(
+                self,
+                "FacebookIdentityProvider",
+                user_pool_id=self.user_pool.user_pool_id,
+                provider_name="Facebook",
+                provider_type="Facebook",
+                provider_details={
+                    "client_id": facebook_oauth_client_id,
+                    "client_secret": SecretValue.secrets_manager(
+                        facebook_oauth_client_secret_name
+                    ).to_string(),
+                    "authorize_scopes": "public_profile,email",
+                },
+                attribute_mapping={"email": "email", "name": "name"},
+            )
+            identity_providers.append(cognito.UserPoolClientIdentityProvider.FACEBOOK)
+            identity_provider_resources.append(facebook_provider)
+            social_providers.append("Facebook")
+
+        if all(
+            [
+                apple_oauth_client_id,
+                apple_oauth_team_id,
+                apple_oauth_key_id,
+                apple_oauth_private_key_secret_name,
+            ]
+        ):
+            apple_provider = cognito.CfnUserPoolIdentityProvider(
+                self,
+                "AppleIdentityProvider",
+                user_pool_id=self.user_pool.user_pool_id,
+                provider_name="SignInWithApple",
+                provider_type="SignInWithApple",
+                provider_details={
+                    "client_id": apple_oauth_client_id,
+                    "team_id": apple_oauth_team_id,
+                    "key_id": apple_oauth_key_id,
+                    "private_key": SecretValue.secrets_manager(
+                        apple_oauth_private_key_secret_name
+                    ).to_string(),
+                    "authorize_scopes": "name email",
+                },
+                attribute_mapping={"email": "email", "name": "name"},
+            )
+            identity_providers.append(cognito.UserPoolClientIdentityProvider.APPLE)
+            identity_provider_resources.append(apple_provider)
+            social_providers.append("Apple")
+
+        callback_url = f"{site_url.rstrip('/')}/?auth=callback"
+        self.user_pool_client = self.user_pool.add_client(
+            "WebClient",
+            user_pool_client_name=resource_name(
+                deployment_stage, "stockara-web", "web"
+            ),
+            generate_secret=False,
+            auth_flows=cognito.AuthFlow(user_srp=True),
+            o_auth=cognito.OAuthSettings(
+                flows=cognito.OAuthFlows(authorization_code_grant=True),
+                scopes=[
+                    cognito.OAuthScope.OPENID,
+                    cognito.OAuthScope.EMAIL,
+                    cognito.OAuthScope.PROFILE,
+                ],
+                callback_urls=[callback_url],
+                logout_urls=[site_url],
+            ),
+            supported_identity_providers=identity_providers,
+        )
+        for identity_provider in identity_provider_resources:
+            self.user_pool_client.node.add_dependency(identity_provider)
+        auth_domain_prefix = resource_name(
+            deployment_stage, "stockara-login", "login"
+        )
+        self.user_pool_domain = self.user_pool.add_domain(
+            "ManagedLoginDomain",
+            cognito_domain=cognito.CognitoDomainOptions(
+                domain_prefix=auth_domain_prefix
+            ),
+            managed_login_version=cognito.ManagedLoginVersion.NEWER_MANAGED_LOGIN,
         )
 
         common_env = {
@@ -123,6 +261,7 @@ class ApiStack(Stack):
             "STOCKARA_TABLE_NAME": data_table.table_name,
             "STOCKARA_ARTIFACT_BUCKET": artifact_bucket.bucket_name,
             "DEPLOYMENT_STAGE": deployment_stage,
+            "STOCKARA_SITE_URL": site_url.rstrip("/"),
         }
         openai_env = {"OPENAI_API_KEY_SECRET_NAME": openai_api_key_secret_name}
         market_data_env = {
@@ -427,11 +566,17 @@ class ApiStack(Stack):
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="src.api.handler.handler",
             code=backend_code,
-            memory_size=256,
-            timeout=Duration.seconds(15),
+            memory_size=1024,
+            timeout=Duration.seconds(29),
             role=api_role,
-            environment={**common_env, "POWERTOOLS_SERVICE_NAME": "health-api"},
-            description="Serves the public health endpoint",
+            environment={
+                **common_env,
+                **openai_env,
+                "OPENAI_ANALYSIS_MODEL": "gpt-5.6-luna",
+                "OPENAI_REVIEW_MODEL": "gpt-5.6-terra",
+                "POWERTOOLS_SERVICE_NAME": "stockara-api",
+            },
+            description="Serves public health and authenticated holding reviews",
         )
 
         data_table.grant_read_write_data(self.stock_collector_fn)
@@ -444,6 +589,7 @@ class ApiStack(Stack):
         data_table.grant_read_write_data(self.ai_analyzer_fn)
         data_table.grant_read_write_data(self.watchlist_seed_fn)
         data_table.grant_read_data(self.api_handler_fn)
+        openai_api_key_secret.grant_read(self.api_handler_fn)
         artifact_bucket.grant_read_write(self.stock_collector_fn)
         artifact_bucket.grant_read_write(self.stooq_zip_extractor_fn)
         artifact_bucket.grant_read_write(self.collection_distributor_fn)
@@ -494,15 +640,27 @@ class ApiStack(Stack):
                 throttling_burst_limit=40,
             ),
             default_cors_preflight_options=apigw.CorsOptions(
-                allow_origins=apigw.Cors.ALL_ORIGINS,
-                allow_methods=["GET", "OPTIONS"],
-                allow_headers=["Content-Type"],
+                allow_origins=[site_url.rstrip("/")],
+                allow_methods=["GET", "POST", "OPTIONS"],
+                allow_headers=["Content-Type", "Authorization"],
             ),
         )
 
         api_resource = self.api.root.add_resource("api")
         health_resource = api_resource.add_resource("health")
         health_resource.add_method("GET", apigw.LambdaIntegration(self.api_handler_fn))
+        authorizer = apigw.CognitoUserPoolsAuthorizer(
+            self,
+            "ApiAuthorizer",
+            cognito_user_pools=[self.user_pool],
+        )
+        holding_reviews_resource = api_resource.add_resource("holding-reviews")
+        holding_reviews_resource.add_method(
+            "POST",
+            apigw.LambdaIntegration(self.api_handler_fn),
+            authorization_type=apigw.AuthorizationType.COGNITO,
+            authorizer=authorizer,
+        )
 
         workflow_name = resource_name(
             deployment_stage, "stockara-daily-pipeline", "daily-pipeline"
@@ -777,6 +935,49 @@ class ApiStack(Stack):
                 )
             ],
         )
+
+        auth_config = {
+            "apiBaseUrl": self.api.url.rstrip("/"),
+            "cognitoDomain": (
+                f"https://{auth_domain_prefix}.auth.{self.region}.amazoncognito.com"
+            ),
+            "clientId": self.user_pool_client.user_pool_client_id,
+            "redirectUri": callback_url,
+            "logoutUri": site_url,
+            "socialProviders": social_providers,
+        }
+        publish_auth_config = cr.AwsCustomResource(
+            self,
+            "PublishAuthConfig",
+            on_create=cr.AwsSdkCall(
+                service="S3",
+                action="putObject",
+                parameters={
+                    "Bucket": artifact_bucket.bucket_name,
+                    "Key": "auth-config.json",
+                    "Body": json.dumps(auth_config),
+                    "ContentType": "application/json",
+                    "CacheControl": "no-store",
+                },
+                physical_resource_id=cr.PhysicalResourceId.of("stockara-auth-config"),
+            ),
+            on_update=cr.AwsSdkCall(
+                service="S3",
+                action="putObject",
+                parameters={
+                    "Bucket": artifact_bucket.bucket_name,
+                    "Key": "auth-config.json",
+                    "Body": json.dumps(auth_config),
+                    "ContentType": "application/json",
+                    "CacheControl": "no-store",
+                },
+                physical_resource_id=cr.PhysicalResourceId.of("stockara-auth-config"),
+            ),
+            policy=cr.AwsCustomResourcePolicy.from_sdk_calls(
+                resources=[artifact_bucket.arn_for_objects("auth-config.json")]
+            ),
+        )
+        publish_auth_config.node.add_dependency(self.user_pool_domain)
 
         CfnOutput(
             self,

@@ -14,6 +14,9 @@ security-level `BUY`/`HOLD`/`SELL` assessment from the portfolio-level
 - A user may request a review only for a ticker in their decrypted portfolio.
 - The first internal implementation may accept explicit holding context for
   operator testing, but must not expose that path as a public API.
+- An authenticated preview may accept manually entered holding context while
+  encrypted portfolio storage is being restored. The UI must describe that
+  context as user-supplied and must not imply Stockara verified ownership.
 - The ticker, quantity, buying price, portfolio objective, and optional total
   portfolio value are validated before analysis.
 
@@ -106,3 +109,16 @@ security-level `BUY`/`HOLD`/`SELL` assessment from the portfolio-level
   trigger.
 - The UI must clearly distinguish an approved action from a proposed action
   withheld by the stronger review.
+
+### OHR-11 Authentication and account access
+
+- Email/password registration and login use a Cognito User Pool with verified
+  email addresses; the application does not receive or store passwords.
+- The web client uses Authorization Code with PKCE and has no client secret.
+- Google, Facebook, and Sign in with Apple are optional Cognito identity
+  providers activated only when their external client metadata and Secrets
+  Manager secret names are supplied at deployment.
+- Only authenticated users see the holding-analysis navigation entry, and API
+  Gateway validates the Cognito token before invoking the protected route.
+- Managed Login branding, a custom Cognito domain, and a later custom login UI
+  must be replaceable without changing the user pool or protected API contract.

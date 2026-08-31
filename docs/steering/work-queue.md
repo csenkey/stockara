@@ -72,9 +72,11 @@ Why this matters:
 
 ### 2. On-Demand Holding Review
 
-Status: Active foundation. The score-independent internal holding-review engine
-and feature contract are the first real-user portfolio-management slice;
-authenticated portfolio loading and production exposure remain open.
+Status: Active authenticated preview. The score-independent holding-review
+engine, Cognito Managed Login, protected synchronous preview API, and
+authenticated-only analysis page are implemented locally. Encrypted portfolio
+loading, provider credential activation, production deployment, and the private
+asynchronous workflow remain open.
 
 Goal: Answer whether capital already allocated to a held ticker should remain
 there, separating `BUY`/`HOLD`/`SELL` security quality from
@@ -88,7 +90,9 @@ Canonical feature docs:
 
 Next executable items:
 
-- Restore Cognito-authenticated, KMS-encrypted real-user portfolio storage.
+- Activate and smoke-test production Google, Facebook, and Apple federation.
+- Restore KMS-encrypted real-user portfolio storage and connect reviews to held
+  tickers instead of manually entered preview context.
 - Add the private asynchronous request workflow and isolated encrypted results.
 - Add benchmark/opportunity comparison and backtested replacement thresholds.
 

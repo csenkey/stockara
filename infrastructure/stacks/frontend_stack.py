@@ -105,6 +105,11 @@ class FrontendStack(Stack):
             ],
             minimum_protocol_version=cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
         )
+        self.site_url = (
+            f"https://{normalized_domain}"
+            if use_custom_domain
+            else f"https://{self.distribution.distribution_domain_name}"
+        )
 
         if os.path.isdir(FRONTEND_DIST_PATH):
             s3_deployment.BucketDeployment(
