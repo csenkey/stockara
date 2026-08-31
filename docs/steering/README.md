@@ -38,6 +38,9 @@ Legacy Kiro planning documents have been removed. Do not recreate Kiro-compatibl
 - `features/daily-pipeline-stability/requirements.md`
 - `features/daily-pipeline-stability/design.md`
 - `features/daily-pipeline-stability/backlog.md`
+- `features/on-demand-holding-review/requirements.md`
+- `features/on-demand-holding-review/design.md`
+- `features/on-demand-holding-review/backlog.md`
 - `features/backtest-support-with-shadowed-portfolios/requirements.md`
 - `features/backtest-support-with-shadowed-portfolios/design.md`
 - `features/backtest-support-with-shadowed-portfolios/backlog.md`

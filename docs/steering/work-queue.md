@@ -70,7 +70,29 @@ Why this matters:
 - Today’s production artifact reports unresolved metadata rows even though the repository metadata audit is clean, so the system needs drift detection and repair visibility.
 - We analyze once per day; a single organizer is easier to reason about and cheaper than near-real-time polling plus repeated gated analyzer attempts.
 
-### 2. Backtest Support With Shadowed Portfolios
+### 2. On-Demand Holding Review
+
+Status: Active foundation. The score-independent internal holding-review engine
+and feature contract are the first real-user portfolio-management slice;
+authenticated portfolio loading and production exposure remain open.
+
+Goal: Answer whether capital already allocated to a held ticker should remain
+there, separating `BUY`/`HOLD`/`SELL` security quality from
+`KEEP`/`KEEP_INCOME`/`REDUCE`/`EXIT`/`REVIEW` portfolio action.
+
+Canonical feature docs:
+
+- `docs/steering/features/on-demand-holding-review/requirements.md`
+- `docs/steering/features/on-demand-holding-review/design.md`
+- `docs/steering/features/on-demand-holding-review/backlog.md`
+
+Next executable items:
+
+- Restore Cognito-authenticated, KMS-encrypted real-user portfolio storage.
+- Add the private asynchronous request workflow and isolated encrypted results.
+- Add benchmark/opportunity comparison and backtested replacement thresholds.
+
+### 3. Backtest Support With Shadowed Portfolios
 
 Status: Paused behind daily pipeline stability. Offline framework foundation implemented; decision-grade data ingestion and historical recommendation replay remain open.
 
@@ -94,7 +116,7 @@ Next executable items:
 - Add S3-backed historical OHLCV/ETF loader and artifact writer.
 - Add cached recommendation artifact loading keyed by analysis strategy, ticker, date, model, prompt version, evidence hash, and schema version.
 
-### 3. Calendar and Historical Evidence Foundation
+### 4. Calendar and Historical Evidence Foundation
 
 Status: Active supporting priority.
 
@@ -125,7 +147,7 @@ Completed reliability work:
   quota-bounded rotating per-ticker fallback, and expose provider diagnostics
   instead of reporting empty results as success.
 
-### 4. Phase 1 UI and Static Artifact Refinement
+### 5. Phase 1 UI and Static Artifact Refinement
 
 Status: Active secondary priority; ticker-card related-news refinement is complete.
 
