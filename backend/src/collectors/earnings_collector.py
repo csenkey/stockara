@@ -176,6 +176,7 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
             provider_attempts=provider_attempts,
         )
         warnings = _calendar_warnings(provider_health)
+        reconciliation_counts = _reconciliation_counts(collected_events)
         response_status = _response_status(failed_tickers, provider_health)
         artifact_scope = manifest_task_run.task_id if manifest_task_run else None
         publish_latest_artifacts = manifest_task_run is None
@@ -210,6 +211,18 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
         _emit_metric("earnings_collection_failed_tickers", len(failed_tickers))
         _emit_metric("earnings_zero_event_tickers", len(zero_event_tickers))
         _emit_metric(
+            "earnings_confirmed_events",
+            reconciliation_counts["confirmed"],
+        )
+        _emit_metric(
+            "earnings_single_source_events",
+            reconciliation_counts["single_source"],
+        )
+        _emit_metric(
+            "earnings_conflicting_candidates",
+            reconciliation_counts["conflicting"],
+        )
+        _emit_metric(
             "earnings_provider_degraded_runs",
             1 if provider_health["status"] == "degraded" else 0,
         )
@@ -239,6 +252,7 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
                 "zero_event_tickers": zero_event_tickers,
                 "provider_health": provider_health,
                 "warnings": warnings,
+                "reconciliation_counts": reconciliation_counts,
             },
         }
     except Exception as exc:
@@ -444,6 +458,20 @@ def _response_status(
     if failed_tickers or provider_health.get("status") == "partial":
         return "partial"
     return "success"
+
+
+def _reconciliation_counts(events: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {
+        "confirmed": 0,
+        "company_confirmed": 0,
+        "single_source": 0,
+        "conflicting": 0,
+        "unreconciled": 0,
+    }
+    for event in events:
+        status = str(event.get("reconciliation_status") or "unreconciled")
+        counts[status if status in counts else "unreconciled"] += 1
+    return counts
 
 
 def _store_events(events: list[dict[str, Any]]) -> int:

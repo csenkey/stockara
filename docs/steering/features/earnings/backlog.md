@@ -63,8 +63,14 @@ tests, deployment, and production verification requirements are satisfied.
     correctly reported 250 Alpha Vantage and 123 Finnhub watchlist events.
 - [ ] EARN-2.4 Add bounded yfinance/company-source confirmation for conflicting
   events occurring within the next seven days.
-- [ ] EARN-2.5 Expose conflict and coverage metrics, artifact warnings, and UI
+- [x] EARN-2.5 Expose conflict and coverage metrics, artifact warnings, and UI
   confidence badges.
+  - Normalized artifacts publish canonical, confirmed, company-confirmed,
+    single-source, conflicting-candidate, conflict-group, and unreconciled
+    counts; conflicts also produce a user-visible artifact warning.
+  - The collector emits reconciliation CloudWatch metrics, and the calendar
+    displays the conflict-group count plus confirmed, conflicting,
+    single-source, and unreconciled badges with candidate-date tooltips.
 - [ ] EARN-2.6 Deploy and verify representative near-term tickers against at
   least two sources; record unresolved conflicts rather than hiding them.
 

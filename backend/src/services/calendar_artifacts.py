@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -33,6 +34,13 @@ def publish_calendar_artifacts(
     if not bucket:
         return
     normalized_events = [_jsonable_event(event) for event in events]
+    reconciliation_summary = _reconciliation_summary(normalized_events)
+    artifact_warnings = list(warnings or [])
+    conflict_count = reconciliation_summary.get("conflict_group_count", 0)
+    if conflict_count:
+        artifact_warnings.append(
+            f"{conflict_count} earnings event date conflict(s) require confirmation."
+        )
     payload = {
         "event_type": event_type,
         "collection_date": collection_date.isoformat(),
@@ -44,7 +52,8 @@ def publish_calendar_artifacts(
         "event_count": len(normalized_events),
         "collection_status": collection_status,
         "provider_health": provider_health or {"status": "ok"},
-        "warnings": warnings or [],
+        "warnings": artifact_warnings,
+        "reconciliation_summary": reconciliation_summary,
         "zero_event_tickers": sorted(set(zero_event_tickers or [])),
         "events": normalized_events,
     }
@@ -62,6 +71,7 @@ def publish_calendar_artifacts(
                 **payload,
                 "ticker": ticker,
                 "event_count": len(ticker_events),
+                "reconciliation_summary": _reconciliation_summary(ticker_events),
                 "events": ticker_events,
             }
             _safe_publish(
@@ -152,6 +162,33 @@ def _events_by_provider(events: list[dict[str, Any]]) -> dict[str, list[dict[str
         provider = str(event.get("provider") or "unknown").lower()
         grouped.setdefault(provider, []).append(_jsonable_event(event))
     return grouped
+
+
+def _reconciliation_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
+    status_counts = Counter(
+        str(event.get("reconciliation_status") or "unreconciled")
+        for event in events
+    )
+    canonical_ids = {
+        str(event.get("canonical_event_id"))
+        for event in events
+        if event.get("canonical_event_id")
+    }
+    conflict_ids = {
+        str(event.get("canonical_event_id"))
+        for event in events
+        if event.get("reconciliation_status") == "conflicting"
+        and event.get("canonical_event_id")
+    }
+    return {
+        "canonical_event_count": len(canonical_ids),
+        "confirmed_event_count": status_counts["confirmed"],
+        "company_confirmed_event_count": status_counts["company_confirmed"],
+        "single_source_event_count": status_counts["single_source"],
+        "conflicting_candidate_count": status_counts["conflicting"],
+        "conflict_group_count": len(conflict_ids),
+        "unreconciled_event_count": status_counts["unreconciled"],
+    }
 
 
 def _jsonable_event(event: dict[str, Any]) -> dict[str, Any]:

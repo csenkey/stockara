@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { calendarUrlFor } from "../services/calendarArtifacts.mjs";
+import {
+  calendarUrlFor,
+  earningsConfidencePresentation,
+} from "../services/calendarArtifacts.mjs";
 
 interface EarningsEvent {
   ticker: string;
@@ -13,6 +16,19 @@ interface EarningsEvent {
   is_upcoming?: boolean;
   provider?: string | null;
   source_url?: string | null;
+  reconciliation_status?: string | null;
+  date_confidence?: string | null;
+  candidate_dates?: string[];
+}
+
+interface ReconciliationSummary {
+  canonical_event_count?: number;
+  confirmed_event_count?: number;
+  company_confirmed_event_count?: number;
+  single_source_event_count?: number;
+  conflicting_candidate_count?: number;
+  conflict_group_count?: number;
+  unreconciled_event_count?: number;
 }
 
 interface DividendEvent {
@@ -33,6 +49,7 @@ interface CalendarPayload {
   upcoming_earnings?: EarningsEvent[];
   upcoming_dividends?: DividendEvent[];
   data_warnings?: string[];
+  reconciliation_summary?: ReconciliationSummary;
 }
 
 interface NormalizedCalendarPayload<T> {
@@ -41,6 +58,7 @@ interface NormalizedCalendarPayload<T> {
   collection_status?: string;
   warnings?: string[];
   events?: T[];
+  reconciliation_summary?: ReconciliationSummary;
 }
 
 interface PublishedCalendarPayload {
@@ -131,6 +149,8 @@ export default function Calendar({ onNavigate }: CalendarProps) {
           upcoming_dividends:
             dividendsPublication?.upcoming_dividends ?? previous?.upcoming_dividends ?? [],
           data_warnings: warnings,
+          reconciliation_summary:
+            earnings?.reconciliation_summary ?? previous?.reconciliation_summary,
         };
       });
     } catch (loadError) {
@@ -195,11 +215,15 @@ export default function Calendar({ onNavigate }: CalendarProps) {
       </section>
 
       <div className="mx-auto max-w-7xl space-y-5 px-5 py-5">
-        <section className="grid gap-4 md:grid-cols-4">
+        <section className="grid gap-4 md:grid-cols-5">
           <Metric label="Generated" value={payload?.generated_at ? formatDate(payload.generated_at) : "-"} />
           <Metric label="Earnings" value={String(earnings.length)} />
           <Metric label="Dividends" value={String(dividends.length)} />
           <Metric label="Collection" value={payload?.collection_date ?? "-"} />
+          <Metric
+            label="Date conflicts"
+            value={String(payload?.reconciliation_summary?.conflict_group_count ?? 0)}
+          />
         </section>
 
         {loading && (
@@ -265,6 +289,7 @@ function EarningsTable({ rows }: { rows: EarningsEvent[] }) {
               <th className="px-4 py-3">Company</th>
               <th className="px-4 py-3">Timing</th>
               <th className="px-4 py-3">EPS Estimate</th>
+              <th className="px-4 py-3">Date confidence</th>
               <th className="px-4 py-3">Provider</th>
             </tr>
           </thead>
@@ -276,6 +301,9 @@ function EarningsTable({ rows }: { rows: EarningsEvent[] }) {
                 <td className="min-w-52 px-4 py-3 text-slate-300">{row.company_name || "-"}</td>
                 <td className="whitespace-nowrap px-4 py-3 text-slate-300">{formatTiming(row.time_of_day)}</td>
                 <td className="whitespace-nowrap px-4 py-3 text-slate-300">{formatNullable(row.eps_estimate)}</td>
+                <td className="whitespace-nowrap px-4 py-3">
+                  <ConfidenceBadge row={row} />
+                </td>
                 <td className="whitespace-nowrap px-4 py-3 text-slate-400">
                   <ProviderLink provider={row.provider} url={row.source_url} />
                 </td>
@@ -285,6 +313,25 @@ function EarningsTable({ rows }: { rows: EarningsEvent[] }) {
         </table>
       </div>
     </section>
+  );
+}
+
+function ConfidenceBadge({ row }: { row: EarningsEvent }) {
+  const presentation = earningsConfidencePresentation(row.reconciliation_status);
+  const toneClass = {
+    positive: "border-emerald-700 bg-emerald-950 text-emerald-200",
+    warning: "border-amber-600 bg-amber-950 text-amber-100",
+    neutral: "border-sky-800 bg-sky-950 text-sky-200",
+    muted: "border-slate-700 bg-slate-900 text-slate-400",
+  }[presentation.tone];
+  const candidates = row.candidate_dates?.join(" or ");
+  return (
+    <span
+      className={`inline-flex rounded border px-2 py-1 text-xs font-medium ${toneClass}`}
+      title={candidates ? `Candidate dates: ${candidates}` : undefined}
+    >
+      {presentation.label}
+    </span>
   );
 }
 

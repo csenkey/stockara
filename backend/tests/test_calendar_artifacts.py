@@ -29,12 +29,18 @@ def test_publish_calendar_artifacts_writes_latest_collection_and_ticker_views(mo
                 "event_date": date(2026, 7, 30),
                 "eps_estimate": Decimal("2.15"),
                 "provider": "finnhub",
+                "canonical_event_id": "AAPL:2026-07-30",
+                "reconciliation_status": "confirmed",
+                "date_confidence": "high",
             },
             {
                 "ticker": "MSFT",
                 "event_date": date(2026, 7, 28),
                 "eps_estimate": Decimal("3.02"),
                 "provider": "yfinance",
+                "canonical_event_id": "MSFT:2026-07-28",
+                "reconciliation_status": "single_source",
+                "date_confidence": "low",
             },
         ],
     )
@@ -58,6 +64,53 @@ def test_publish_calendar_artifacts_writes_latest_collection_and_ticker_views(mo
     assert latest_payload["warnings"] == ["provider warning"]
     assert latest_payload["zero_event_tickers"] == ["MSFT"]
     assert latest_payload["events"][0]["event_date"] == "2026-07-30"
+    assert latest_payload["reconciliation_summary"] == {
+        "canonical_event_count": 2,
+        "confirmed_event_count": 1,
+        "company_confirmed_event_count": 0,
+        "single_source_event_count": 1,
+        "conflicting_candidate_count": 0,
+        "conflict_group_count": 0,
+        "unreconciled_event_count": 0,
+    }
+
+
+@patch("backend.src.services.calendar_artifacts.publish_json_artifact")
+def test_publish_calendar_artifacts_warns_about_conflict_groups(mock_publish):
+    conflict_id = "ARQQ:conflict:2026-12-07:2026-12-09"
+    publish_calendar_artifacts(
+        bucket="artifact-bucket",
+        event_type="earnings",
+        collection_date=date(2026, 9, 1),
+        range_start=date(2026, 9, 1),
+        range_end=date(2026, 12, 31),
+        selected_tickers=["ARQQ"],
+        events=[
+            {
+                "ticker": "ARQQ",
+                "event_date": date(2026, 12, 7),
+                "canonical_event_id": conflict_id,
+                "reconciliation_status": "conflicting",
+            },
+            {
+                "ticker": "ARQQ",
+                "event_date": date(2026, 12, 9),
+                "canonical_event_id": conflict_id,
+                "reconciliation_status": "conflicting",
+            },
+        ],
+    )
+
+    latest_payload = next(
+        call.args[2]
+        for call in mock_publish.call_args_list
+        if call.args[1] == "calendar/normalized/earnings/latest.json"
+    )
+    assert latest_payload["reconciliation_summary"]["conflict_group_count"] == 1
+    assert latest_payload["reconciliation_summary"]["conflicting_candidate_count"] == 2
+    assert latest_payload["warnings"] == [
+        "1 earnings event date conflict(s) require confirmation."
+    ]
 
 
 @patch("backend.src.services.calendar_artifacts.publish_json_artifact")
