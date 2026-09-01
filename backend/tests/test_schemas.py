@@ -18,6 +18,10 @@ from src.models.schemas import (
     CollectionTaskType,
     CollectionTickerHealth,
     CompanySize,
+    CanonicalEarningsEvent,
+    EarningsDateConfidence,
+    EarningsProviderObservation,
+    EarningsReconciliationStatus,
     Recommendation,
     RepairMode,
     RepairModeRequest,
@@ -140,6 +144,59 @@ def test_candidate_analysis_models_shortlisted_ai_result():
         negative_score=10,
     )
     assert analysis.recommendation == Recommendation.BUY
+
+
+def test_earnings_provider_observation_preserves_fiscal_identity_and_supersession():
+    observation = EarningsProviderObservation(
+        observation_id="alpha_vantage_calendar:AAPL:2026-07-30:2026-06-30",
+        provider="alpha_vantage_calendar",
+        ticker="aapl",
+        company_name="Apple",
+        observed_event_date=date(2026, 7, 30),
+        fiscal_period_end=date(2026, 6, 30),
+        fiscal_quarter="2026-Q3",
+        eps_estimate=Decimal("1.42"),
+        time_of_day="after_market",
+        source_url="https://example.com/earnings",
+        observed_at=datetime(2026, 7, 1, 12, 0, 0),
+        raw_fields={"currency": "USD"},
+        supersedes_observation_id="alpha_vantage_calendar:AAPL:tentative",
+    )
+
+    assert observation.ticker == "AAPL"
+    assert observation.fiscal_period_end == date(2026, 6, 30)
+    assert observation.supersedes_observation_id.endswith(":tentative")
+
+
+def test_canonical_earnings_event_accepts_confirmed_date_with_observation_provenance():
+    event = CanonicalEarningsEvent(
+        event_id="AAPL:2026-06-30",
+        ticker="AAPL",
+        fiscal_period_end=date(2026, 6, 30),
+        event_date=date(2026, 7, 30),
+        candidate_dates=[date(2026, 7, 30), date(2026, 7, 30)],
+        status=EarningsReconciliationStatus.CONFIRMED,
+        date_confidence=EarningsDateConfidence.HIGH,
+        observation_ids=["finnhub:1", "alpha-vantage:1"],
+        reconciled_at=datetime(2026, 7, 1, 12, 0, 0),
+    )
+
+    assert event.candidate_dates == [date(2026, 7, 30)]
+
+
+def test_canonical_earnings_event_rejects_silent_winner_for_conflict():
+    with pytest.raises(ValueError, match="must not select"):
+        CanonicalEarningsEvent(
+            event_id="AAPL:2026-06-30",
+            ticker="AAPL",
+            fiscal_period_end=date(2026, 6, 30),
+            event_date=date(2026, 7, 30),
+            candidate_dates=[date(2026, 7, 30), date(2026, 8, 1)],
+            status=EarningsReconciliationStatus.CONFLICTING,
+            date_confidence=EarningsDateConfidence.CONFLICTING,
+            observation_ids=["finnhub:1", "alpha-vantage:1"],
+            reconciled_at=datetime(2026, 7, 1, 12, 0, 0),
+        )
 
 
 def test_collection_manifest_s3_key_uses_daily_partition():

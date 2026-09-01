@@ -319,6 +319,92 @@ class EarningsEvent(BaseModel):
         return validate_ticker(value)
 
 
+class EarningsReconciliationStatus(str, Enum):
+    CONFIRMED = "confirmed"
+    COMPANY_CONFIRMED = "company_confirmed"
+    SINGLE_SOURCE = "single_source"
+    CONFLICTING = "conflicting"
+
+
+class EarningsDateConfidence(str, Enum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+    CONFLICTING = "conflicting"
+
+
+class EarningsProviderObservation(BaseModel):
+    """Immutable statement by one provider about one earnings event."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    observation_id: str = Field(..., min_length=1, max_length=200)
+    provider: str = Field(..., min_length=1, max_length=100)
+    ticker: str
+    company_name: Optional[str] = Field(default=None, max_length=300)
+    observed_event_date: date
+    fiscal_period_end: Optional[date] = None
+    fiscal_quarter: Optional[str] = Field(default=None, max_length=30)
+    eps_estimate: Optional[Decimal] = None
+    revenue_estimate: Optional[Decimal] = None
+    time_of_day: Optional[Literal["before_market", "after_market"]] = None
+    source_url: Optional[str] = Field(default=None, max_length=2000)
+    observed_at: datetime
+    raw_fields: dict[str, Any] = Field(default_factory=dict)
+    supersedes_observation_id: Optional[str] = Field(default=None, max_length=200)
+
+    @field_validator("ticker")
+    @classmethod
+    def validate_ticker_field(cls, value: str) -> str:
+        return validate_ticker(value)
+
+
+class CanonicalEarningsEvent(BaseModel):
+    """Reconciled event that retains every contributing provider observation."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    event_id: str = Field(..., min_length=1, max_length=200)
+    ticker: str
+    company_name: Optional[str] = Field(default=None, max_length=300)
+    fiscal_period_end: Optional[date] = None
+    fiscal_quarter: Optional[str] = Field(default=None, max_length=30)
+    event_date: Optional[date] = None
+    candidate_dates: list[date] = Field(default_factory=list, max_length=10)
+    status: EarningsReconciliationStatus
+    date_confidence: EarningsDateConfidence
+    observation_ids: list[str] = Field(..., min_length=1, max_length=20)
+    company_evidence_urls: list[str] = Field(default_factory=list, max_length=10)
+    supersedes_event_id: Optional[str] = Field(default=None, max_length=200)
+    reconciled_at: datetime
+
+    @field_validator("ticker")
+    @classmethod
+    def validate_ticker_field(cls, value: str) -> str:
+        return validate_ticker(value)
+
+    @field_validator("candidate_dates")
+    @classmethod
+    def normalize_candidate_dates(cls, value: list[date]) -> list[date]:
+        return sorted(set(value))
+
+    @model_validator(mode="after")
+    def validate_reconciliation_state(self) -> "CanonicalEarningsEvent":
+        if self.status == EarningsReconciliationStatus.CONFLICTING:
+            if self.event_date is not None:
+                raise ValueError("Conflicting earnings events must not select an event_date")
+            if len(self.candidate_dates) < 2:
+                raise ValueError("Conflicting earnings events require at least two candidate dates")
+            if self.date_confidence != EarningsDateConfidence.CONFLICTING:
+                raise ValueError("Conflicting earnings events require conflicting confidence")
+            return self
+        if self.event_date is None:
+            raise ValueError("Non-conflicting earnings events require an event_date")
+        if self.candidate_dates and self.candidate_dates != [self.event_date]:
+            raise ValueError("Resolved earnings events may contain only their event_date")
+        if self.date_confidence == EarningsDateConfidence.CONFLICTING:
+            raise ValueError("Resolved earnings events cannot have conflicting confidence")
+        return self
+
+
 class DividendEvent(BaseModel):
     ticker: str
     ex_dividend_date: date

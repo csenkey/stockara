@@ -41,8 +41,12 @@ tests, deployment, and production verification requirements are satisfied.
   - The merged normalized artifact contains 373 events for 907 active tickers,
     including 36 events from 2026-09-01 through 2026-09-08. Provider-date
     conflicts remain explicit and are addressed by EARN-2.2 through EARN-2.5.
-- [ ] EARN-2.2 Define provider-observation and canonical-event schemas with
+- [x] EARN-2.2 Define provider-observation and canonical-event schemas with
   confidence, fiscal-period identity, supersession, and conflict provenance.
+  - `EarningsProviderObservation` retains immutable provider fields, fiscal
+    identity, observation time, raw data, and supersession lineage.
+  - `CanonicalEarningsEvent` requires observation provenance and rejects a
+    selected date whenever provider dates remain conflicting.
 - [ ] EARN-2.3 Merge Finnhub and Alpha Vantage observations without
   last-write-wins; add exact-match, single-source, and conflicting-date tests.
 - [ ] EARN-2.4 Add bounded yfinance/company-source confirmation for conflicting
