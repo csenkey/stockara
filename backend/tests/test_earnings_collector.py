@@ -13,6 +13,7 @@ from backend.src.collectors.earnings_collector import (
     ManifestTaskRun,
     _complete_manifest_task_run,
     enrich_price_reaction,
+    fetch_alpha_vantage_earnings_calendar_events,
     fetch_alpha_vantage_earnings_events,
     fetch_earnings_calendar_events,
     fetch_earnings_events,
@@ -185,6 +186,112 @@ def test_fetch_alpha_vantage_earnings_events_treats_provider_error_as_empty(
     events = fetch_alpha_vantage_earnings_events("aapl")
 
     assert events == []
+
+
+@patch("backend.src.collectors.earnings_collector.requests.get")
+def test_fetch_alpha_vantage_global_calendar_uses_one_request_and_captures_raw_rows(
+    mock_get, monkeypatch
+):
+    monkeypatch.setenv("ALPHA_VANTAGE_API_KEY", "test-alpha-key")
+    from backend.src.services.secrets import get_provider_api_key
+
+    get_provider_api_key.cache_clear()
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.text = "\n".join(
+        [
+            "symbol,name,reportDate,fiscalDateEnding,estimate,currency",
+            "AAPL,Apple Inc.,2026-07-30,2026-06-30,1.42,USD",
+            "MSFT,Microsoft Corp.,2026-07-31,2026-06-30,3.12,USD",
+            "AAPL,Apple Inc.,2027-01-30,2026-12-31,1.70,USD",
+        ]
+    )
+    mock_get.return_value = response
+    provider_events: list[dict] = []
+    provider_attempts: dict[str, dict] = {}
+
+    class FrozenDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 6, 29)
+
+    with (
+        patch("backend.src.collectors.earnings_collector.date", FrozenDate),
+        patch(
+            "backend.src.collectors.earnings_collector._ALPHA_VANTAGE_EARNINGS_CALL_COUNT",
+            0,
+        ),
+        patch(
+            "backend.src.collectors.earnings_collector._ALPHA_VANTAGE_EARNINGS_CALL_BUDGET",
+            20,
+        ),
+        patch(
+            "backend.src.collectors.earnings_collector._ALPHA_VANTAGE_EARNINGS_QUOTA_EXHAUSTED",
+            False,
+        ),
+    ):
+        events = fetch_alpha_vantage_earnings_calendar_events(
+            [{"ticker": "AAPL", "company_name": "Apple"}],
+            start_date=date(2026, 6, 29),
+            end_date=date(2026, 10, 27),
+            provider_events=provider_events,
+            provider_attempts=provider_attempts,
+        )
+
+    assert len(events) == 1
+    assert events[0]["ticker"] == "AAPL"
+    assert events[0]["event_date"] == date(2026, 7, 30)
+    assert events[0]["eps_estimate"] == Decimal("1.42")
+    assert events[0]["provider"] == "alpha_vantage_calendar"
+    assert provider_events[0]["raw_fields"]["fiscalDateEnding"] == "2026-06-30"
+    assert provider_attempts["alpha_vantage_calendar"]["raw_event_count"] == 3
+    mock_get.assert_called_once()
+    params = mock_get.call_args.kwargs["params"]
+    assert params["function"] == "EARNINGS_CALENDAR"
+    assert params["horizon"] == "6month"
+    assert "symbol" not in params
+
+
+@patch(
+    "backend.src.collectors.earnings_collector.fetch_alpha_vantage_earnings_calendar_events"
+)
+@patch("backend.src.collectors.earnings_collector.requests.get")
+def test_fetch_calendar_retains_provider_conflicts_without_duplicate_exact_dates(
+    mock_get, mock_alpha, monkeypatch
+):
+    monkeypatch.setenv("FINNHUB_KEY", "test-finnhub-key")
+    from backend.src.services.secrets import get_provider_api_key
+
+    get_provider_api_key.cache_clear()
+    mock_alpha.return_value = [
+        {
+            "ticker": "AAPL",
+            "event_date": date(2026, 7, 1),
+            "provider": "alpha_vantage_calendar",
+        },
+        {
+            "ticker": "AAPL",
+            "event_date": date(2026, 7, 2),
+            "provider": "alpha_vantage_calendar",
+        },
+    ]
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {
+        "earningsCalendar": [{"symbol": "AAPL", "date": "2026-07-01"}]
+    }
+    mock_get.return_value = response
+
+    events = fetch_earnings_calendar_events(
+        [{"ticker": "AAPL", "company_name": "Apple"}],
+        start_date=date(2026, 6, 29),
+        end_date=date(2026, 7, 15),
+    )
+
+    assert [(event["event_date"], event["provider"]) for event in events] == [
+        (date(2026, 7, 1), "finnhub"),
+        (date(2026, 7, 2), "alpha_vantage_calendar"),
+    ]
 
 
 @patch("backend.src.collectors.earnings_collector.requests.get")

@@ -1,5 +1,8 @@
 """Earnings calendar collector for Phase 1 signals."""
 
+import csv
+import io
+import json
 import os
 import re
 import time
@@ -47,6 +50,9 @@ DEFAULT_FALLBACK_MAX_TICKERS = int(
 MAX_TICKERS_PER_RUN = 50
 FINNHUB_EARNINGS_CALENDAR_URL = "https://finnhub.io/api/v1/calendar/earnings"
 ALPHA_VANTAGE_URL = "https://www.alphavantage.co/query"
+ALPHA_VANTAGE_EARNINGS_CALENDAR_SOURCE_URL = (
+    "https://www.alphavantage.co/documentation/#earnings-calendar"
+)
 DEFAULT_ALPHA_VANTAGE_REQUEST_INTERVAL_SECONDS = float(
     os.environ.get("EARNINGS_ALPHA_VANTAGE_REQUEST_INTERVAL_SECONDS", "0")
 )
@@ -774,6 +780,155 @@ def fetch_alpha_vantage_earnings_events(
     return events
 
 
+def fetch_alpha_vantage_earnings_calendar_events(
+    stocks: list[dict[str, Any]],
+    lookahead_days: int = DEFAULT_LOOKAHEAD_DAYS,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    provider_events: list[dict[str, Any]] | None = None,
+    provider_attempts: dict[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch the global Alpha Vantage upcoming-earnings CSV in one request."""
+    api_key = _alpha_vantage_api_key()
+    if not api_key:
+        _record_provider_attempt(
+            provider_attempts,
+            "alpha_vantage_calendar",
+            "unconfigured",
+        )
+        logger.warning(
+            "alpha_vantage_api_key_not_configured_for_global_earnings_calendar"
+        )
+        return []
+    if _ALPHA_VANTAGE_EARNINGS_QUOTA_EXHAUSTED:
+        _record_provider_attempt(
+            provider_attempts,
+            "alpha_vantage_calendar",
+            "rate_limited",
+        )
+        return []
+    if _ALPHA_VANTAGE_EARNINGS_CALL_COUNT >= _ALPHA_VANTAGE_EARNINGS_CALL_BUDGET:
+        _record_provider_attempt(
+            provider_attempts,
+            "alpha_vantage_calendar",
+            "budget_exhausted",
+        )
+        return []
+
+    today = date.today()
+    range_start = start_date or today
+    range_end = end_date or today + timedelta(days=max(lookahead_days, 1))
+    horizon_days = max((range_end - today).days, 1)
+    if horizon_days <= 92:
+        horizon = "3month"
+    elif horizon_days <= 183:
+        horizon = "6month"
+    else:
+        horizon = "12month"
+    try:
+        _pace_alpha_vantage_request()
+        _record_alpha_vantage_call()
+        response = requests.get(
+            ALPHA_VANTAGE_URL,
+            params={
+                "function": "EARNINGS_CALENDAR",
+                "horizon": horizon,
+                "apikey": api_key,
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        status = "rate_limited" if "429" in str(exc) else "failed"
+        _record_provider_attempt(
+            provider_attempts,
+            "alpha_vantage_calendar",
+            status,
+            error=exc,
+        )
+        logger.warning(
+            "alpha_vantage_global_earnings_calendar_unavailable",
+            error=_safe_provider_error(exc),
+        )
+        return []
+
+    body = response.text.strip()
+    provider_error = _alpha_vantage_text_error(body)
+    if provider_error:
+        if _is_alpha_vantage_quota_error(provider_error):
+            _mark_alpha_vantage_quota_exhausted()
+        _record_provider_attempt(
+            provider_attempts,
+            "alpha_vantage_calendar",
+            (
+                "rate_limited"
+                if _is_alpha_vantage_quota_error(provider_error)
+                else "failed"
+            ),
+            error=provider_error,
+        )
+        return []
+
+    active_by_ticker = {
+        str(stock.get("ticker", "")).upper(): stock
+        for stock in stocks
+        if stock.get("ticker")
+    }
+    raw_rows = list(csv.DictReader(io.StringIO(body)))
+    events: list[dict[str, Any]] = []
+    for row in raw_rows:
+        ticker = str(row.get("symbol") or "").strip().upper()
+        if ticker not in active_by_ticker:
+            continue
+        event_date = _normalize_event_date(row.get("reportDate"))
+        if event_date is None or event_date < range_start or event_date > range_end:
+            continue
+        stock = active_by_ticker[ticker]
+        if provider_events is not None:
+            provider_events.append(
+                _raw_provider_event(
+                    provider="alpha_vantage_calendar",
+                    ticker=ticker,
+                    company_name=stock.get("company_name") or row.get("name"),
+                    event_date=event_date,
+                    source_url=ALPHA_VANTAGE_EARNINGS_CALENDAR_SOURCE_URL,
+                    raw_fields={
+                        str(key): _serialize_raw_value(value)
+                        for key, value in row.items()
+                    },
+                )
+            )
+        events.append(
+            {
+                "ticker": ticker,
+                "company_name": stock.get("company_name") or row.get("name"),
+                "event_date": event_date,
+                "eps_estimate": _to_decimal(row.get("estimate")),
+                "reported_eps": None,
+                "surprise_percent": None,
+                "time_of_day": None,
+                "is_upcoming": event_date >= today,
+                "provider": "alpha_vantage_calendar",
+                "source_url": ALPHA_VANTAGE_EARNINGS_CALENDAR_SOURCE_URL,
+                "collected_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+    _record_provider_attempt(
+        provider_attempts,
+        "alpha_vantage_calendar",
+        "success" if events else "empty",
+        event_count=len(events),
+        raw_event_count=len(raw_rows),
+    )
+    logger.info(
+        "alpha_vantage_global_earnings_calendar_fetched",
+        count=len(events),
+        raw_event_count=len(raw_rows),
+        horizon=horizon,
+    )
+    return events
+
+
 def fetch_earnings_calendar_events(
     stocks: list[dict[str, Any]],
     lookahead_days: int = DEFAULT_LOOKAHEAD_DAYS,
@@ -782,16 +937,24 @@ def fetch_earnings_calendar_events(
     provider_events: list[dict[str, Any]] | None = None,
     provider_attempts: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Fetch upcoming earnings in one date-range request, filtered to watchlist."""
+    """Fetch upcoming earnings from global providers, filtered to watchlist."""
+    today = date.today()
+    range_start = start_date or today
+    range_end = end_date or today + timedelta(days=max(lookahead_days, 1))
+    alpha_events = fetch_alpha_vantage_earnings_calendar_events(
+        stocks,
+        lookahead_days=lookahead_days,
+        start_date=range_start,
+        end_date=range_end,
+        provider_events=provider_events,
+        provider_attempts=provider_attempts,
+    )
     api_key = _finnhub_api_key()
     if not api_key:
         _record_provider_attempt(provider_attempts, "finnhub", "unconfigured")
         logger.warning("finnhub_api_key_not_configured_for_earnings_calendar")
-        return []
+        return alpha_events
 
-    today = date.today()
-    range_start = start_date or today
-    range_end = end_date or today + timedelta(days=max(lookahead_days, 1))
     try:
         response = requests.get(
             FINNHUB_EARNINGS_CALENDAR_URL,
@@ -816,7 +979,7 @@ def fetch_earnings_calendar_events(
             "finnhub_earnings_calendar_unavailable",
             error=_safe_provider_error(exc),
         )
-        return []
+        return alpha_events
     active_by_ticker = {
         str(stock.get("ticker", "")).upper(): stock
         for stock in stocks
@@ -831,7 +994,7 @@ def fetch_earnings_calendar_events(
             "failed",
             error="earningsCalendar payload was not a list",
         )
-        return []
+        return alpha_events
     for row in raw_rows:
         ticker = str(row.get("symbol", "")).upper()
         if ticker not in active_by_ticker:
@@ -869,6 +1032,15 @@ def fetch_earnings_calendar_events(
                 "collected_at": datetime.now(timezone.utc).isoformat(),
             }
         )
+    # Preserve conflicts as separate dates. For an exact ticker/date match, keep
+    # Finnhub as the compatibility row while both raw provider observations are
+    # retained for the canonical reconciliation milestone.
+    finnhub_keys = {(event["ticker"], event["event_date"]) for event in events}
+    events.extend(
+        event
+        for event in alpha_events
+        if (event["ticker"], event["event_date"]) not in finnhub_keys
+    )
     logger.info("earnings_calendar_events_fetched", count=len(events))
     _record_provider_attempt(
         provider_attempts,
@@ -965,6 +1137,21 @@ def _alpha_vantage_payload_error(payload: dict[str, Any]) -> str | None:
         if value:
             return str(value)
     return None
+
+
+def _alpha_vantage_text_error(body: str) -> str | None:
+    stripped = body.lstrip()
+    if not stripped.startswith("{"):
+        return None
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        return "Alpha Vantage returned malformed JSON instead of calendar CSV"
+    if not isinstance(payload, dict):
+        return "Alpha Vantage returned unexpected JSON instead of calendar CSV"
+    return _alpha_vantage_payload_error(payload) or (
+        "Alpha Vantage returned JSON instead of calendar CSV"
+    )
 
 
 def _raw_provider_event(
