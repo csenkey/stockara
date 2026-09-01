@@ -56,6 +56,11 @@ tests, deployment, and production verification requirements are satisfied.
   - Reconciliation status, confidence, fiscal identity, estimates, canonical
     IDs, candidate dates, and observation provenance persist to DynamoDB and the
     normalized calendar artifact.
+  - Commit `f6486c0`; deployment run `33500610382` and full-watchlist refresh
+    run `33500977465` passed on 2026-09-01. The public artifact contained 371
+    single-source rows and one two-date conflict (`ARQQ`, 2026-12-07 versus
+    2026-12-09), with zero duplicate provider/date rows. Provider health
+    correctly reported 250 Alpha Vantage and 123 Finnhub watchlist events.
 - [ ] EARN-2.4 Add bounded yfinance/company-source confirmation for conflicting
   events occurring within the next seven days.
 - [ ] EARN-2.5 Expose conflict and coverage metrics, artifact warnings, and UI
