@@ -47,8 +47,15 @@ tests, deployment, and production verification requirements are satisfied.
     identity, observation time, raw data, and supersession lineage.
   - `CanonicalEarningsEvent` requires observation provenance and rejects a
     selected date whenever provider dates remain conflicting.
-- [ ] EARN-2.3 Merge Finnhub and Alpha Vantage observations without
+- [x] EARN-2.3 Merge Finnhub and Alpha Vantage observations without
   last-write-wins; add exact-match, single-source, and conflicting-date tests.
+  - Exact provider date matches collapse to one `confirmed` event while keeping
+    both observation IDs. Dates from different providers within the configured
+    14-day window remain explicit `conflicting` candidates; well-separated
+    quarterly dates remain independent `single_source` events.
+  - Reconciliation status, confidence, fiscal identity, estimates, canonical
+    IDs, candidate dates, and observation provenance persist to DynamoDB and the
+    normalized calendar artifact.
 - [ ] EARN-2.4 Add bounded yfinance/company-source confirmation for conflicting
   events occurring within the next seven days.
 - [ ] EARN-2.5 Expose conflict and coverage metrics, artifact warnings, and UI

@@ -368,6 +368,35 @@ def test_put_earnings_event_writes_date_indexed_item_and_status():
     )
 
 
+def test_put_earnings_event_persists_reconciliation_provenance():
+    table = MagicMock()
+    store = _TestableDynamoStore(table)
+    store._put_system_status = MagicMock()
+
+    store.put_earnings_event(
+        {
+            "ticker": "AAPL",
+            "event_date": date(2026, 7, 30),
+            "is_upcoming": True,
+            "revenue_estimate": Decimal("90000000000"),
+            "fiscal_period_end": date(2026, 6, 30),
+            "fiscal_quarter": "2026-Q2",
+            "canonical_event_id": "AAPL:2026-07-30",
+            "provider_observation_id": "finnhub:AAPL:2026-07-30:2026-Q3",
+            "reconciliation_status": "confirmed",
+            "date_confidence": "high",
+            "candidate_dates": [date(2026, 7, 30)],
+            "observation_ids": ["finnhub:1", "alpha-vantage:1"],
+        }
+    )
+
+    item = table.put_item.call_args.kwargs["Item"]
+    assert item["revenue_estimate"] == Decimal("90000000000")
+    assert item["fiscal_period_end"] == "2026-06-30"
+    assert item["candidate_dates"] == ["2026-07-30"]
+    assert item["observation_ids"] == ["finnhub:1", "alpha-vantage:1"]
+
+
 def test_upcoming_earnings_queries_gsi_and_filters_past_events():
     store = _TestableDynamoStore()
     store._query = MagicMock(

@@ -47,6 +47,9 @@ DEFAULT_LIMIT = int(os.environ.get("EARNINGS_CALENDAR_YFINANCE_LIMIT", "32"))
 DEFAULT_FALLBACK_MAX_TICKERS = int(
     os.environ.get("EARNINGS_CALENDAR_FALLBACK_MAX_TICKERS", "25")
 )
+DEFAULT_EARNINGS_CONFLICT_WINDOW_DAYS = int(
+    os.environ.get("EARNINGS_CONFLICT_WINDOW_DAYS", "14")
+)
 MAX_TICKERS_PER_RUN = 50
 FINNHUB_EARNINGS_CALENDAR_URL = "https://finnhub.io/api/v1/calendar/earnings"
 ALPHA_VANTAGE_URL = "https://www.alphavantage.co/query"
@@ -295,19 +298,18 @@ def _collect_per_ticker(
     include_range_calendar: bool = True,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     failed_tickers: list[str] = []
-    events_by_key: dict[tuple[str, date], dict[str, Any]] = {}
+    collected_events: list[dict[str, Any]] = []
     if include_range_calendar:
         try:
-            for earnings_event in fetch_earnings_calendar_events(
-                selected,
-                start_date=max(range_start, date.today()),
-                end_date=range_end,
-                provider_events=provider_events,
-                provider_attempts=provider_attempts,
-            ):
-                events_by_key[
-                    (earnings_event["ticker"], earnings_event["event_date"])
-                ] = earnings_event
+            collected_events.extend(
+                fetch_earnings_calendar_events(
+                    selected,
+                    start_date=max(range_start, date.today()),
+                    end_date=range_end,
+                    provider_events=provider_events,
+                    provider_attempts=provider_attempts,
+                )
+            )
         except Exception as exc:
             log.warning("earnings_calendar_range_collection_failed", error=str(exc))
 
@@ -323,17 +325,15 @@ def _collect_per_ticker(
                 provider_events=provider_events,
                 provider_attempts=provider_attempts,
             )
-            for earnings_event in events:
-                events_by_key[
-                    (earnings_event["ticker"], earnings_event["event_date"])
-                ] = earnings_event
+            collected_events.extend(events)
         except Exception as exc:
             failed_tickers.append(ticker)
             log.warning("earnings_ticker_collection_failed", ticker=ticker, error=str(exc))
+    reconciled_events = reconcile_earnings_events(collected_events)
     enriched_events = [
         enrich_price_reaction(earnings_event)
         for earnings_event in sorted(
-            events_by_key.values(),
+            reconciled_events,
             key=lambda item: (item["ticker"], item["event_date"]),
         )
     ]
@@ -904,11 +904,24 @@ def fetch_alpha_vantage_earnings_calendar_events(
                 "company_name": stock.get("company_name") or row.get("name"),
                 "event_date": event_date,
                 "eps_estimate": _to_decimal(row.get("estimate")),
+                "revenue_estimate": None,
                 "reported_eps": None,
                 "surprise_percent": None,
                 "time_of_day": _normalize_time_of_day(row.get("timeOfTheDay")),
+                "fiscal_period_end": _normalize_event_date(
+                    row.get("fiscalDateEnding")
+                ),
+                "fiscal_quarter": _calendar_quarter_label(
+                    _normalize_event_date(row.get("fiscalDateEnding"))
+                ),
                 "is_upcoming": event_date >= today,
                 "provider": "alpha_vantage_calendar",
+                "provider_observation_id": _provider_observation_id(
+                    "alpha_vantage_calendar",
+                    ticker,
+                    event_date,
+                    row.get("fiscalDateEnding"),
+                ),
                 "source_url": ALPHA_VANTAGE_EARNINGS_CALENDAR_SOURCE_URL,
                 "collected_at": datetime.now(timezone.utc).isoformat(),
             }
@@ -953,7 +966,7 @@ def fetch_earnings_calendar_events(
     if not api_key:
         _record_provider_attempt(provider_attempts, "finnhub", "unconfigured")
         logger.warning("finnhub_api_key_not_configured_for_earnings_calendar")
-        return alpha_events
+        return reconcile_earnings_events(alpha_events)
 
     try:
         response = requests.get(
@@ -979,7 +992,7 @@ def fetch_earnings_calendar_events(
             "finnhub_earnings_calendar_unavailable",
             error=_safe_provider_error(exc),
         )
-        return alpha_events
+        return reconcile_earnings_events(alpha_events)
     active_by_ticker = {
         str(stock.get("ticker", "")).upper(): stock
         for stock in stocks
@@ -994,7 +1007,7 @@ def fetch_earnings_calendar_events(
             "failed",
             error="earningsCalendar payload was not a list",
         )
-        return alpha_events
+        return reconcile_earnings_events(alpha_events)
     for row in raw_rows:
         ticker = str(row.get("symbol", "")).upper()
         if ticker not in active_by_ticker:
@@ -1023,25 +1036,26 @@ def fetch_earnings_calendar_events(
                 "company_name": stock.get("company_name"),
                 "event_date": event_date,
                 "eps_estimate": _to_decimal(row.get("epsEstimate")),
+                "revenue_estimate": _to_decimal(row.get("revenueEstimate")),
                 "reported_eps": _to_decimal(row.get("epsActual")),
                 "surprise_percent": _to_decimal(row.get("surprisePercent")),
                 "time_of_day": _normalize_time_of_day(row.get("hour")),
+                "fiscal_period_end": None,
+                "fiscal_quarter": _finnhub_fiscal_quarter(row),
                 "is_upcoming": event_date >= today,
                 "provider": "finnhub",
+                "provider_observation_id": _provider_observation_id(
+                    "finnhub",
+                    ticker,
+                    event_date,
+                    _finnhub_fiscal_quarter(row),
+                ),
                 "source_url": "https://finnhub.io/calendar/earnings",
                 "collected_at": datetime.now(timezone.utc).isoformat(),
             }
         )
-    # Preserve conflicts as separate dates. For an exact ticker/date match, keep
-    # Finnhub as the compatibility row while both raw provider observations are
-    # retained for the canonical reconciliation milestone.
     finnhub_event_count = len(events)
-    finnhub_keys = {(event["ticker"], event["event_date"]) for event in events}
-    events.extend(
-        event
-        for event in alpha_events
-        if (event["ticker"], event["event_date"]) not in finnhub_keys
-    )
+    events = reconcile_earnings_events([*events, *alpha_events])
     logger.info("earnings_calendar_events_fetched", count=len(events))
     _record_provider_attempt(
         provider_attempts,
@@ -1051,6 +1065,209 @@ def fetch_earnings_calendar_events(
         raw_event_count=len(raw_rows),
     )
     return events
+
+
+def reconcile_earnings_events(
+    events: list[dict[str, Any]],
+    *,
+    conflict_window_days: int = DEFAULT_EARNINGS_CONFLICT_WINDOW_DAYS,
+) -> list[dict[str, Any]]:
+    """Reconcile provider rows without choosing a silent winner for conflicts."""
+    by_ticker: dict[str, list[dict[str, Any]]] = {}
+    for event in events:
+        ticker = str(event.get("ticker") or "").upper()
+        event_date = _normalize_event_date(event.get("event_date"))
+        if not ticker or event_date is None:
+            continue
+        normalized = {**event, "ticker": ticker, "event_date": event_date}
+        normalized.setdefault(
+            "provider_observation_id",
+            _provider_observation_id(
+                str(normalized.get("provider") or "unknown"),
+                ticker,
+                event_date,
+                normalized.get("fiscal_period_end")
+                or normalized.get("fiscal_quarter"),
+            ),
+        )
+        by_ticker.setdefault(ticker, []).append(normalized)
+
+    reconciled: list[dict[str, Any]] = []
+    window = timedelta(days=max(conflict_window_days, 0))
+    for ticker, ticker_events in sorted(by_ticker.items()):
+        deduplicated = _deduplicate_provider_events(ticker_events)
+        clusters: list[list[dict[str, Any]]] = []
+        for event in sorted(deduplicated, key=lambda item: item["event_date"]):
+            if (
+                not clusters
+                or event["event_date"] - clusters[-1][-1]["event_date"] > window
+            ):
+                clusters.append([event])
+            else:
+                clusters[-1].append(event)
+        for cluster in clusters:
+            dates = sorted({event["event_date"] for event in cluster})
+            providers = {str(event.get("provider") or "unknown") for event in cluster}
+            observation_ids = sorted(
+                {
+                    observation_id
+                    for event in cluster
+                    for observation_id in _event_observation_ids(event)
+                }
+            )
+            if len(dates) == 1:
+                previously_confirmed = any(
+                    event.get("reconciliation_status")
+                    in {"confirmed", "company_confirmed"}
+                    for event in cluster
+                )
+                status = (
+                    "confirmed"
+                    if len(providers) > 1 or previously_confirmed
+                    else "single_source"
+                )
+                confidence = "high" if status == "confirmed" else "low"
+                canonical = _merge_exact_date_events(cluster)
+                reconciled.append(
+                    {
+                        **canonical,
+                        "canonical_event_id": f"{ticker}:{dates[0].isoformat()}",
+                        "reconciliation_status": status,
+                        "date_confidence": confidence,
+                        "candidate_dates": dates,
+                        "observation_ids": observation_ids,
+                    }
+                )
+                continue
+            if len(providers) > 1:
+                date_identity = ":".join(item.isoformat() for item in dates)
+                conflict_id = f"{ticker}:conflict:{date_identity}"
+                events_by_date: dict[date, list[dict[str, Any]]] = {}
+                for event in cluster:
+                    events_by_date.setdefault(event["event_date"], []).append(event)
+                for candidate_date in dates:
+                    event = _merge_exact_date_events(events_by_date[candidate_date])
+                    reconciled.append(
+                        {
+                            **event,
+                            "canonical_event_id": conflict_id,
+                            "reconciliation_status": "conflicting",
+                            "date_confidence": "conflicting",
+                            "candidate_dates": dates,
+                            "observation_ids": observation_ids,
+                        }
+                    )
+                continue
+            for event in cluster:
+                reconciled.append(
+                    {
+                        **event,
+                        "canonical_event_id": (
+                            f"{ticker}:{event['event_date'].isoformat()}"
+                        ),
+                        "reconciliation_status": "single_source",
+                        "date_confidence": "low",
+                        "candidate_dates": [event["event_date"]],
+                        "observation_ids": _event_observation_ids(event),
+                    }
+                )
+    return sorted(
+        reconciled,
+        key=lambda item: (
+            item["ticker"],
+            item["event_date"],
+            str(item.get("provider") or ""),
+        ),
+    )
+
+
+def _deduplicate_provider_events(
+    events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    by_key: dict[tuple[str, date], dict[str, Any]] = {}
+    for event in events:
+        key = (str(event.get("provider") or "unknown"), event["event_date"])
+        existing = by_key.get(key)
+        if existing is None or _event_completeness(event) > _event_completeness(existing):
+            by_key[key] = event
+    return list(by_key.values())
+
+
+def _event_completeness(event: dict[str, Any]) -> int:
+    return sum(
+        event.get(field) is not None
+        for field in (
+            "fiscal_period_end",
+            "fiscal_quarter",
+            "eps_estimate",
+            "revenue_estimate",
+            "time_of_day",
+        )
+    )
+
+
+def _event_observation_ids(event: dict[str, Any]) -> list[str]:
+    identifiers = {
+        str(value)
+        for value in event.get("observation_ids", [])
+        if str(value).strip()
+    }
+    provider_id = str(event.get("provider_observation_id") or "").strip()
+    if provider_id:
+        identifiers.add(provider_id)
+    return sorted(identifiers)
+
+
+def _merge_exact_date_events(events: list[dict[str, Any]]) -> dict[str, Any]:
+    ordered = sorted(
+        events,
+        key=lambda event: (
+            0 if event.get("provider") == "finnhub" else 1,
+            -_event_completeness(event),
+        ),
+    )
+    merged = dict(ordered[0])
+    for event in ordered[1:]:
+        for field in (
+            "company_name",
+            "fiscal_period_end",
+            "fiscal_quarter",
+            "eps_estimate",
+            "revenue_estimate",
+            "reported_eps",
+            "surprise_percent",
+            "time_of_day",
+        ):
+            if merged.get(field) is None and event.get(field) is not None:
+                merged[field] = event[field]
+    return merged
+
+
+def _provider_observation_id(
+    provider: str,
+    ticker: str,
+    event_date: date,
+    fiscal_identity: object | None,
+) -> str:
+    identity = str(fiscal_identity or "unknown").strip().replace(" ", "-")
+    return f"{provider}:{ticker}:{event_date.isoformat()}:{identity}"
+
+
+def _calendar_quarter_label(value: date | None) -> str | None:
+    if value is None:
+        return None
+    return f"{value.year}-Q{((value.month - 1) // 3) + 1}"
+
+
+def _finnhub_fiscal_quarter(row: dict[str, Any]) -> str | None:
+    year = row.get("year")
+    quarter = row.get("quarter")
+    if year in (None, "") or quarter in (None, ""):
+        return None
+    try:
+        return f"{int(year)}-Q{int(quarter)}"
+    except (TypeError, ValueError):
+        return None
 
 
 def _finnhub_api_key() -> str | None:

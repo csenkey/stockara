@@ -297,28 +297,6 @@ class NewsSummary(BaseModel):
         return [validate_ticker(t) for t in value]
 
 
-class EarningsEvent(BaseModel):
-    ticker: str
-    event_date: date
-    company_name: Optional[str] = None
-    eps_estimate: Optional[Decimal] = None
-    reported_eps: Optional[Decimal] = None
-    surprise_percent: Optional[Decimal] = None
-    time_of_day: Optional[str] = None
-    is_upcoming: bool
-    price_before: Optional[Decimal] = None
-    price_after: Optional[Decimal] = None
-    post_earnings_price_move_percent: Optional[Decimal] = None
-    provider: str = "yfinance"
-    source_url: Optional[str] = None
-    collected_at: Optional[datetime] = None
-
-    @field_validator("ticker")
-    @classmethod
-    def validate_ticker_field(cls, value: str) -> str:
-        return validate_ticker(value)
-
-
 class EarningsReconciliationStatus(str, Enum):
     CONFIRMED = "confirmed"
     COMPANY_CONFIRMED = "company_confirmed"
@@ -331,6 +309,37 @@ class EarningsDateConfidence(str, Enum):
     MEDIUM = "medium"
     LOW = "low"
     CONFLICTING = "conflicting"
+
+
+class EarningsEvent(BaseModel):
+    ticker: str
+    event_date: date
+    company_name: Optional[str] = None
+    eps_estimate: Optional[Decimal] = None
+    revenue_estimate: Optional[Decimal] = None
+    reported_eps: Optional[Decimal] = None
+    surprise_percent: Optional[Decimal] = None
+    time_of_day: Optional[str] = None
+    fiscal_period_end: Optional[date] = None
+    fiscal_quarter: Optional[str] = None
+    is_upcoming: bool
+    price_before: Optional[Decimal] = None
+    price_after: Optional[Decimal] = None
+    post_earnings_price_move_percent: Optional[Decimal] = None
+    provider: str = "yfinance"
+    provider_observation_id: Optional[str] = None
+    canonical_event_id: Optional[str] = None
+    reconciliation_status: Optional[EarningsReconciliationStatus] = None
+    date_confidence: Optional[EarningsDateConfidence] = None
+    candidate_dates: list[date] = Field(default_factory=list)
+    observation_ids: list[str] = Field(default_factory=list)
+    source_url: Optional[str] = None
+    collected_at: Optional[datetime] = None
+
+    @field_validator("ticker")
+    @classmethod
+    def validate_ticker_field(cls, value: str) -> str:
+        return validate_ticker(value)
 
 
 class EarningsProviderObservation(BaseModel):

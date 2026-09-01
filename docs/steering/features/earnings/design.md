@@ -59,6 +59,12 @@ Reconciliation rules:
 5. An updated date supersedes an earlier tentative observation without deleting
    the audit trail.
 
+The compatibility reconciler uses a configurable 14-day plausible-event window.
+Provider dates farther apart are treated as independent quarters unless fiscal
+identity or later company evidence links them. A conflicting canonical event is
+represented in the legacy date-indexed artifact by one row per candidate date;
+the rows share a canonical ID, candidate-date set, and complete observation IDs.
+
 ## Historical evidence and reactions
 
 Historical normalized rows contain estimates and actuals independently so

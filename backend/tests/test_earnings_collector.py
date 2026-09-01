@@ -18,6 +18,7 @@ from backend.src.collectors.earnings_collector import (
     fetch_earnings_calendar_events,
     fetch_earnings_events,
     handler,
+    reconcile_earnings_events,
     _select_stocks,
     _select_rotating_fallback_stocks,
 )
@@ -333,6 +334,109 @@ def test_fetch_calendar_provider_health_counts_finnhub_before_merge(
 
     assert len(events) == 2
     assert attempts["finnhub"]["event_count"] == 1
+
+
+def test_reconcile_earnings_events_confirms_exact_provider_match():
+    events = reconcile_earnings_events(
+        [
+            {
+                "ticker": "AAPL",
+                "event_date": date(2026, 7, 30),
+                "provider": "finnhub",
+                "eps_estimate": Decimal("1.40"),
+                "revenue_estimate": Decimal("90000000000"),
+            },
+            {
+                "ticker": "AAPL",
+                "event_date": date(2026, 7, 30),
+                "provider": "alpha_vantage_calendar",
+                "eps_estimate": Decimal("1.42"),
+                "fiscal_period_end": date(2026, 6, 30),
+            },
+        ]
+    )
+
+    assert len(events) == 1
+    assert events[0]["reconciliation_status"] == "confirmed"
+    assert events[0]["date_confidence"] == "high"
+    assert events[0]["candidate_dates"] == [date(2026, 7, 30)]
+    assert events[0]["fiscal_period_end"] == date(2026, 6, 30)
+    assert len(events[0]["observation_ids"]) == 2
+
+
+def test_reconcile_earnings_events_retains_close_conflicting_dates():
+    events = reconcile_earnings_events(
+        [
+            {
+                "ticker": "AAPL",
+                "event_date": date(2026, 7, 30),
+                "provider": "finnhub",
+            },
+            {
+                "ticker": "AAPL",
+                "event_date": date(2026, 8, 1),
+                "provider": "alpha_vantage_calendar",
+            },
+        ]
+    )
+
+    assert len(events) == 2
+    assert {event["event_date"] for event in events} == {
+        date(2026, 7, 30),
+        date(2026, 8, 1),
+    }
+    assert {event["reconciliation_status"] for event in events} == {"conflicting"}
+    assert events[0]["canonical_event_id"] == events[1]["canonical_event_id"]
+    assert events[0]["candidate_dates"] == [
+        date(2026, 7, 30),
+        date(2026, 8, 1),
+    ]
+
+
+def test_reconcile_earnings_events_keeps_well_separated_quarters_independent():
+    events = reconcile_earnings_events(
+        [
+            {
+                "ticker": "AAPL",
+                "event_date": date(2026, 9, 1),
+                "provider": "alpha_vantage_calendar",
+            },
+            {
+                "ticker": "AAPL",
+                "event_date": date(2026, 12, 1),
+                "provider": "finnhub",
+            },
+        ]
+    )
+
+    assert len(events) == 2
+    assert {event["reconciliation_status"] for event in events} == {
+        "single_source"
+    }
+    assert len({event["canonical_event_id"] for event in events}) == 2
+
+
+def test_reconcile_earnings_events_is_idempotent_for_confirmed_provenance():
+    once = reconcile_earnings_events(
+        [
+            {
+                "ticker": "AAPL",
+                "event_date": date(2026, 7, 30),
+                "provider": "finnhub",
+            },
+            {
+                "ticker": "AAPL",
+                "event_date": date(2026, 7, 30),
+                "provider": "alpha_vantage_calendar",
+            },
+        ]
+    )
+
+    twice = reconcile_earnings_events(once)
+
+    assert twice[0]["reconciliation_status"] == "confirmed"
+    assert twice[0]["date_confidence"] == "high"
+    assert twice[0]["observation_ids"] == once[0]["observation_ids"]
 
 
 @patch("backend.src.collectors.earnings_collector.requests.get")

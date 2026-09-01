@@ -4,6 +4,7 @@ import os
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from enum import Enum
 from typing import Any, AsyncGenerator, Iterable
 
 import boto3
@@ -585,9 +586,18 @@ class DynamoStore:
         optional_fields = (
             "company_name",
             "eps_estimate",
+            "revenue_estimate",
             "reported_eps",
             "surprise_percent",
             "time_of_day",
+            "fiscal_period_end",
+            "fiscal_quarter",
+            "provider_observation_id",
+            "canonical_event_id",
+            "reconciliation_status",
+            "date_confidence",
+            "candidate_dates",
+            "observation_ids",
             "price_before",
             "price_after",
             "post_earnings_price_move_percent",
@@ -599,6 +609,7 @@ class DynamoStore:
                 continue
             if field in {
                 "eps_estimate",
+                "revenue_estimate",
                 "reported_eps",
                 "surprise_percent",
                 "price_before",
@@ -606,6 +617,12 @@ class DynamoStore:
                 "post_earnings_price_move_percent",
             }:
                 item[field] = _decimal(value)
+            elif field == "fiscal_period_end":
+                item[field] = _date_str(value)
+            elif field == "candidate_dates":
+                item[field] = [_date_str(candidate) for candidate in value]
+            elif isinstance(value, Enum):
+                item[field] = value.value
             else:
                 item[field] = value
         self.table.put_item(Item=item)
