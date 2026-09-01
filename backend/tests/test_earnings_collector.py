@@ -200,10 +200,10 @@ def test_fetch_alpha_vantage_global_calendar_uses_one_request_and_captures_raw_r
     response.raise_for_status.return_value = None
     response.text = "\n".join(
         [
-            "symbol,name,reportDate,fiscalDateEnding,estimate,currency",
-            "AAPL,Apple Inc.,2026-07-30,2026-06-30,1.42,USD",
-            "MSFT,Microsoft Corp.,2026-07-31,2026-06-30,3.12,USD",
-            "AAPL,Apple Inc.,2027-01-30,2026-12-31,1.70,USD",
+            "symbol,name,reportDate,fiscalDateEnding,estimate,currency,timeOfTheDay",
+            "AAPL,Apple Inc.,2026-07-30,2026-06-30,1.42,USD,post-market",
+            "MSFT,Microsoft Corp.,2026-07-31,2026-06-30,3.12,USD,pre-market",
+            "AAPL,Apple Inc.,2027-01-30,2026-12-31,1.70,USD,post-market",
         ]
     )
     mock_get.return_value = response
@@ -243,6 +243,7 @@ def test_fetch_alpha_vantage_global_calendar_uses_one_request_and_captures_raw_r
     assert events[0]["event_date"] == date(2026, 7, 30)
     assert events[0]["eps_estimate"] == Decimal("1.42")
     assert events[0]["provider"] == "alpha_vantage_calendar"
+    assert events[0]["time_of_day"] == "after_market"
     assert provider_events[0]["raw_fields"]["fiscalDateEnding"] == "2026-06-30"
     assert provider_attempts["alpha_vantage_calendar"]["raw_event_count"] == 3
     mock_get.assert_called_once()
@@ -292,6 +293,46 @@ def test_fetch_calendar_retains_provider_conflicts_without_duplicate_exact_dates
         (date(2026, 7, 1), "finnhub"),
         (date(2026, 7, 2), "alpha_vantage_calendar"),
     ]
+
+
+@patch(
+    "backend.src.collectors.earnings_collector.fetch_alpha_vantage_earnings_calendar_events"
+)
+@patch("backend.src.collectors.earnings_collector.requests.get")
+def test_fetch_calendar_provider_health_counts_finnhub_before_merge(
+    mock_get, mock_alpha, monkeypatch
+):
+    monkeypatch.setenv("FINNHUB_KEY", "test-finnhub-key")
+    from backend.src.services.secrets import get_provider_api_key
+
+    get_provider_api_key.cache_clear()
+    mock_alpha.return_value = [
+        {
+            "ticker": "MSFT",
+            "event_date": date(2026, 7, 2),
+            "provider": "alpha_vantage_calendar",
+        }
+    ]
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {
+        "earningsCalendar": [{"symbol": "AAPL", "date": "2026-07-01"}]
+    }
+    mock_get.return_value = response
+    attempts: dict[str, dict] = {}
+
+    events = fetch_earnings_calendar_events(
+        [
+            {"ticker": "AAPL", "company_name": "Apple"},
+            {"ticker": "MSFT", "company_name": "Microsoft"},
+        ],
+        start_date=date(2026, 6, 29),
+        end_date=date(2026, 7, 15),
+        provider_attempts=attempts,
+    )
+
+    assert len(events) == 2
+    assert attempts["finnhub"]["event_count"] == 1
 
 
 @patch("backend.src.collectors.earnings_collector.requests.get")

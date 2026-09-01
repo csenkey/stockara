@@ -31,8 +31,16 @@ tests, deployment, and production verification requirements are satisfied.
 
 ## 2. Multi-provider upcoming-event reconciliation
 
-- [ ] EARN-2.1 Add the Alpha Vantage global `EARNINGS_CALENDAR` adapter using one
+- [x] EARN-2.1 Add the Alpha Vantage global `EARNINGS_CALENDAR` adapter using one
   budgeted request and preserve its raw S3 snapshot.
+  - Commit `b7d17de`; deployment run `33471365380` passed CI/CD and both live
+    smoke checks on 2026-09-01.
+  - Full-watchlist verification run `33471636989` used one Alpha Vantage call,
+    read 1,717 global rows, and retained 250 watchlist observations with fiscal
+    period, estimate, currency, and report-time fields in the raw artifact.
+  - The merged normalized artifact contains 373 events for 907 active tickers,
+    including 36 events from 2026-09-01 through 2026-09-08. Provider-date
+    conflicts remain explicit and are addressed by EARN-2.2 through EARN-2.5.
 - [ ] EARN-2.2 Define provider-observation and canonical-event schemas with
   confidence, fiscal-period identity, supersession, and conflict provenance.
 - [ ] EARN-2.3 Merge Finnhub and Alpha Vantage observations without

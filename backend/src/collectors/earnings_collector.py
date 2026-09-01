@@ -906,7 +906,7 @@ def fetch_alpha_vantage_earnings_calendar_events(
                 "eps_estimate": _to_decimal(row.get("estimate")),
                 "reported_eps": None,
                 "surprise_percent": None,
-                "time_of_day": None,
+                "time_of_day": _normalize_time_of_day(row.get("timeOfTheDay")),
                 "is_upcoming": event_date >= today,
                 "provider": "alpha_vantage_calendar",
                 "source_url": ALPHA_VANTAGE_EARNINGS_CALENDAR_SOURCE_URL,
@@ -1035,6 +1035,7 @@ def fetch_earnings_calendar_events(
     # Preserve conflicts as separate dates. For an exact ticker/date match, keep
     # Finnhub as the compatibility row while both raw provider observations are
     # retained for the canonical reconciliation milestone.
+    finnhub_event_count = len(events)
     finnhub_keys = {(event["ticker"], event["event_date"]) for event in events}
     events.extend(
         event
@@ -1045,8 +1046,8 @@ def fetch_earnings_calendar_events(
     _record_provider_attempt(
         provider_attempts,
         "finnhub",
-        "success" if events else "empty",
-        event_count=len(events),
+        "success" if finnhub_event_count else "empty",
+        event_count=finnhub_event_count,
         raw_event_count=len(raw_rows),
     )
     return events
@@ -1239,9 +1240,9 @@ def _normalize_time_of_day(value: Any) -> str | None:
     if value is None or pd.isna(value):
         return None
     text = str(value).lower()
-    if "before" in text or "bmo" in text:
+    if "before" in text or "pre-market" in text or "bmo" in text:
         return "before_market"
-    if "after" in text or "amc" in text:
+    if "after" in text or "post-market" in text or "amc" in text:
         return "after_market"
     return None
 
