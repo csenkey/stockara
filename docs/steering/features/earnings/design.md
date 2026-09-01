@@ -65,6 +65,12 @@ identity or later company evidence links them. A conflicting canonical event is
 represented in the legacy date-indexed artifact by one row per candidate date;
 the rows share a canonical ID, candidate-date set, and complete observation IDs.
 
+Conflicts with at least one candidate date from today through seven days ahead
+receive a targeted yfinance query. Calls are deduplicated by ticker and capped by
+an explicit per-run ticker budget. Matching yfinance observations are recorded as
+candidate support, but do not silently select a winner while another provider date
+remains. Conflicts outside the horizon receive no per-ticker confirmation call.
+
 ## Historical evidence and reactions
 
 Historical normalized rows contain estimates and actuals independently so

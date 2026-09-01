@@ -598,6 +598,8 @@ class DynamoStore:
             "date_confidence",
             "candidate_dates",
             "observation_ids",
+            "confirmation_status",
+            "confirmation_providers",
             "price_before",
             "price_after",
             "post_earnings_price_move_percent",

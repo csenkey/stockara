@@ -333,6 +333,8 @@ class EarningsEvent(BaseModel):
     date_confidence: Optional[EarningsDateConfidence] = None
     candidate_dates: list[date] = Field(default_factory=list)
     observation_ids: list[str] = Field(default_factory=list)
+    confirmation_status: Optional[str] = None
+    confirmation_providers: list[str] = Field(default_factory=list)
     source_url: Optional[str] = None
     collected_at: Optional[datetime] = None
 

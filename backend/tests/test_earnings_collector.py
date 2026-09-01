@@ -12,6 +12,7 @@ from src.models.schemas import CollectionTaskType
 from backend.src.collectors.earnings_collector import (
     ManifestTaskRun,
     _complete_manifest_task_run,
+    confirm_near_term_earnings_conflicts,
     enrich_price_reaction,
     fetch_alpha_vantage_earnings_calendar_events,
     fetch_alpha_vantage_earnings_events,
@@ -437,6 +438,85 @@ def test_reconcile_earnings_events_is_idempotent_for_confirmed_provenance():
     assert twice[0]["reconciliation_status"] == "confirmed"
     assert twice[0]["date_confidence"] == "high"
     assert twice[0]["observation_ids"] == once[0]["observation_ids"]
+
+
+@patch("backend.src.collectors.earnings_collector.fetch_earnings_events")
+def test_near_term_conflict_confirmation_is_bounded_and_keeps_disagreement_visible(
+    mock_fetch,
+):
+    mock_fetch.return_value = [
+        {
+            "ticker": "AAPL",
+            "event_date": date(2026, 9, 4),
+            "provider": "yfinance",
+            "provider_observation_id": "yfinance:AAPL:2026-09-04:unknown",
+        }
+    ]
+    events = [
+        {"ticker": "AAPL", "event_date": date(2026, 9, 3), "provider": "finnhub"},
+        {
+            "ticker": "AAPL",
+            "event_date": date(2026, 9, 4),
+            "provider": "alpha_vantage_calendar",
+        },
+        {"ticker": "MSFT", "event_date": date(2026, 9, 5), "provider": "finnhub"},
+        {
+            "ticker": "MSFT",
+            "event_date": date(2026, 9, 6),
+            "provider": "alpha_vantage_calendar",
+        },
+    ]
+
+    attempts: dict[str, dict] = {}
+    confirmed = confirm_near_term_earnings_conflicts(
+        events,
+        [{"ticker": "AAPL", "company_name": "Apple"}, {"ticker": "MSFT"}],
+        as_of=date(2026, 9, 1),
+        horizon_days=7,
+        max_tickers=1,
+        provider_attempts=attempts,
+    )
+
+    mock_fetch.assert_called_once_with(
+        "AAPL",
+        company_name="Apple",
+        limit=32,
+        start_date=date(2026, 9, 1),
+        end_date=date(2026, 9, 8),
+        provider_events=None,
+        provider_attempts=attempts,
+        fallback_to_alpha_vantage=False,
+    )
+    assert attempts["yfinance_conflict_confirmation"]["attempt_count"] == 1
+    aapl = [event for event in confirmed if event["ticker"] == "AAPL"]
+    assert {event["reconciliation_status"] for event in aapl} == {"conflicting"}
+    assert {event["confirmation_status"] for event in aapl} == {
+        "candidate_supported",
+        "unresolved",
+    }
+    assert all(event["confirmation_providers"] == ["yfinance"] for event in aapl)
+    assert not any("confirmation_status" in event for event in confirmed if event["ticker"] == "MSFT")
+
+
+@patch("backend.src.collectors.earnings_collector.fetch_earnings_events")
+def test_conflict_confirmation_skips_events_outside_seven_day_horizon(mock_fetch):
+    events = [
+        {"ticker": "ARQQ", "event_date": date(2026, 12, 7), "provider": "finnhub"},
+        {
+            "ticker": "ARQQ",
+            "event_date": date(2026, 12, 9),
+            "provider": "alpha_vantage_calendar",
+        },
+    ]
+
+    confirmed = confirm_near_term_earnings_conflicts(
+        events,
+        [{"ticker": "ARQQ"}],
+        as_of=date(2026, 9, 1),
+    )
+
+    mock_fetch.assert_not_called()
+    assert {event["reconciliation_status"] for event in confirmed} == {"conflicting"}
 
 
 @patch("backend.src.collectors.earnings_collector.requests.get")

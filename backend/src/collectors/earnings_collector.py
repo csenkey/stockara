@@ -50,6 +50,12 @@ DEFAULT_FALLBACK_MAX_TICKERS = int(
 DEFAULT_EARNINGS_CONFLICT_WINDOW_DAYS = int(
     os.environ.get("EARNINGS_CONFLICT_WINDOW_DAYS", "14")
 )
+DEFAULT_CONFLICT_CONFIRMATION_HORIZON_DAYS = int(
+    os.environ.get("EARNINGS_CONFLICT_CONFIRMATION_HORIZON_DAYS", "7")
+)
+DEFAULT_CONFLICT_CONFIRMATION_MAX_TICKERS = int(
+    os.environ.get("EARNINGS_CONFLICT_CONFIRMATION_MAX_TICKERS", "10")
+)
 MAX_TICKERS_PER_RUN = 50
 FINNHUB_EARNINGS_CALENDAR_URL = "https://finnhub.io/api/v1/calendar/earnings"
 ALPHA_VANTAGE_URL = "https://www.alphavantage.co/query"
@@ -177,6 +183,11 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
         )
         warnings = _calendar_warnings(provider_health)
         reconciliation_counts = _reconciliation_counts(collected_events)
+        conflict_confirmation_attempts = int(
+            provider_attempts.get("yfinance_conflict_confirmation", {}).get(
+                "attempt_count", 0
+            )
+        )
         response_status = _response_status(failed_tickers, provider_health)
         artifact_scope = manifest_task_run.task_id if manifest_task_run else None
         publish_latest_artifacts = manifest_task_run is None
@@ -223,6 +234,10 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
             reconciliation_counts["conflicting"],
         )
         _emit_metric(
+            "earnings_conflict_confirmation_attempts",
+            conflict_confirmation_attempts,
+        )
+        _emit_metric(
             "earnings_provider_degraded_runs",
             1 if provider_health["status"] == "degraded" else 0,
         )
@@ -253,6 +268,7 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
                 "provider_health": provider_health,
                 "warnings": warnings,
                 "reconciliation_counts": reconciliation_counts,
+                "conflict_confirmation_attempts": conflict_confirmation_attempts,
             },
         }
     except Exception as exc:
@@ -584,6 +600,7 @@ def fetch_earnings_events(
     end_date: date | None = None,
     provider_events: list[dict[str, Any]] | None = None,
     provider_attempts: dict[str, dict[str, Any]] | None = None,
+    fallback_to_alpha_vantage: bool = True,
 ) -> list[dict[str, Any]]:
     """Fetch and normalize earnings calendar rows from yfinance."""
     try:
@@ -608,6 +625,8 @@ def fetch_earnings_events(
     if data is None or getattr(data, "empty", True):
         if data is not None:
             _record_provider_attempt(provider_attempts, "yfinance", "empty")
+        if not fallback_to_alpha_vantage:
+            return []
         return fetch_alpha_vantage_earnings_events(
             ticker,
             company_name=company_name,
@@ -1084,6 +1103,13 @@ def fetch_earnings_calendar_events(
         )
     finnhub_event_count = len(events)
     events = reconcile_earnings_events([*events, *alpha_events])
+    events = confirm_near_term_earnings_conflicts(
+        events,
+        stocks,
+        as_of=today,
+        provider_events=provider_events,
+        provider_attempts=provider_attempts,
+    )
     logger.info("earnings_calendar_events_fetched", count=len(events))
     _record_provider_attempt(
         provider_attempts,
@@ -1093,6 +1119,85 @@ def fetch_earnings_calendar_events(
         raw_event_count=len(raw_rows),
     )
     return events
+
+
+def confirm_near_term_earnings_conflicts(
+    events: list[dict[str, Any]],
+    stocks: list[dict[str, Any]],
+    *,
+    as_of: date | None = None,
+    horizon_days: int = DEFAULT_CONFLICT_CONFIRMATION_HORIZON_DAYS,
+    max_tickers: int = DEFAULT_CONFLICT_CONFIRMATION_MAX_TICKERS,
+    provider_events: list[dict[str, Any]] | None = None,
+    provider_attempts: dict[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Use a bounded yfinance query only for conflicts inside the near horizon."""
+    reconciled = reconcile_earnings_events(events)
+    confirmation_start = as_of or date.today()
+    confirmation_end = confirmation_start + timedelta(days=max(horizon_days, 0))
+    conflict_tickers = sorted(
+        {
+            str(event.get("ticker") or "").upper()
+            for event in reconciled
+            if event.get("reconciliation_status") == "conflicting"
+            and confirmation_start <= event["event_date"] <= confirmation_end
+        }
+    )
+    if not conflict_tickers or max_tickers <= 0:
+        return reconciled
+
+    stock_by_ticker = {
+        str(stock.get("ticker") or "").upper(): stock
+        for stock in stocks
+        if stock.get("ticker")
+    }
+    attempted_tickers: set[str] = set()
+    confirmation_events: list[dict[str, Any]] = []
+    for ticker in conflict_tickers[:max_tickers]:
+        attempted_tickers.add(ticker)
+        stock = stock_by_ticker.get(ticker, {})
+        ticker_confirmation_events = fetch_earnings_events(
+            ticker,
+            company_name=stock.get("company_name"),
+            limit=DEFAULT_LIMIT,
+            start_date=confirmation_start,
+            end_date=confirmation_end,
+            provider_events=provider_events,
+            provider_attempts=provider_attempts,
+            fallback_to_alpha_vantage=False,
+        )
+        confirmation_events.extend(ticker_confirmation_events)
+        _record_provider_attempt(
+            provider_attempts,
+            "yfinance_conflict_confirmation",
+            "success" if ticker_confirmation_events else "empty",
+            event_count=len(ticker_confirmation_events),
+        )
+
+    confirmed_dates = {
+        (str(event.get("ticker") or "").upper(), event["event_date"])
+        for event in confirmation_events
+        if event.get("provider") == "yfinance"
+    }
+    reconciled = reconcile_earnings_events([*reconciled, *confirmation_events])
+    for event in reconciled:
+        ticker = str(event.get("ticker") or "").upper()
+        if ticker not in attempted_tickers or event.get("reconciliation_status") != "conflicting":
+            continue
+        event["confirmation_providers"] = ["yfinance"]
+        event["confirmation_status"] = (
+            "candidate_supported"
+            if (ticker, event["event_date"]) in confirmed_dates
+            else "unresolved"
+        )
+    logger.info(
+        "earnings_near_term_conflict_confirmation_completed",
+        attempted_ticker_count=len(attempted_tickers),
+        confirmation_event_count=len(confirmation_events),
+        confirmation_start=confirmation_start.isoformat(),
+        confirmation_end=confirmation_end.isoformat(),
+    )
+    return reconciled
 
 
 def reconcile_earnings_events(

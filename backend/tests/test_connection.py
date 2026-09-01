@@ -387,6 +387,8 @@ def test_put_earnings_event_persists_reconciliation_provenance():
             "date_confidence": "high",
             "candidate_dates": [date(2026, 7, 30)],
             "observation_ids": ["finnhub:1", "alpha-vantage:1"],
+            "confirmation_status": "candidate_supported",
+            "confirmation_providers": ["yfinance"],
         }
     )
 
@@ -395,6 +397,8 @@ def test_put_earnings_event_persists_reconciliation_provenance():
     assert item["fiscal_period_end"] == "2026-06-30"
     assert item["candidate_dates"] == ["2026-07-30"]
     assert item["observation_ids"] == ["finnhub:1", "alpha-vantage:1"]
+    assert item["confirmation_status"] == "candidate_supported"
+    assert item["confirmation_providers"] == ["yfinance"]
 
 
 def test_upcoming_earnings_queries_gsi_and_filters_past_events():
