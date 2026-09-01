@@ -71,6 +71,12 @@ tests, deployment, and production verification requirements are satisfied.
   - The collector emits reconciliation CloudWatch metrics, and the calendar
     displays the conflict-group count plus confirmed, conflicting,
     single-source, and unreconciled badges with candidate-date tooltips.
+  - Commit `f14aea9`; deployment run `33504221427` passed the complete CI/CD and
+    production smoke suite on 2026-09-01. Full-watchlist refresh run
+    `33530052215` then published 373 rows representing 372 canonical events:
+    371 single-source events and one two-candidate `ARQQ` conflict, with the
+    expected user-visible conflict warning. The deployed frontend bundle was
+    verified to contain the date-confidence metric, column, and badge labels.
 - [ ] EARN-2.6 Deploy and verify representative near-term tickers against at
   least two sources; record unresolved conflicts rather than hiding them.
 
