@@ -61,8 +61,18 @@ tests, deployment, and production verification requirements are satisfied.
     single-source rows and one two-date conflict (`ARQQ`, 2026-12-07 versus
     2026-12-09), with zero duplicate provider/date rows. Provider health
     correctly reported 250 Alpha Vantage and 123 Finnhub watchlist events.
-- [ ] EARN-2.4 Add bounded yfinance/company-source confirmation for conflicting
+- [x] EARN-2.4 Add bounded yfinance/company-source confirmation for conflicting
   events occurring within the next seven days.
+  - Conflict confirmation deduplicates by ticker, queries yfinance only from
+    today through seven days ahead, and caps the work at 10 tickers per run.
+    Candidate support and the confirmation provider persist without silently
+    resolving the disagreement; out-of-horizon conflicts trigger no calls.
+  - Commit `442c240`; all 491 backend tests and Ruff passed locally, and
+    deployment run `33530783438` passed the complete CI/CD and production smoke
+    suite on 2026-09-01. Full-watchlist refresh run `33531210445` reported zero
+    confirmation calls because the only live conflict (`ARQQ`, December 7 versus
+    December 9) was outside the seven-day horizon; the public artifact retained
+    both candidates and its conflict warning.
 - [x] EARN-2.5 Expose conflict and coverage metrics, artifact warnings, and UI
   confidence badges.
   - Normalized artifacts publish canonical, confirmed, company-confirmed,
