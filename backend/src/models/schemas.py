@@ -311,6 +311,32 @@ class EarningsDateConfidence(str, Enum):
     CONFLICTING = "conflicting"
 
 
+class EarningsGuidanceEvidence(BaseModel):
+    """Source-backed management guidance available for an earnings event."""
+
+    metric: str = Field(..., min_length=1, max_length=100)
+    fiscal_period: Optional[str] = Field(default=None, max_length=50)
+    direction: Literal["raised", "lowered", "reaffirmed", "initiated", "unknown"]
+    value_low: Optional[Decimal] = None
+    value_high: Optional[Decimal] = None
+    unit: Optional[str] = Field(default=None, max_length=30)
+    summary: str = Field(..., min_length=1, max_length=1000)
+    source_url: str = Field(..., min_length=1, max_length=2000)
+    published_at: datetime
+
+
+class EarningsEstimateRevision(BaseModel):
+    """Timestamped consensus revision known before an earnings event."""
+
+    metric: Literal["eps", "revenue"]
+    fiscal_period: Optional[str] = Field(default=None, max_length=50)
+    previous_value: Optional[Decimal] = None
+    current_value: Decimal
+    analyst_count: Optional[int] = Field(default=None, ge=0)
+    source_url: str = Field(..., min_length=1, max_length=2000)
+    observed_at: datetime
+
+
 class EarningsEvent(BaseModel):
     ticker: str
     event_date: date
@@ -318,7 +344,9 @@ class EarningsEvent(BaseModel):
     eps_estimate: Optional[Decimal] = None
     revenue_estimate: Optional[Decimal] = None
     reported_eps: Optional[Decimal] = None
+    reported_revenue: Optional[Decimal] = None
     surprise_percent: Optional[Decimal] = None
+    revenue_surprise_percent: Optional[Decimal] = None
     time_of_day: Optional[str] = None
     fiscal_period_end: Optional[date] = None
     fiscal_quarter: Optional[str] = None
@@ -335,7 +363,11 @@ class EarningsEvent(BaseModel):
     observation_ids: list[str] = Field(default_factory=list)
     confirmation_status: Optional[str] = None
     confirmation_providers: list[str] = Field(default_factory=list)
+    guidance_evidence: list[EarningsGuidanceEvidence] = Field(default_factory=list)
+    estimate_revisions: list[EarningsEstimateRevision] = Field(default_factory=list)
     source_url: Optional[str] = None
+    source_urls: list[str] = Field(default_factory=list)
+    observed_at: Optional[datetime] = None
     collected_at: Optional[datetime] = None
 
     @field_validator("ticker")
@@ -357,7 +389,13 @@ class EarningsProviderObservation(BaseModel):
     fiscal_quarter: Optional[str] = Field(default=None, max_length=30)
     eps_estimate: Optional[Decimal] = None
     revenue_estimate: Optional[Decimal] = None
+    reported_eps: Optional[Decimal] = None
+    reported_revenue: Optional[Decimal] = None
+    surprise_percent: Optional[Decimal] = None
+    revenue_surprise_percent: Optional[Decimal] = None
     time_of_day: Optional[Literal["before_market", "after_market"]] = None
+    guidance_evidence: list[EarningsGuidanceEvidence] = Field(default_factory=list)
+    estimate_revisions: list[EarningsEstimateRevision] = Field(default_factory=list)
     source_url: Optional[str] = Field(default=None, max_length=2000)
     observed_at: datetime
     raw_fields: dict[str, Any] = Field(default_factory=dict)
@@ -384,6 +422,14 @@ class CanonicalEarningsEvent(BaseModel):
     date_confidence: EarningsDateConfidence
     observation_ids: list[str] = Field(..., min_length=1, max_length=20)
     company_evidence_urls: list[str] = Field(default_factory=list, max_length=10)
+    eps_estimate: Optional[Decimal] = None
+    revenue_estimate: Optional[Decimal] = None
+    reported_eps: Optional[Decimal] = None
+    reported_revenue: Optional[Decimal] = None
+    surprise_percent: Optional[Decimal] = None
+    revenue_surprise_percent: Optional[Decimal] = None
+    guidance_evidence: list[EarningsGuidanceEvidence] = Field(default_factory=list)
+    estimate_revisions: list[EarningsEstimateRevision] = Field(default_factory=list)
     supersedes_event_id: Optional[str] = Field(default=None, max_length=200)
     reconciled_at: datetime
 

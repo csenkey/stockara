@@ -108,6 +108,19 @@ receive the provider's longer retry delay instead of being flattened into a
 generic partial failure. Writes remain idempotent at ticker/report date, making
 replayed chunks safe.
 
+The normalized historical contract keeps EPS and revenue consensus separately
+from reported EPS and revenue, with independent surprise percentages. It also
+keeps fiscal-period identity, report timing, a primary source URL plus the full
+source URL set, provider observation ID, observation timestamp, and collection
+timestamp. Guidance evidence is a source-backed, publication-timestamped metric
+range/direction statement; estimate revisions retain the metric, fiscal period,
+previous/current consensus, analyst count, source, and observation cutoff. These
+lists remain empty when no configured provider supplies them—absence is measured
+in the coverage artifact and is never replaced with inferred evidence. The
+current free Alpha Vantage quarterly endpoint supplies fiscal identity and EPS
+history but not revenue history; Finnhub fields are retained when its response
+provides revenue estimates or actuals.
+
 Feature snapshots are immutable and keyed by strategy, ticker, event, prediction
 timestamp, provider snapshot hash, and schema version. Report/transcript content
 published after the prediction cutoff is excluded by construction.

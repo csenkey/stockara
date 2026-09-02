@@ -20,7 +20,7 @@ on:
         required: true
         default: "10"
       offset:
-        description: "Sorted active ticker offset for chunked runs"
+        description: "Sorted active ticker offset; use resume_offset from the latest checkpoint"
         required: true
         default: "0"
       ticker_csv:

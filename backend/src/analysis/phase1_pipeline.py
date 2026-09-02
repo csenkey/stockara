@@ -3372,15 +3372,24 @@ def _jsonable_earnings_event(event: dict[str, Any]) -> dict[str, Any]:
         "company_name",
         "event_date",
         "eps_estimate",
+        "revenue_estimate",
         "reported_eps",
+        "reported_revenue",
         "surprise_percent",
+        "revenue_surprise_percent",
         "time_of_day",
+        "fiscal_period_end",
+        "fiscal_quarter",
         "is_upcoming",
         "price_before",
         "price_after",
         "post_earnings_price_move_percent",
         "provider",
         "source_url",
+        "source_urls",
+        "observed_at",
+        "guidance_evidence",
+        "estimate_revisions",
     )
     return {field: _jsonable_value(event[field]) for field in fields if field in event}
 
@@ -5016,6 +5025,10 @@ def _jsonable_value(value: Any) -> Any:
         return float(value)
     if isinstance(value, (date, datetime)):
         return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): _jsonable_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_jsonable_value(item) for item in value]
     return value
 
 

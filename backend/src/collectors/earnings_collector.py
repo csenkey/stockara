@@ -803,6 +803,7 @@ def fetch_earnings_events(
                     },
                 )
             )
+        observed_at = datetime.now(timezone.utc).isoformat()
         events.append(
             {
                 "ticker": ticker.upper(),
@@ -815,7 +816,11 @@ def fetch_earnings_events(
                 "is_upcoming": event_date >= today,
                 "provider": "yfinance",
                 "source_url": f"https://finance.yahoo.com/quote/{ticker.upper()}/analysis",
-                "collected_at": datetime.now(timezone.utc).isoformat(),
+                "source_urls": [
+                    f"https://finance.yahoo.com/quote/{ticker.upper()}/analysis"
+                ],
+                "observed_at": observed_at,
+                "collected_at": observed_at,
             }
         )
     _record_provider_attempt(
@@ -920,6 +925,7 @@ def fetch_alpha_vantage_earnings_events(
         if event_date < range_start or event_date > range_end:
             continue
         seen_dates.add(event_date)
+        fiscal_period_end = _normalize_event_date(row.get("fiscalDateEnding"))
         if provider_events is not None:
             provider_events.append(
                 _raw_provider_event(
@@ -934,6 +940,7 @@ def fetch_alpha_vantage_earnings_events(
                     },
                 )
             )
+        observed_at = datetime.now(timezone.utc).isoformat()
         events.append(
             {
                 "ticker": ticker.upper(),
@@ -949,10 +956,22 @@ def fetch_alpha_vantage_earnings_events(
                     row.get("surprisePercentage") or row.get("surprisePercent")
                 ),
                 "time_of_day": None,
+                "fiscal_period_end": fiscal_period_end,
+                "fiscal_quarter": _calendar_quarter_label(fiscal_period_end),
                 "is_upcoming": event_date >= today,
                 "provider": "alpha_vantage",
+                "provider_observation_id": _provider_observation_id(
+                    "alpha_vantage",
+                    ticker.upper(),
+                    event_date,
+                    row.get("fiscalDateEnding"),
+                ),
                 "source_url": "https://www.alphavantage.co/documentation/#earnings",
-                "collected_at": datetime.now(timezone.utc).isoformat(),
+                "source_urls": [
+                    "https://www.alphavantage.co/documentation/#earnings"
+                ],
+                "observed_at": observed_at,
+                "collected_at": observed_at,
             }
         )
     logger.info(
@@ -1088,6 +1107,7 @@ def fetch_alpha_vantage_earnings_calendar_events(
                     },
                 )
             )
+        observed_at = datetime.now(timezone.utc).isoformat()
         events.append(
             {
                 "ticker": ticker,
@@ -1113,7 +1133,9 @@ def fetch_alpha_vantage_earnings_calendar_events(
                     row.get("fiscalDateEnding"),
                 ),
                 "source_url": ALPHA_VANTAGE_EARNINGS_CALENDAR_SOURCE_URL,
-                "collected_at": datetime.now(timezone.utc).isoformat(),
+                "source_urls": [ALPHA_VANTAGE_EARNINGS_CALENDAR_SOURCE_URL],
+                "observed_at": observed_at,
+                "collected_at": observed_at,
             }
         )
     _record_provider_attempt(
@@ -1299,6 +1321,7 @@ def _normalize_finnhub_calendar_rows(
                 )
             )
         fiscal_quarter = _finnhub_fiscal_quarter(row)
+        observed_at = datetime.now(timezone.utc).isoformat()
         events.append(
             {
                 "ticker": ticker,
@@ -1307,7 +1330,11 @@ def _normalize_finnhub_calendar_rows(
                 "eps_estimate": _to_decimal(row.get("epsEstimate")),
                 "revenue_estimate": _to_decimal(row.get("revenueEstimate")),
                 "reported_eps": _to_decimal(row.get("epsActual")),
+                "reported_revenue": _to_decimal(row.get("revenueActual")),
                 "surprise_percent": _to_decimal(row.get("surprisePercent")),
+                "revenue_surprise_percent": _to_decimal(
+                    row.get("revenueSurprisePercent")
+                ),
                 "time_of_day": _normalize_time_of_day(row.get("hour")),
                 "fiscal_period_end": None,
                 "fiscal_quarter": fiscal_quarter,
@@ -1317,7 +1344,9 @@ def _normalize_finnhub_calendar_rows(
                     "finnhub", ticker, event_date, fiscal_quarter
                 ),
                 "source_url": "https://finnhub.io/calendar/earnings",
-                "collected_at": datetime.now(timezone.utc).isoformat(),
+                "source_urls": ["https://finnhub.io/calendar/earnings"],
+                "observed_at": observed_at,
+                "collected_at": observed_at,
             }
         )
     return events
@@ -1536,7 +1565,13 @@ def _event_completeness(event: dict[str, Any]) -> int:
             "fiscal_quarter",
             "eps_estimate",
             "revenue_estimate",
+            "reported_eps",
+            "reported_revenue",
+            "surprise_percent",
+            "revenue_surprise_percent",
             "time_of_day",
+            "guidance_evidence",
+            "estimate_revisions",
         )
     )
 
@@ -1570,8 +1605,14 @@ def _merge_exact_date_events(events: list[dict[str, Any]]) -> dict[str, Any]:
             "eps_estimate",
             "revenue_estimate",
             "reported_eps",
+            "reported_revenue",
             "surprise_percent",
+            "revenue_surprise_percent",
             "time_of_day",
+            "guidance_evidence",
+            "estimate_revisions",
+            "source_urls",
+            "observed_at",
         ):
             if merged.get(field) is None and event.get(field) is not None:
                 merged[field] = event[field]

@@ -84,6 +84,14 @@ def _to_jsonable(value: Any) -> Any:
 
 
 def _to_dynamodb_value(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, Enum):
+        return value.value
+    if hasattr(value, "model_dump"):
+        return _to_dynamodb_value(value.model_dump(mode="json"))
     if isinstance(value, float):
         return Decimal(str(value))
     if isinstance(value, Decimal):
@@ -588,7 +596,9 @@ class DynamoStore:
             "eps_estimate",
             "revenue_estimate",
             "reported_eps",
+            "reported_revenue",
             "surprise_percent",
+            "revenue_surprise_percent",
             "time_of_day",
             "fiscal_period_end",
             "fiscal_quarter",
@@ -600,10 +610,14 @@ class DynamoStore:
             "observation_ids",
             "confirmation_status",
             "confirmation_providers",
+            "guidance_evidence",
+            "estimate_revisions",
             "price_before",
             "price_after",
             "post_earnings_price_move_percent",
             "source_url",
+            "source_urls",
+            "observed_at",
         )
         for field in optional_fields:
             value = event.get(field)
@@ -613,7 +627,9 @@ class DynamoStore:
                 "eps_estimate",
                 "revenue_estimate",
                 "reported_eps",
+                "reported_revenue",
                 "surprise_percent",
+                "revenue_surprise_percent",
                 "price_before",
                 "price_after",
                 "post_earnings_price_move_percent",
@@ -623,6 +639,10 @@ class DynamoStore:
                 item[field] = _date_str(value)
             elif field == "candidate_dates":
                 item[field] = [_date_str(candidate) for candidate in value]
+            elif field in {"guidance_evidence", "estimate_revisions"}:
+                item[field] = _to_dynamodb_value(value)
+            elif field == "observed_at" and isinstance(value, datetime):
+                item[field] = value.isoformat()
             elif isinstance(value, Enum):
                 item[field] = value.value
             else:

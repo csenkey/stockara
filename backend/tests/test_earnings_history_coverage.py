@@ -66,6 +66,9 @@ def test_build_coverage_measures_each_ticker_and_field_completeness():
     assert by_ticker["AAPL"]["distinct_quarter_count"] == 8
     assert by_ticker["AAPL"]["reported_eps_count"] == 8
     assert by_ticker["AAPL"]["revenue_estimate_count"] == 4
+    assert by_ticker["AAPL"]["reported_revenue_count"] == 0
+    assert by_ticker["AAPL"]["guidance_evidence_event_count"] == 0
+    assert by_ticker["AAPL"]["estimate_revision_event_count"] == 0
     assert by_ticker["AAPL"]["coverage_status"] == "complete"
     assert by_ticker["MSFT"]["coverage_status"] == "partial"
     assert by_ticker["NVDA"]["coverage_status"] == "missing"

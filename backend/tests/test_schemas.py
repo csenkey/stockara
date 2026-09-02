@@ -20,6 +20,9 @@ from src.models.schemas import (
     CompanySize,
     CanonicalEarningsEvent,
     EarningsDateConfidence,
+    EarningsEstimateRevision,
+    EarningsEvent,
+    EarningsGuidanceEvidence,
     EarningsProviderObservation,
     EarningsReconciliationStatus,
     Recommendation,
@@ -166,6 +169,46 @@ def test_earnings_provider_observation_preserves_fiscal_identity_and_supersessio
     assert observation.ticker == "AAPL"
     assert observation.fiscal_period_end == date(2026, 6, 30)
     assert observation.supersedes_observation_id.endswith(":tentative")
+
+
+def test_earnings_event_preserves_actuals_guidance_and_timestamped_revisions():
+    event = EarningsEvent(
+        ticker="aapl",
+        event_date=date(2026, 7, 30),
+        is_upcoming=False,
+        reported_eps=Decimal("1.52"),
+        reported_revenue=Decimal("92000000000"),
+        revenue_surprise_percent=Decimal("2.22"),
+        guidance_evidence=[
+            EarningsGuidanceEvidence(
+                metric="revenue",
+                fiscal_period="2026-Q3",
+                direction="raised",
+                value_low=Decimal("95000000000"),
+                summary="Management raised its revenue outlook.",
+                source_url="https://example.com/release",
+                published_at=datetime(2026, 7, 30, 20, 5),
+            )
+        ],
+        estimate_revisions=[
+            EarningsEstimateRevision(
+                metric="eps",
+                fiscal_period="2026-Q3",
+                previous_value=Decimal("1.40"),
+                current_value=Decimal("1.45"),
+                analyst_count=20,
+                source_url="https://example.com/consensus",
+                observed_at=datetime(2026, 7, 25, 12, 0),
+            )
+        ],
+        source_urls=["https://example.com/release"],
+        observed_at=datetime(2026, 7, 30, 20, 6),
+    )
+
+    assert event.ticker == "AAPL"
+    assert event.reported_revenue == Decimal("92000000000")
+    assert event.guidance_evidence[0].direction == "raised"
+    assert event.estimate_revisions[0].current_value == Decimal("1.45")
 
 
 def test_canonical_earnings_event_accepts_confirmed_date_with_observation_provenance():

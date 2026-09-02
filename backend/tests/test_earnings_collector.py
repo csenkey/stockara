@@ -185,6 +185,12 @@ def test_fetch_alpha_vantage_earnings_events_normalizes_quarterly_rows(
     assert events[0]["reported_eps"] == Decimal("1.65")
     assert events[0]["eps_estimate"] == Decimal("1.6")
     assert events[0]["surprise_percent"] == Decimal("3.125")
+    assert events[0]["fiscal_period_end"] == date(2026, 3, 31)
+    assert events[0]["fiscal_quarter"] == "2026-Q1"
+    assert events[0]["provider_observation_id"] == (
+        "alpha_vantage:AAPL:2026-04-30:2026-03-31"
+    )
+    assert events[0]["observed_at"] == events[0]["collected_at"]
     assert events[0]["is_upcoming"] is False
     assert events[0]["provider"] == "alpha_vantage"
     assert provider_events[0]["provider"] == "alpha_vantage"
@@ -580,6 +586,10 @@ def test_fetch_earnings_calendar_events_fetches_date_range_for_watchlist(
                 "symbol": "AAPL",
                 "date": "2026-07-01",
                 "epsEstimate": 2.15,
+                "revenueEstimate": 90000000000,
+                "epsActual": 2.25,
+                "revenueActual": 92000000000,
+                "revenueSurprisePercent": 2.22,
                 "hour": "bmo",
             },
             {
@@ -608,6 +618,12 @@ def test_fetch_earnings_calendar_events_fetches_date_range_for_watchlist(
     assert events[0]["ticker"] == "AAPL"
     assert events[0]["event_date"] == date(2026, 7, 1)
     assert events[0]["eps_estimate"] == Decimal("2.15")
+    assert events[0]["revenue_estimate"] == Decimal("90000000000")
+    assert events[0]["reported_eps"] == Decimal("2.25")
+    assert events[0]["reported_revenue"] == Decimal("92000000000")
+    assert events[0]["revenue_surprise_percent"] == Decimal("2.22")
+    assert events[0]["source_urls"] == ["https://finnhub.io/calendar/earnings"]
+    assert events[0]["observed_at"] == events[0]["collected_at"]
     assert events[0]["time_of_day"] == "before_market"
     assert mock_get.call_count == 2
     near_params = mock_get.call_args_list[0].kwargs["params"]

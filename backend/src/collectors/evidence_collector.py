@@ -10,6 +10,7 @@ during scoring.
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 import os
 from typing import Any
 
@@ -862,12 +863,21 @@ def _jsonable_earnings_event(event: dict[str, Any]) -> dict[str, Any]:
             "company_name",
             "event_date",
             "eps_estimate",
+            "revenue_estimate",
             "reported_eps",
+            "reported_revenue",
             "surprise_percent",
+            "revenue_surprise_percent",
             "time_of_day",
+            "fiscal_period_end",
+            "fiscal_quarter",
             "is_upcoming",
             "provider",
             "source_url",
+            "source_urls",
+            "observed_at",
+            "guidance_evidence",
+            "estimate_revisions",
         }
     }
 
@@ -1075,6 +1085,14 @@ def _article_text(article: dict[str, Any]) -> str:
 def _jsonable_value(value: Any) -> Any:
     if isinstance(value, (date, datetime)):
         return value.isoformat()
+    if isinstance(value, Decimal):
+        if value == value.to_integral_value():
+            return int(value)
+        return float(value)
+    if isinstance(value, dict):
+        return {str(key): _jsonable_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_jsonable_value(item) for item in value]
     return value
 
 

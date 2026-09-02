@@ -140,6 +140,13 @@ def _ticker_coverage(
         "eps_estimate_count": _present_count(ordered, "eps_estimate"),
         "reported_eps_count": _present_count(ordered, "reported_eps"),
         "revenue_estimate_count": _present_count(ordered, "revenue_estimate"),
+        "reported_revenue_count": _present_count(ordered, "reported_revenue"),
+        "guidance_evidence_event_count": _nonempty_count(
+            ordered, "guidance_evidence"
+        ),
+        "estimate_revision_event_count": _nonempty_count(
+            ordered, "estimate_revisions"
+        ),
         "oldest_event_date": ordered[0]["event_date"].isoformat() if ordered else None,
         "newest_event_date": ordered[-1]["event_date"].isoformat() if ordered else None,
         "incomplete_reasons": incomplete_reasons,
@@ -148,6 +155,10 @@ def _ticker_coverage(
 
 def _present_count(events: list[dict[str, Any]], field: str) -> int:
     return sum(event.get(field) is not None for event in events)
+
+
+def _nonempty_count(events: list[dict[str, Any]], field: str) -> int:
+    return sum(bool(event.get(field)) for event in events)
 
 
 def _event_date(value: Any) -> date | None:

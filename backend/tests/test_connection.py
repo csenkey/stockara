@@ -379,6 +379,8 @@ def test_put_earnings_event_persists_reconciliation_provenance():
             "event_date": date(2026, 7, 30),
             "is_upcoming": True,
             "revenue_estimate": Decimal("90000000000"),
+            "reported_revenue": Decimal("92000000000"),
+            "revenue_surprise_percent": Decimal("2.22"),
             "fiscal_period_end": date(2026, 6, 30),
             "fiscal_quarter": "2026-Q2",
             "canonical_event_id": "AAPL:2026-07-30",
@@ -389,16 +391,40 @@ def test_put_earnings_event_persists_reconciliation_provenance():
             "observation_ids": ["finnhub:1", "alpha-vantage:1"],
             "confirmation_status": "candidate_supported",
             "confirmation_providers": ["yfinance"],
+            "guidance_evidence": [
+                {
+                    "metric": "revenue",
+                    "direction": "raised",
+                    "value_low": Decimal("95000000000"),
+                    "source_url": "https://example.com/release",
+                }
+            ],
+            "estimate_revisions": [
+                {
+                    "metric": "eps",
+                    "previous_value": Decimal("1.40"),
+                    "current_value": Decimal("1.45"),
+                    "source_url": "https://example.com/consensus",
+                }
+            ],
+            "source_urls": ["https://example.com/release"],
+            "observed_at": "2026-07-01T12:00:00+00:00",
         }
     )
 
     item = table.put_item.call_args.kwargs["Item"]
     assert item["revenue_estimate"] == Decimal("90000000000")
+    assert item["reported_revenue"] == Decimal("92000000000")
+    assert item["revenue_surprise_percent"] == Decimal("2.22")
     assert item["fiscal_period_end"] == "2026-06-30"
     assert item["candidate_dates"] == ["2026-07-30"]
     assert item["observation_ids"] == ["finnhub:1", "alpha-vantage:1"]
     assert item["confirmation_status"] == "candidate_supported"
     assert item["confirmation_providers"] == ["yfinance"]
+    assert item["guidance_evidence"][0]["value_low"] == Decimal("95000000000")
+    assert item["estimate_revisions"][0]["current_value"] == Decimal("1.45")
+    assert item["source_urls"] == ["https://example.com/release"]
+    assert item["observed_at"] == "2026-07-01T12:00:00+00:00"
 
 
 def test_upcoming_earnings_queries_gsi_and_filters_past_events():
