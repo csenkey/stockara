@@ -136,9 +136,6 @@ Canonical feature docs:
 
 Next executable items:
 
-- Decouple the public calendar from the capped daily top-picks payload and stop
-  partial independent collection from replacing full-watchlist artifacts.
-- Add multi-provider upcoming-date reconciliation and expose date confidence.
 - Audit and backfill historical earnings, estimates, actuals, and price reactions.
 - Implement leakage-safe event studies and shadow predictions before exposing
   any actionable earnings-event classification.
@@ -154,6 +151,9 @@ Completed reliability work:
   workflow, query the forward calendar against the full active watchlist, add a
   quota-bounded rotating per-ticker fallback, and expose provider diagnostics
   instead of reporting empty results as success.
+- Done and production-verified: publish the dedicated uncapped calendar, merge
+  Alpha Vantage and Finnhub observations, reserve a seven-day Finnhub query,
+  preserve conflicts, add bounded confirmation, and expose date confidence.
 
 ### 5. Phase 1 UI and Static Artifact Refinement
 

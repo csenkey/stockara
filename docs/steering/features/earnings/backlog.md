@@ -87,8 +87,25 @@ tests, deployment, and production verification requirements are satisfied.
     371 single-source events and one two-candidate `ARQQ` conflict, with the
     expected user-visible conflict warning. The deployed frontend bundle was
     verified to contain the date-confidence metric, column, and badge labels.
-- [ ] EARN-2.6 Deploy and verify representative near-term tickers against at
+- [x] EARN-2.6 Deploy and verify representative near-term tickers against at
   least two sources; record unresolved conflicts rather than hiding them.
+  - Finnhub collection now reserves an independent first-seven-days request so
+    its 1,500-row long-range response cap cannot exclude imminent events. The
+    near and long ranges have separate health diagnostics and are deduplicated
+    before reconciliation.
+  - Commit `4d3d106`; all 492 backend tests and Ruff passed locally, and
+    deployment run `33620327559` passed the complete CI/CD and production smoke
+    suite on 2026-09-02.
+  - Full-watchlist refresh run `33620734187` selected 907 tickers. The near-term
+    Finnhub request returned 190 raw events and 33 watchlist observations, while
+    the long-range request returned its 1,500-row cap and 123 watchlist rows.
+    `AI` (September 2), `AMBA` (September 3), and `BRZE` (September 8) matched
+    Alpha Vantage exactly and became high-confidence confirmed events with both
+    observation IDs.
+  - `FCEL` (September 2 versus September 7) and `CPRT` (September 3 versus
+    September 9) remained explicit conflicts. Both candidate dates and source
+    observation IDs are published; bounded yfinance confirmation returned no
+    deciding evidence, and the artifact warns that two conflicts remain.
 
 ## 3. Historical earnings foundation
 
