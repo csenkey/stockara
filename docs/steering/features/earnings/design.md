@@ -71,6 +71,13 @@ an explicit per-run ticker budget. Matching yfinance observations are recorded a
 candidate support, but do not silently select a winner while another provider date
 remains. Conflicts outside the horizon receive no per-ticker confirmation call.
 
+Finnhub range collection reserves a separate request for the first seven days,
+then queries the remaining configured horizon independently. This prevents the
+provider's bounded response from filling with later events and excluding the
+near-term rows required for two-source verification. The two requests publish
+separate provider-health diagnostics, while their observations retain the common
+`finnhub` provenance and are deduplicated before reconciliation.
+
 ## Historical evidence and reactions
 
 Historical normalized rows contain estimates and actuals independently so

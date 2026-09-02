@@ -564,9 +564,13 @@ def test_fetch_earnings_calendar_events_fetches_date_range_for_watchlist(
     assert events[0]["event_date"] == date(2026, 7, 1)
     assert events[0]["eps_estimate"] == Decimal("2.15")
     assert events[0]["time_of_day"] == "before_market"
-    params = mock_get.call_args.kwargs["params"]
-    assert params["from"] == "2026-06-29"
-    assert params["to"] == "2026-07-13"
+    assert mock_get.call_count == 2
+    near_params = mock_get.call_args_list[0].kwargs["params"]
+    later_params = mock_get.call_args_list[1].kwargs["params"]
+    assert near_params["from"] == "2026-06-29"
+    assert near_params["to"] == "2026-07-06"
+    assert later_params["from"] == "2026-07-07"
+    assert later_params["to"] == "2026-07-13"
     assert provider_events[0]["provider"] == "finnhub"
     assert provider_events[0]["ticker"] == "AAPL"
     assert provider_events[0]["raw_fields"]["epsEstimate"] == 2.15
@@ -593,9 +597,63 @@ def test_fetch_earnings_calendar_events_defaults_to_four_month_forward_window(
     with patch("backend.src.collectors.earnings_collector.date", FrozenDate):
         fetch_earnings_calendar_events([{"ticker": "AAPL", "company_name": "Apple"}])
 
-    params = mock_get.call_args.kwargs["params"]
-    assert params["from"] == "2026-06-29"
-    assert params["to"] == "2026-10-27"
+    assert mock_get.call_count == 2
+    near_params = mock_get.call_args_list[0].kwargs["params"]
+    later_params = mock_get.call_args_list[1].kwargs["params"]
+    assert near_params["from"] == "2026-06-29"
+    assert near_params["to"] == "2026-07-06"
+    assert later_params["from"] == "2026-07-07"
+    assert later_params["to"] == "2026-10-27"
+
+
+@patch(
+    "backend.src.collectors.earnings_collector.fetch_alpha_vantage_earnings_calendar_events"
+)
+@patch("backend.src.collectors.earnings_collector.requests.get")
+def test_near_term_finnhub_query_confirms_representative_alpha_event(
+    mock_get, mock_alpha, monkeypatch
+):
+    monkeypatch.setenv("FINNHUB_KEY", "test-finnhub-key")
+    from backend.src.services.secrets import get_provider_api_key
+
+    get_provider_api_key.cache_clear()
+    mock_alpha.return_value = [
+        {
+            "ticker": "AVGO",
+            "event_date": date(2026, 9, 2),
+            "provider": "alpha_vantage_calendar",
+            "provider_observation_id": (
+                "alpha_vantage_calendar:AVGO:2026-09-02:2026-07-31"
+            ),
+        }
+    ]
+    near_response = MagicMock()
+    near_response.raise_for_status.return_value = None
+    near_response.json.return_value = {
+        "earningsCalendar": [
+            {"symbol": "AVGO", "date": "2026-09-02", "hour": "amc"}
+        ]
+    }
+    later_response = MagicMock()
+    later_response.raise_for_status.return_value = None
+    later_response.json.return_value = {"earningsCalendar": []}
+    mock_get.side_effect = [near_response, later_response]
+    attempts: dict[str, dict] = {}
+
+    events = fetch_earnings_calendar_events(
+        [{"ticker": "AVGO", "company_name": "Broadcom"}],
+        start_date=date(2026, 9, 2),
+        end_date=date(2026, 12, 31),
+        provider_attempts=attempts,
+    )
+
+    assert len(events) == 1
+    assert events[0]["ticker"] == "AVGO"
+    assert events[0]["reconciliation_status"] == "confirmed"
+    assert events[0]["date_confidence"] == "high"
+    assert len(events[0]["observation_ids"]) == 2
+    assert attempts["finnhub"]["event_count"] == 1
+    assert attempts["finnhub_long_range"]["event_count"] == 0
 
 
 def test_select_stocks_honors_ticker_offset():

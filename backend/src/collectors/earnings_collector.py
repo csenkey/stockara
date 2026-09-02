@@ -1015,6 +1015,74 @@ def fetch_earnings_calendar_events(
         logger.warning("finnhub_api_key_not_configured_for_earnings_calendar")
         return reconcile_earnings_events(alpha_events)
 
+    active_by_ticker = {
+        str(stock.get("ticker", "")).upper(): stock
+        for stock in stocks
+        if stock.get("ticker")
+    }
+    events: list[dict[str, Any]] = []
+    for diagnostic_provider, query_start, query_end in _finnhub_query_ranges(
+        range_start, range_end
+    ):
+        raw_rows = _fetch_finnhub_calendar_rows(
+            query_start,
+            query_end,
+            api_key,
+            diagnostic_provider=diagnostic_provider,
+            provider_attempts=provider_attempts,
+        )
+        if raw_rows is None:
+            continue
+        range_events = _normalize_finnhub_calendar_rows(
+            raw_rows,
+            active_by_ticker,
+            today=today,
+            range_start=query_start,
+            range_end=query_end,
+            provider_events=provider_events,
+        )
+        events.extend(range_events)
+        _record_provider_attempt(
+            provider_attempts,
+            diagnostic_provider,
+            "success" if range_events else "empty",
+            event_count=len(range_events),
+            raw_event_count=len(raw_rows),
+        )
+    events = _deduplicate_provider_events(events)
+    events = reconcile_earnings_events([*events, *alpha_events])
+    events = confirm_near_term_earnings_conflicts(
+        events,
+        stocks,
+        as_of=today,
+        provider_events=provider_events,
+        provider_attempts=provider_attempts,
+    )
+    logger.info("earnings_calendar_events_fetched", count=len(events))
+    return events
+
+
+def _finnhub_query_ranges(
+    range_start: date,
+    range_end: date,
+) -> list[tuple[str, date, date]]:
+    """Reserve one Finnhub request for the first seven days to avoid row caps."""
+    near_end = min(range_end, range_start + timedelta(days=7))
+    ranges = [("finnhub", range_start, near_end)]
+    later_start = near_end + timedelta(days=1)
+    if later_start <= range_end:
+        ranges.append(("finnhub_long_range", later_start, range_end))
+    return ranges
+
+
+def _fetch_finnhub_calendar_rows(
+    range_start: date,
+    range_end: date,
+    api_key: str,
+    *,
+    diagnostic_provider: str,
+    provider_attempts: dict[str, dict[str, Any]] | None,
+) -> list[dict[str, Any]] | None:
     try:
         response = requests.get(
             FINNHUB_EARNINGS_CALENDAR_URL,
@@ -1031,36 +1099,46 @@ def fetch_earnings_calendar_events(
         status = "rate_limited" if "429" in str(exc) else "failed"
         _record_provider_attempt(
             provider_attempts,
-            "finnhub",
+            diagnostic_provider,
             status,
             error=exc,
         )
         logger.warning(
             "finnhub_earnings_calendar_unavailable",
+            diagnostic_provider=diagnostic_provider,
+            range_start=range_start.isoformat(),
+            range_end=range_end.isoformat(),
             error=_safe_provider_error(exc),
         )
-        return reconcile_earnings_events(alpha_events)
-    active_by_ticker = {
-        str(stock.get("ticker", "")).upper(): stock
-        for stock in stocks
-        if stock.get("ticker")
-    }
-    events: list[dict[str, Any]] = []
+        return None
     raw_rows = payload.get("earningsCalendar", [])
     if not isinstance(raw_rows, list):
         _record_provider_attempt(
             provider_attempts,
-            "finnhub",
+            diagnostic_provider,
             "failed",
             error="earningsCalendar payload was not a list",
         )
-        return reconcile_earnings_events(alpha_events)
+        return None
+    return raw_rows
+
+
+def _normalize_finnhub_calendar_rows(
+    raw_rows: list[dict[str, Any]],
+    active_by_ticker: dict[str, dict[str, Any]],
+    *,
+    today: date,
+    range_start: date,
+    range_end: date,
+    provider_events: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
     for row in raw_rows:
         ticker = str(row.get("symbol", "")).upper()
         if ticker not in active_by_ticker:
             continue
         event_date = _normalize_event_date(row.get("date"))
-        if event_date is None:
+        if event_date is None or not range_start <= event_date <= range_end:
             continue
         stock = active_by_ticker[ticker]
         if provider_events is not None:
@@ -1077,6 +1155,7 @@ def fetch_earnings_calendar_events(
                     },
                 )
             )
+        fiscal_quarter = _finnhub_fiscal_quarter(row)
         events.append(
             {
                 "ticker": ticker,
@@ -1088,36 +1167,16 @@ def fetch_earnings_calendar_events(
                 "surprise_percent": _to_decimal(row.get("surprisePercent")),
                 "time_of_day": _normalize_time_of_day(row.get("hour")),
                 "fiscal_period_end": None,
-                "fiscal_quarter": _finnhub_fiscal_quarter(row),
+                "fiscal_quarter": fiscal_quarter,
                 "is_upcoming": event_date >= today,
                 "provider": "finnhub",
                 "provider_observation_id": _provider_observation_id(
-                    "finnhub",
-                    ticker,
-                    event_date,
-                    _finnhub_fiscal_quarter(row),
+                    "finnhub", ticker, event_date, fiscal_quarter
                 ),
                 "source_url": "https://finnhub.io/calendar/earnings",
                 "collected_at": datetime.now(timezone.utc).isoformat(),
             }
         )
-    finnhub_event_count = len(events)
-    events = reconcile_earnings_events([*events, *alpha_events])
-    events = confirm_near_term_earnings_conflicts(
-        events,
-        stocks,
-        as_of=today,
-        provider_events=provider_events,
-        provider_attempts=provider_attempts,
-    )
-    logger.info("earnings_calendar_events_fetched", count=len(events))
-    _record_provider_attempt(
-        provider_attempts,
-        "finnhub",
-        "success" if finnhub_event_count else "empty",
-        event_count=finnhub_event_count,
-        raw_event_count=len(raw_rows),
-    )
     return events
 
 
