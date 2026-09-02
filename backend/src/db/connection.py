@@ -642,6 +642,23 @@ class DynamoStore:
         )
         return sorted((_strip_keys(row) for row in rows), key=lambda row: row["event_date"])
 
+    def earnings_events(
+        self, start_date: date, end_date: date
+    ) -> list[dict[str, Any]]:
+        """Return all stored earnings events in a date range via the calendar GSI."""
+        rows = self._query(
+            IndexName=GSI1,
+            KeyConditionExpression=Key("GSI1PK").eq("EARNINGS")
+            & Key("GSI1SK").between(
+                f"{_date_str(start_date)}#",
+                f"{_date_str(end_date)}#~",
+            ),
+        )
+        return sorted(
+            (_strip_keys(row) for row in rows),
+            key=lambda row: (row["event_date"], row["ticker"]),
+        )
+
     def upcoming_earnings(
         self,
         start_date: date,

@@ -34,6 +34,11 @@ from src.services.calendar_artifacts import (
     publish_calendar_artifacts,
     publish_calendar_provider_snapshots,
 )
+from src.services.earnings_history_coverage import (
+    INCOMPLETE_COLLECTION_OUTCOMES,
+    build_earnings_history_coverage,
+    publish_earnings_history_coverage,
+)
 from src.services.secrets import get_provider_api_key
 
 logger = structlog.get_logger(__name__)
@@ -130,6 +135,7 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
         provider_events: list[dict[str, Any]] = []
         failed_tickers: list[str] = []
         provider_attempts: dict[str, dict[str, Any]] = {}
+        ticker_collection_outcomes: dict[str, str] = {}
 
         if manifest_task_run:
             collected_events, failed_tickers = _collect_per_ticker(
@@ -140,6 +146,7 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
                 range_end=range_end,
                 provider_events=provider_events,
                 provider_attempts=provider_attempts,
+                ticker_collection_outcomes=ticker_collection_outcomes,
             )
         else:
             events = fetch_earnings_calendar_events(
@@ -163,6 +170,7 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
                     range_end=range_end,
                     provider_events=provider_events,
                     provider_attempts=provider_attempts,
+                    ticker_collection_outcomes=ticker_collection_outcomes,
                     include_range_calendar=False,
                 )
                 events = fallback_events
@@ -171,6 +179,22 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
                 collected_events.append(enrich_price_reaction(earnings_event))
 
         stored_count = _store_events(collected_events)
+        history_end = collection_date - timedelta(days=1)
+        stored_history = _load_stored_history(
+            selected=selected,
+            range_start=range_start,
+            range_end=history_end,
+            full_watchlist=(
+                manifest_task_run is None
+                and not _has_explicit_ticker_selection(event)
+            ),
+        )
+        history_coverage = build_earnings_history_coverage(
+            tickers=[stock["ticker"] for stock in selected],
+            events=stored_history,
+            as_of=collection_date,
+            collection_outcomes=ticker_collection_outcomes,
+        )
         event_tickers = {str(item.get("ticker") or "").upper() for item in collected_events}
         zero_event_tickers = [
             stock["ticker"] for stock in selected if stock["ticker"] not in event_tickers
@@ -189,8 +213,17 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
             )
         )
         response_status = _response_status(failed_tickers, provider_health)
-        artifact_scope = manifest_task_run.task_id if manifest_task_run else None
-        publish_latest_artifacts = manifest_task_run is None
+        artifact_scope = (
+            manifest_task_run.task_id
+            if manifest_task_run
+            else str(event.get("artifact_scope") or "").strip() or (
+                "targeted" if _has_explicit_ticker_selection(event) else None
+            )
+        )
+        publish_latest_artifacts = (
+            manifest_task_run is None
+            and not _has_explicit_ticker_selection(event)
+        )
         publish_calendar_artifacts(
             bucket=str(event.get("artifact_bucket") or ARTIFACT_BUCKET),
             event_type="earnings",
@@ -217,10 +250,28 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
             artifact_scope=artifact_scope,
             publish_latest=publish_latest_artifacts,
         )
+        publish_earnings_history_coverage(
+            bucket=str(event.get("artifact_bucket") or ARTIFACT_BUCKET),
+            payload=history_coverage,
+            artifact_scope=artifact_scope,
+            publish_latest=publish_latest_artifacts,
+        )
 
         _emit_metric("earnings_events_collected", stored_count)
         _emit_metric("earnings_collection_failed_tickers", len(failed_tickers))
         _emit_metric("earnings_zero_event_tickers", len(zero_event_tickers))
+        _emit_metric(
+            "earnings_history_complete_tickers",
+            history_coverage["summary"]["complete_ticker_count"],
+        )
+        _emit_metric(
+            "earnings_history_incomplete_tickers",
+            history_coverage["summary"]["incomplete_ticker_count"],
+        )
+        _emit_metric(
+            "earnings_history_collection_skips",
+            history_coverage["summary"]["incomplete_collection_ticker_count"],
+        )
         _emit_metric(
             "earnings_confirmed_events",
             reconciliation_counts["confirmed"],
@@ -269,6 +320,7 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
                 "warnings": warnings,
                 "reconciliation_counts": reconciliation_counts,
                 "conflict_confirmation_attempts": conflict_confirmation_attempts,
+                "history_coverage": history_coverage["summary"],
             },
         }
     except Exception as exc:
@@ -325,6 +377,7 @@ def _collect_per_ticker(
     range_end: date,
     provider_events: list[dict[str, Any]],
     provider_attempts: dict[str, dict[str, Any]] | None = None,
+    ticker_collection_outcomes: dict[str, str] | None = None,
     include_range_calendar: bool = True,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     failed_tickers: list[str] = []
@@ -345,6 +398,7 @@ def _collect_per_ticker(
 
     for stock in selected:
         ticker = stock["ticker"]
+        ticker_attempts: dict[str, dict[str, Any]] = {}
         try:
             events = fetch_earnings_events(
                 ticker,
@@ -353,11 +407,19 @@ def _collect_per_ticker(
                 start_date=range_start,
                 end_date=range_end,
                 provider_events=provider_events,
-                provider_attempts=provider_attempts,
+                provider_attempts=ticker_attempts,
             )
             collected_events.extend(events)
+            _merge_provider_attempts(provider_attempts, ticker_attempts)
+            outcome = _ticker_collection_outcome(events, ticker_attempts)
+            if ticker_collection_outcomes is not None:
+                ticker_collection_outcomes[ticker] = outcome
+            if outcome in INCOMPLETE_COLLECTION_OUTCOMES:
+                failed_tickers.append(ticker)
         except Exception as exc:
             failed_tickers.append(ticker)
+            if ticker_collection_outcomes is not None:
+                ticker_collection_outcomes[ticker] = "failed"
             log.warning("earnings_ticker_collection_failed", ticker=ticker, error=str(exc))
     reconciled_events = reconcile_earnings_events(collected_events)
     enriched_events = [
@@ -368,6 +430,42 @@ def _collect_per_ticker(
         )
     ]
     return enriched_events, failed_tickers
+
+
+def _ticker_collection_outcome(
+    events: list[dict[str, Any]],
+    attempts: dict[str, dict[str, Any]],
+) -> str:
+    if events:
+        return "collected"
+    statuses = {
+        status
+        for attempt in attempts.values()
+        for status in attempt.get("statuses", {})
+    }
+    for outcome in ("budget_exhausted", "rate_limited", "unconfigured", "failed"):
+        if outcome in statuses:
+            return outcome
+    return "empty"
+
+
+def _merge_provider_attempts(
+    target: dict[str, dict[str, Any]] | None,
+    source: dict[str, dict[str, Any]],
+) -> None:
+    if target is None:
+        return
+    for provider, attempt in source.items():
+        merged = target.setdefault(
+            provider,
+            {"attempt_count": 0, "event_count": 0, "raw_event_count": 0, "statuses": {}},
+        )
+        for field in ("attempt_count", "event_count", "raw_event_count"):
+            merged[field] += int(attempt.get(field, 0))
+        for status, count in attempt.get("statuses", {}).items():
+            merged["statuses"][status] = merged["statuses"].get(status, 0) + int(count)
+        if attempt.get("last_error"):
+            merged["last_error"] = attempt["last_error"]
 
 
 def _select_rotating_fallback_stocks(
@@ -496,6 +594,29 @@ def _store_events(events: list[dict[str, Any]]) -> int:
         store.put_earnings_event(earnings_event)
         stored_count += 1
     return stored_count
+
+
+def _load_stored_history(
+    *,
+    selected: list[dict[str, Any]],
+    range_start: date,
+    range_end: date,
+    full_watchlist: bool,
+) -> list[dict[str, Any]]:
+    if range_start > range_end:
+        return []
+    if full_watchlist:
+        return store.earnings_events(range_start, range_end)
+    events: list[dict[str, Any]] = []
+    for stock in selected:
+        events.extend(
+            store.earnings_events_for_ticker(
+                stock["ticker"],
+                range_start,
+                range_end,
+            )
+        )
+    return events
 
 
 def _prepare_manifest_task_run(

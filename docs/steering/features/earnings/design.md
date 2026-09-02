@@ -86,6 +86,17 @@ reactions use the first eligible session boundary based on `before_market`,
 `after_market`, or explicit time. Returns are adjusted against SPY and a mapped
 sector benchmark when data exists.
 
+The earnings collector publishes history coverage to
+`earnings/history-coverage/as_of_date=YYYY-MM-DD/coverage.json` and, only for a
+full-watchlist run, `earnings/history-coverage/latest.json`. Manifest tasks use a
+`task_id=...` child path and never replace the global latest report. Each ticker
+reports its distinct historical quarter count, estimate/actual field counts,
+date bounds, coverage status, collection outcome, and incomplete reasons. Eight
+distinct past quarters is the current completeness threshold. Provider budget,
+quota, configuration, and request failures are explicit incomplete collection
+outcomes even when previously stored history exists; they are also counted as
+failed manifest tickers rather than successful work.
+
 Feature snapshots are immutable and keyed by strategy, ticker, event, prediction
 timestamp, provider snapshot hash, and schema version. Report/transcript content
 published after the prediction cutoff is excluded by construction.

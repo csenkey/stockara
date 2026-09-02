@@ -436,6 +436,39 @@ def test_upcoming_earnings_queries_gsi_and_filters_past_events():
     store._query.assert_called_once()
 
 
+def test_earnings_events_queries_gsi_without_filtering_historical_rows():
+    store = _TestableDynamoStore()
+    store._query = MagicMock(
+        return_value=[
+            {
+                "PK": "EARNINGS#MSFT",
+                "SK": "DATE#2025-07-20",
+                "GSI1PK": "EARNINGS",
+                "GSI1SK": "2025-07-20#MSFT",
+                "entity": "earnings_event",
+                "ticker": "MSFT",
+                "event_date": "2025-07-20",
+                "is_upcoming": False,
+            },
+            {
+                "PK": "EARNINGS#AAPL",
+                "SK": "DATE#2025-04-20",
+                "GSI1PK": "EARNINGS",
+                "GSI1SK": "2025-04-20#AAPL",
+                "entity": "earnings_event",
+                "ticker": "AAPL",
+                "event_date": "2025-04-20",
+                "is_upcoming": False,
+            },
+        ]
+    )
+
+    events = store.earnings_events(date(2024, 1, 1), date(2026, 9, 1))
+
+    assert [event["ticker"] for event in events] == ["AAPL", "MSFT"]
+    store._query.assert_called_once()
+
+
 def test_upcoming_earnings_is_uncapped_by_default():
     store = _TestableDynamoStore()
     store._query = MagicMock(

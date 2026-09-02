@@ -11,6 +11,7 @@ from src.models.schemas import CollectionTaskType
 
 from backend.src.collectors.earnings_collector import (
     ManifestTaskRun,
+    _collect_per_ticker,
     _complete_manifest_task_run,
     confirm_near_term_earnings_conflicts,
     enrich_price_reaction,
@@ -23,6 +24,41 @@ from backend.src.collectors.earnings_collector import (
     _select_stocks,
     _select_rotating_fallback_stocks,
 )
+
+
+def test_per_ticker_collection_counts_budget_skip_as_failure():
+    attempts: dict[str, dict] = {}
+    outcomes: dict[str, str] = {}
+
+    def budget_skipped(_ticker, **kwargs):
+        kwargs["provider_attempts"]["alpha_vantage"] = {
+            "attempt_count": 1,
+            "event_count": 0,
+            "raw_event_count": 0,
+            "statuses": {"budget_exhausted": 1},
+        }
+        return []
+
+    with patch(
+        "backend.src.collectors.earnings_collector.fetch_earnings_events",
+        side_effect=budget_skipped,
+    ):
+        events, failed = _collect_per_ticker(
+            [{"ticker": "AAPL"}],
+            {},
+            MagicMock(),
+            range_start=date(2024, 1, 1),
+            range_end=date(2026, 9, 2),
+            provider_events=[],
+            provider_attempts=attempts,
+            ticker_collection_outcomes=outcomes,
+            include_range_calendar=False,
+        )
+
+    assert events == []
+    assert failed == ["AAPL"]
+    assert outcomes == {"AAPL": "budget_exhausted"}
+    assert attempts["alpha_vantage"]["statuses"] == {"budget_exhausted": 1}
 
 
 def test_fetch_earnings_events_normalizes_yfinance_rows():
