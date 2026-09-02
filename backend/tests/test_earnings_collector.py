@@ -755,6 +755,36 @@ def test_degraded_empty_manifest_task_is_completed_as_failed(mock_complete):
     }
 
 
+@patch("backend.src.collectors.earnings_collector.complete_persisted_manifest_task")
+def test_quota_skipped_manifest_task_retains_provider_failure_reason(mock_complete):
+    task_run = ManifestTaskRun(
+        bucket="bucket",
+        key="collection_manifest/2026-08-01.json",
+        manifest_date=date(2026, 8, 1),
+        task_id="earnings-1",
+    )
+
+    _complete_manifest_task_run(
+        task_run,
+        selected_ticker_count=2,
+        stored_count=3,
+        failed_tickers=["AAPL"],
+        provider_health={"status": "partial"},
+        ticker_collection_outcomes={
+            "AAPL": "rate_limited",
+            "MSFT": "collected",
+        },
+    )
+
+    counts = mock_complete.call_args.args[2]
+    assert counts.successful_tickers == 1
+    assert counts.failed_tickers == 1
+    assert mock_complete.call_args.kwargs == {
+        "failed": True,
+        "failure_reason": "alpha_vantage quota or rate limit exhausted",
+    }
+
+
 def test_enrich_price_reaction_uses_stored_prices_around_past_event():
     event = {
         "ticker": "NVDA",

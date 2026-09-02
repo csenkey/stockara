@@ -120,6 +120,23 @@ def test_rate_limited_task_uses_provider_quota_delay():
     assert retry_delay_for_failure(task, "rate limit exceeded") == timedelta(hours=24)
 
 
+def test_earnings_task_uses_named_provider_quota_delay_from_failure_reason():
+    now = datetime(2026, 6, 20, 7, 30, tzinfo=timezone.utc)
+    task = CollectionTask(
+        task_id="earnings-0001",
+        task_type=CollectionTaskType.EARNINGS,
+        tickers=["AAPL"],
+        created_at=now,
+        updated_at=now,
+        attempts=1,
+    )
+
+    assert retry_delay_for_failure(
+        task,
+        "alpha_vantage quota or rate limit exhausted",
+    ) == timedelta(hours=24)
+
+
 def test_provider_unsupported_failure_does_not_retry():
     generated_at = datetime(2026, 6, 20, 7, 30, tzinfo=timezone.utc)
     manifest = build_manifest(

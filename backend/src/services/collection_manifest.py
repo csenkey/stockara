@@ -358,7 +358,12 @@ def retry_delay_for_failure(task: CollectionTask, reason: str | None) -> timedel
     }:
         return None
 
+    reason_text = str(reason or "").lower()
     provider = (task.provider or task.task_type.value).lower()
+    for known_provider in RATE_LIMIT_RETRY_HOURS:
+        if known_provider in reason_text:
+            provider = known_provider
+            break
     if health.value == "rate_limited":
         return timedelta(hours=RATE_LIMIT_RETRY_HOURS.get(provider, 1))
 

@@ -397,6 +397,26 @@ def test_expired_lease_is_ready_for_redispatch():
     ) is True
 
 
+def test_delayed_earnings_chunk_does_not_block_later_watchlist_chunks(monkeypatch):
+    monkeypatch.setattr(collection_distributor, "CALENDAR_TASK_CHUNK_SIZE", 2)
+    now = datetime(2026, 7, 31, 21, 5, tzinfo=timezone.utc)
+    manifest = build_manifest(
+        [{"ticker": ticker} for ticker in ["AAPL", "MSFT", "NVDA", "SA", "TSLA"]],
+        manifest_date=now.date(),
+        generated_at=now,
+        task_types=[CollectionTaskType.EARNINGS],
+    )
+    manifest.tasks[0].status = CollectionTaskStatus.RETRY_WAIT
+    manifest.tasks[0].next_retry_at = now + timedelta(hours=24)
+
+    ready = collection_distributor._ready_tasks_by_type(manifest, now)
+
+    assert [task.tickers for task in ready] == [
+        ["NVDA", "SA"],
+        ["TSLA"],
+    ]
+
+
 @patch("src.collectors.collection_distributor.DatabasePool")
 def test_handler_fails_without_artifact_bucket(mock_pool, monkeypatch):
     monkeypatch.setattr(

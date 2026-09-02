@@ -97,6 +97,17 @@ quota, configuration, and request failures are explicit incomplete collection
 outcomes even when previously stored history exists; they are also counted as
 failed manifest tickers rather than successful work.
 
+Historical backfill uses the daily collection manifest's persistent DynamoDB
+task rows. Earnings work is split into deterministic, alphabetically complete
+10-ticker chunks—smaller than the configured 20-call Alpha Vantage invocation
+budget—and each chunk has an atomic lease, attempt count, output counts, and
+retry timestamp. A quota-delayed chunk remains resumable while later earnings
+chunks continue through the watchlist; it does not block the next ticker range.
+Provider-specific quota reasons survive task completion so Alpha Vantage limits
+receive the provider's longer retry delay instead of being flattened into a
+generic partial failure. Writes remain idempotent at ticker/report date, making
+replayed chunks safe.
+
 Feature snapshots are immutable and keyed by strategy, ticker, event, prediction
 timestamp, provider snapshot hash, and schema version. Report/transcript content
 published after the prediction cutoff is excluded by construction.

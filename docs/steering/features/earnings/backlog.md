@@ -109,8 +109,21 @@ tests, deployment, and production verification requirements are satisfied.
 
 ## 3. Historical earnings foundation
 
-- [ ] EARN-3.1 Audit per-ticker quarterly history coverage and publish a dated
+- [x] EARN-3.1 Audit per-ticker quarterly history coverage and publish a dated
   coverage artifact with quota/budget skips counted as incomplete.
+  - Commits `d2176a4` and `050f141` add a DynamoDB range audit, per-ticker
+    coverage/field counts, explicit collection outcomes, scoped task artifacts,
+    full-watchlist detection, and CloudWatch coverage/skip metrics. A skipped
+    per-ticker provider attempt is also counted as a failed manifest ticker.
+  - All 498 backend tests passed locally. Deployment run `33622987731` passed
+    backend, frontend, infrastructure, CDK deployment, API smoke, and static
+    artifact smoke gates on 2026-09-02.
+  - Production refresh run `33623360131` audited all 907 active tickers and
+    published both the dated and latest artifacts. The live result reports 841
+    complete, 2 partial, and 64 missing histories: 92.72% of the active universe
+    has at least eight stored quarters. Field counters also make the current
+    revenue-estimate gap explicit rather than treating those rows as complete
+    evidence.
 - [ ] EARN-3.2 Make history backfill resumable and fair across the watchlist;
   never report a quota-skipped chunk as fully successful.
 - [ ] EARN-3.3 Store fiscal period, EPS/revenue estimates and actuals, surprise,

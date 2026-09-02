@@ -136,7 +136,11 @@ Canonical feature docs:
 
 Next executable items:
 
-- Audit and backfill historical earnings, estimates, actuals, and price reactions.
+- Make the historical earnings backfill resumable and fair, then fill the 66
+  incomplete histories identified by the 2026-09-02 production audit.
+- Preserve revenue estimates/actuals, fiscal identity, revisions, guidance, and
+  observation provenance before treating eight-quarter event coverage as full
+  decision-grade evidence.
 - Implement leakage-safe event studies and shadow predictions before exposing
   any actionable earnings-event classification.
 
@@ -154,6 +158,9 @@ Completed reliability work:
 - Done and production-verified: publish the dedicated uncapped calendar, merge
   Alpha Vantage and Finnhub observations, reserve a seven-day Finnhub query,
   preserve conflicts, add bounded confirmation, and expose date confidence.
+- Done and production-verified: publish dated per-ticker history coverage and
+  measure the full 907-ticker universe. Current coverage is 841 complete, 2
+  partial, and 64 missing histories (92.72% at the eight-quarter threshold).
 
 ### 5. Phase 1 UI and Static Artifact Refinement
 

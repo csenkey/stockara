@@ -304,6 +304,7 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
                 stored_count=stored_count,
                 failed_tickers=failed_tickers,
                 provider_health=provider_health,
+                ticker_collection_outcomes=ticker_collection_outcomes,
             )
         return {
             "statusCode": 200,
@@ -666,6 +667,7 @@ def _complete_manifest_task_run(
     stored_count: int,
     failed_tickers: list[str],
     provider_health: dict[str, Any],
+    ticker_collection_outcomes: dict[str, str] | None = None,
 ) -> None:
     try:
         failed_count = len(set(failed_tickers))
@@ -676,7 +678,9 @@ def _complete_manifest_task_run(
                 provider_health.get("reason") or "earnings_provider_degraded"
             )
         elif failed_count:
-            failure_reason = "partial_ticker_failure"
+            failure_reason = _manifest_ticker_failure_reason(
+                ticker_collection_outcomes or {}
+            )
         output_counts = CollectionOutputCounts(
             records_fetched=stored_count,
             records_written=stored_count,
@@ -701,6 +705,17 @@ def _complete_manifest_task_run(
             task_id=task_run.task_id,
             error=str(exc),
         )
+
+
+def _manifest_ticker_failure_reason(collection_outcomes: dict[str, str]) -> str:
+    outcomes = set(collection_outcomes.values())
+    if "rate_limited" in outcomes:
+        return "alpha_vantage quota or rate limit exhausted"
+    if "budget_exhausted" in outcomes:
+        return "alpha_vantage invocation budget exhausted"
+    if "unconfigured" in outcomes:
+        return "earnings provider unconfigured"
+    return "partial_ticker_failure"
 
 
 def _fail_manifest_task_run(task_run: ManifestTaskRun, reason: str) -> None:
