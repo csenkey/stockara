@@ -109,6 +109,7 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
             if manifest_task_run or _has_explicit_ticker_selection(event)
             else sorted(stocks, key=lambda stock: stock["ticker"])
         )
+        full_watchlist_selection = _is_full_watchlist_selection(stocks, selected)
         collection_date = date.today()
         range_start = collection_date - timedelta(
             days=int(event.get("lookback_days", DEFAULT_LOOKBACK_DAYS))
@@ -184,10 +185,7 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
             selected=selected,
             range_start=range_start,
             range_end=history_end,
-            full_watchlist=(
-                manifest_task_run is None
-                and not _has_explicit_ticker_selection(event)
-            ),
+            full_watchlist=full_watchlist_selection,
         )
         history_coverage = build_earnings_history_coverage(
             tickers=[stock["ticker"] for stock in selected],
@@ -217,12 +215,12 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
             manifest_task_run.task_id
             if manifest_task_run
             else str(event.get("artifact_scope") or "").strip() or (
-                "targeted" if _has_explicit_ticker_selection(event) else None
+                "targeted" if not full_watchlist_selection else None
             )
         )
         publish_latest_artifacts = (
             manifest_task_run is None
-            and not _has_explicit_ticker_selection(event)
+            and full_watchlist_selection
         )
         publish_calendar_artifacts(
             bucket=str(event.get("artifact_bucket") or ARTIFACT_BUCKET),
@@ -366,6 +364,15 @@ def _select_stocks(stocks: list[dict[str, Any]], event: dict[str, Any]) -> list[
 
 def _has_explicit_ticker_selection(event: dict[str, Any]) -> bool:
     return any(key in event for key in ("tickers", "ticker_offset", "max_tickers"))
+
+
+def _is_full_watchlist_selection(
+    stocks: list[dict[str, Any]],
+    selected: list[dict[str, Any]],
+) -> bool:
+    active_tickers = {str(stock.get("ticker") or "").upper() for stock in stocks}
+    selected_tickers = {str(stock.get("ticker") or "").upper() for stock in selected}
+    return bool(active_tickers) and selected_tickers == active_tickers
 
 
 def _collect_per_ticker(

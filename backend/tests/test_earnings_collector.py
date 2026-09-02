@@ -13,6 +13,7 @@ from backend.src.collectors.earnings_collector import (
     ManifestTaskRun,
     _collect_per_ticker,
     _complete_manifest_task_run,
+    _is_full_watchlist_selection,
     confirm_near_term_earnings_conflicts,
     enrich_price_reaction,
     fetch_alpha_vantage_earnings_calendar_events,
@@ -24,6 +25,14 @@ from backend.src.collectors.earnings_collector import (
     _select_stocks,
     _select_rotating_fallback_stocks,
 )
+
+
+def test_full_watchlist_selection_uses_actual_ticker_set():
+    stocks = [{"ticker": "AAPL"}, {"ticker": "MSFT"}]
+
+    assert _is_full_watchlist_selection(stocks, list(reversed(stocks))) is True
+    assert _is_full_watchlist_selection(stocks, [{"ticker": "AAPL"}]) is False
+    assert _is_full_watchlist_selection([], []) is False
 
 
 def test_per_ticker_collection_counts_budget_skip_as_failure():
