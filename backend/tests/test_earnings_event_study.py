@@ -107,6 +107,31 @@ def test_missing_future_session_is_insufficient_not_zero():
     assert mapping.warnings == ["no_trading_session_available_for_report_boundary"]
 
 
+def test_missing_historical_calendar_does_not_jump_to_distant_session():
+    mapping = map_earnings_event_session(
+        report_date=date(2021, 10, 26),
+        time_of_day=None,
+        trading_sessions=[date(2025, 12, 24), date(2025, 12, 26)],
+    )
+
+    assert mapping.event_session is None
+    assert mapping.mapping_status == "missing_sessions"
+    assert mapping.evidence_quality == "insufficient"
+
+
+def test_unknown_timing_requires_both_candidates_on_a_trading_day():
+    mapping = map_earnings_event_session(
+        report_date=WEDNESDAY,
+        time_of_day=None,
+        trading_sessions=[MONDAY, TUESDAY, WEDNESDAY],
+    )
+
+    assert mapping.event_session is None
+    assert mapping.mapping_status == "missing_sessions"
+    assert mapping.candidate_event_sessions == [WEDNESDAY]
+    assert mapping.warnings == ["unknown_timing_after_market_candidate_missing"]
+
+
 def _rows(
     *,
     start_day: int = 1,

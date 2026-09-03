@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
 from collections.abc import Iterable
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -23,6 +23,7 @@ EVENT_RETURN_WINDOWS = (
 )
 ABNORMAL_VOLUME_BASELINE_SESSIONS = 20
 RETURN_QUANTUM = Decimal("0.0001")
+MAX_INFERRED_SESSION_GAP = timedelta(days=7)
 
 
 def map_earnings_event_session(
@@ -41,8 +42,8 @@ def map_earnings_event_session(
     timing = _normalized_timing(time_of_day)
     on_or_after_index = bisect_left(sessions, report_date)
     after_index = bisect_right(sessions, report_date)
-    on_or_after = _at(sessions, on_or_after_index)
-    after = _at(sessions, after_index)
+    on_or_after = _near_report_session(report_date, _at(sessions, on_or_after_index))
+    after = _near_report_session(report_date, _at(sessions, after_index))
     report_is_session = on_or_after == report_date
 
     if timing == "before_market":
@@ -63,9 +64,7 @@ def map_earnings_event_session(
             report_is_session=report_is_session,
         )
 
-    candidates = _unique_sessions(
-        [on_or_after, after if report_is_session else on_or_after]
-    )
+    candidates = _unique_sessions([on_or_after, after if report_is_session else on_or_after])
     if not candidates:
         return EarningsSessionMapping(
             report_date=report_date,
@@ -73,6 +72,16 @@ def map_earnings_event_session(
             mapping_status="missing_sessions",
             evidence_quality="insufficient",
             warnings=["no_trading_session_on_or_after_report_date"],
+        )
+    if report_is_session and after is None:
+        return EarningsSessionMapping(
+            report_date=report_date,
+            reported_timing=timing,
+            mapping_status="missing_sessions",
+            evidence_quality="insufficient",
+            prior_session=_prior_session(sessions, report_date),
+            candidate_event_sessions=candidates,
+            warnings=["unknown_timing_after_market_candidate_missing"],
         )
     if len(candidates) == 1:
         event_session = candidates[0]
@@ -395,6 +404,12 @@ def _reaction_id(
         f"{ticker.upper()}:{report_date.isoformat()}:"
         f"{event_session.isoformat() if event_session else 'unresolved'}"
     )
+
+
+def _near_report_session(report_date: date, candidate: date | None) -> date | None:
+    if candidate is None or candidate - report_date > MAX_INFERRED_SESSION_GAP:
+        return None
+    return candidate
 
 
 def _resolved_mapping(
