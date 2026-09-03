@@ -187,8 +187,17 @@ tests, deployment, and production verification requirements are satisfied.
 
 ## 4. Event-study implementation
 
-- [ ] EARN-4.1 Add timing-aware session mapping for before-open, after-close,
+- [x] EARN-4.1 Add timing-aware session mapping for before-open, after-close,
   unknown, weekends, and market holidays.
+  - Commit `202464f` adds a typed session-boundary contract driven by actual
+    ordered trading sessions rather than weekday arithmetic. Before-open maps to
+    the same eligible session, after-close to the next session, and weekends or
+    holidays advance naturally to the next observed session.
+  - Unknown timing on a trading day retains both candidates and selects neither;
+    unknown timing on a non-trading day collapses safely to one boundary.
+    Missing future sessions are insufficient evidence, never a zero return.
+  - All 514 backend tests and Ruff passed locally. Deployment run `33756120577`
+    passed the full CI/CD, CDK, API smoke, and artifact smoke path on 2026-09-03.
 - [ ] EARN-4.2 Compute raw, SPY-adjusted, and sector-adjusted multi-window returns
   plus abnormal volume using split-adjusted prices.
 - [ ] EARN-4.3 Add deterministic fixtures for splits, missing sessions, unknown

@@ -395,6 +395,51 @@ class EarningsSessionMapping(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class EarningsReturnWindow(BaseModel):
+    """One timing-relative return window from an earnings event study."""
+
+    window: Literal["[-5,-1]", "[-1,+1]", "[0,+1]", "[+1,+5]", "[+1,+20]"]
+    start_offset: int
+    end_offset: int
+    start_session: Optional[date] = None
+    end_session: Optional[date] = None
+    raw_return_percent: Optional[Decimal] = None
+    broad_market_return_percent: Optional[Decimal] = None
+    broad_market_adjusted_return_percent: Optional[Decimal] = None
+    sector_return_percent: Optional[Decimal] = None
+    sector_adjusted_return_percent: Optional[Decimal] = None
+    quality: Literal["complete", "partial", "missing"]
+    missing_inputs: list[str] = Field(default_factory=list)
+
+
+class EarningsEventReaction(BaseModel):
+    """Split-adjusted event-study output with explicit evidence gaps."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    ticker: str
+    report_date: date
+    event_session: Optional[date] = None
+    session_mapping: EarningsSessionMapping
+    price_basis: Literal["adjusted_close"] = "adjusted_close"
+    broad_market_ticker: str = "SPY"
+    sector_benchmark_ticker: Optional[str] = None
+    windows: list[EarningsReturnWindow] = Field(default_factory=list)
+    abnormal_volume_percent: Optional[Decimal] = None
+    volume_baseline_sessions: int = Field(default=0, ge=0)
+    evidence_quality: Literal["high", "medium", "low", "insufficient"]
+    warnings: list[str] = Field(default_factory=list)
+
+    @field_validator("ticker")
+    @classmethod
+    def validate_ticker_field(cls, value: str) -> str:
+        return validate_ticker(value)
+
+    @field_validator("broad_market_ticker", "sector_benchmark_ticker")
+    @classmethod
+    def validate_benchmark_ticker(cls, value: Optional[str]) -> Optional[str]:
+        return validate_ticker(value) if value else value
+
+
 class EarningsProviderObservation(BaseModel):
     """Immutable statement by one provider about one earnings event."""
 

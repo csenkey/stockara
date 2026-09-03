@@ -95,6 +95,16 @@ boundaries and selects neither; on a non-trading day both interpretations
 collapse to the next session. Missing future sessions are `insufficient`, never
 a fabricated zero-return observation.
 
+The reaction engine calculates `[-5,-1]`, `[-1,+1]`, `[0,+1]`, `[+1,+5]`, and
+`[+1,+20]` session returns from positive `adjusted_close_price` values only.
+SPY and the named sector benchmark must have prices on the exact same boundary
+sessions; a benchmark gap removes only that adjusted return while retaining a
+valid stock return. Abnormal volume compares the reaction session with exactly
+20 preceding exchange sessions. Every window records its boundary dates,
+missing inputs, and `complete`/`partial`/`missing` quality, while the event-level
+quality also reflects timing ambiguity, truncated histories, and volume gaps.
+The broad-market and sector benchmark ticker identities travel with the result.
+
 The earnings collector publishes history coverage to
 `earnings/history-coverage/as_of_date=YYYY-MM-DD/coverage.json` and, only for a
 full-watchlist run, `earnings/history-coverage/latest.json`. Manifest tasks use a
