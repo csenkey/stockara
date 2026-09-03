@@ -86,6 +86,15 @@ reactions use the first eligible session boundary based on `before_market`,
 `after_market`, or explicit time. Returns are adjusted against SPY and a mapped
 sector benchmark when data exists.
 
+Session mapping uses the actual ordered exchange/price sessions supplied to the
+event study, not weekday arithmetic. A before-open report maps to the first
+session on or after its report date; an after-close report on a trading day maps
+to the following session. Weekends, holidays, and closures therefore advance to
+the next observed session. Unknown timing on a trading day retains both possible
+boundaries and selects neither; on a non-trading day both interpretations
+collapse to the next session. Missing future sessions are `insufficient`, never
+a fabricated zero-return observation.
+
 The earnings collector publishes history coverage to
 `earnings/history-coverage/as_of_date=YYYY-MM-DD/coverage.json` and, only for a
 full-watchlist run, `earnings/history-coverage/latest.json`. Manifest tasks use a

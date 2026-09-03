@@ -376,6 +376,25 @@ class EarningsEvent(BaseModel):
         return validate_ticker(value)
 
 
+class EarningsSessionMapping(BaseModel):
+    """Trading-session boundary selected for an earnings announcement."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    report_date: date
+    reported_timing: Literal["before_market", "after_market", "unknown"]
+    mapping_status: Literal[
+        "exact",
+        "inferred_non_trading_day",
+        "ambiguous",
+        "missing_sessions",
+    ]
+    evidence_quality: Literal["high", "medium", "low", "insufficient"]
+    event_session: Optional[date] = None
+    prior_session: Optional[date] = None
+    candidate_event_sessions: list[date] = Field(default_factory=list, max_length=2)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class EarningsProviderObservation(BaseModel):
     """Immutable statement by one provider about one earnings event."""
 

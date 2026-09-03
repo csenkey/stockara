@@ -136,10 +136,10 @@ Canonical feature docs:
 
 Next executable items:
 
-- Continue filling the 63 histories still incomplete in the refreshed
-  full-universe audit, using bounded resumable batches within provider quotas.
-  `FCEL`, `MSFT`, and `SA` now have 20 stored quarters each.
-- Add alarms for history-coverage regression and provider quota exhaustion.
+- Continue filling histories within provider quotas. The latest full-universe
+  audit has 44 incomplete tickers; four of those were subsequently repaired and
+  await the next global audit. Keep genuinely short public histories explicitly
+  partial rather than fabricating eight quarters.
 - Implement leakage-safe event studies and shadow predictions before exposing
   any actionable earnings-event classification.
 
@@ -164,6 +164,9 @@ Completed reliability work:
   fair across chunks, and explicitly incomplete on provider skips; preserve the
   complete typed historical evidence contract without inventing fields absent
   from the configured providers.
+- Done and production-verified: alert on low or missing universe history
+  coverage and on actual provider quota exhaustion without allowing targeted
+  repair metrics to distort the full-watchlist signal.
 
 ### 5. Phase 1 UI and Static Artifact Refinement
 

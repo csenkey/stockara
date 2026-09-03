@@ -164,8 +164,26 @@ tests, deployment, and production verification requirements are satisfied.
     partial, and 61 missing histories: 93.05% of 907 active tickers meet the
     eight-quarter threshold. The remaining 63 are being processed in bounded,
     resumable batches rather than exceeding provider quotas.
-- [ ] EARN-3.5 Add monitoring for history coverage regression and provider quota
+  - Bounded run `33755323764` stored 384 reports for 20 incomplete tickers on
+    2026-09-03; 19 reached the threshold and ARQQ remains honestly partial with
+    seven available quarters. Full audit `33755596924` then reported 863
+    complete, 3 partial, and 41 missing histories (95.15%). Run `33755879357`
+    used the final four calls in that day's allowance to store another 80
+    reports; all four scoped tickers reached the threshold. A new full audit is
+    still required before recording the next global total.
+- [x] EARN-3.5 Add monitoring for history coverage regression and provider quota
   exhaustion.
+  - Commit `0c23119` emits a universe coverage percentage only for full-watchlist
+    runs, separately counts actual provider rate/quota blocks, and keeps
+    operator-configured budget exhaustion distinct. Targeted repair chunks
+    cannot distort the universe coverage alarm.
+  - CloudWatch alarms cover coverage below 90%, a missing 26-hour coverage
+    signal, and one or more provider-quota-blocked tickers. The dashboard exposes
+    coverage, incomplete ticker count, and quota-exhaustion count.
+  - All 507 backend tests, 25 infrastructure tests, and the CI-pinned Ruff gate
+    passed locally. Deployment run `33755419984` passed the full backend,
+    frontend, infrastructure, CDK deployment, API smoke, and artifact smoke path
+    on 2026-09-03.
 
 ## 4. Event-study implementation
 
