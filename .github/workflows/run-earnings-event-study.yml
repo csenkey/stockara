@@ -1,0 +1,99 @@
+name: Run Earnings Event Study
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_stage:
+        description: "Deployment stage to run"
+        required: true
+        default: "prod"
+        type: choice
+        options: [prod]
+      dry_run:
+        description: "Build and summarize without publishing"
+        required: true
+        default: true
+        type: boolean
+      ticker_csv:
+        description: "Optional comma-separated ticker subset"
+        required: false
+        default: ""
+      max_tickers:
+        description: "Maximum active tickers; 0 means uncapped"
+        required: true
+        default: "10"
+      offset:
+        description: "Sorted active ticker offset"
+        required: true
+        default: "0"
+      lookback_days:
+        description: "Historical report lookback"
+        required: true
+        default: "1825"
+      maturation_days:
+        description: "Age required before computing +20 sessions"
+        required: true
+        default: "35"
+      publish_artifact:
+        description: "Publish reaction artifacts"
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: run-earnings-event-study-${{ inputs.deployment_stage }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate numeric inputs
+        shell: bash
+        run: |
+          for value in "${{ inputs.max_tickers }}" "${{ inputs.offset }}" "${{ inputs.lookback_days }}" "${{ inputs.maturation_days }}"; do
+            [[ "$value" =~ ^[0-9]+$ ]] || { echo "Inputs must be non-negative integers."; exit 1; }
+          done
+      - name: Check AWS OIDC role configuration
+        run: |
+          [[ -n "${{ secrets.AWS_ROLE_TO_ASSUME }}" ]] || { echo "Missing AWS_ROLE_TO_ASSUME."; exit 1; }
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: stockara-earnings-event-study-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Resolve artifact bucket
+        shell: bash
+        env:
+          CONFIGURED_ARTIFACT_BUCKET: ${{ vars.STOCKARA_ARTIFACT_BUCKET || '' }}
+        run: |
+          bucket="$CONFIGURED_ARTIFACT_BUCKET"
+          if [[ -z "$bucket" ]]; then
+            bucket="$(aws cloudformation describe-stacks --stack-name StockMonitoringFrontend --query "Stacks[0].Outputs[?OutputKey=='BucketName'].OutputValue | [0]" --output text)"
+          fi
+          [[ -n "$bucket" && "$bucket" != "None" ]] || { echo "Unable to resolve artifact bucket."; exit 1; }
+          echo "STOCKARA_ARTIFACT_BUCKET=$bucket" >> "$GITHUB_ENV"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - name: Install backend dependencies
+        run: python -m pip install -r backend/requirements-dev.txt
+      - name: Build event studies
+        shell: bash
+        env:
+          STOCKARA_TABLE_NAME: stockara
+        run: |
+          args=(--max-tickers "${{ inputs.max_tickers }}" --offset "${{ inputs.offset }}" --lookback-days "${{ inputs.lookback_days }}" --maturation-days "${{ inputs.maturation_days }}")
+          [[ -z "${{ inputs.ticker_csv }}" ]] || args+=(--tickers "${{ inputs.ticker_csv }}")
+          [[ "${{ inputs.dry_run }}" != "true" ]] || args+=(--dry-run)
+          [[ "${{ inputs.publish_artifact }}" != "true" ]] || args+=(--publish-artifact)
+          python -m scripts.build_earnings_event_studies "${args[@]}"

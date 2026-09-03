@@ -416,6 +416,7 @@ class EarningsEventReaction(BaseModel):
     """Split-adjusted event-study output with explicit evidence gaps."""
 
     schema_version: Literal["1.0"] = "1.0"
+    reaction_id: str = Field(..., min_length=1, max_length=100)
     ticker: str
     report_date: date
     event_session: Optional[date] = None

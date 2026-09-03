@@ -128,6 +128,7 @@ def build_earnings_event_reaction(
     warnings = list(mapping.warnings)
     if mapping.event_session is None:
         return EarningsEventReaction(
+            reaction_id=_reaction_id(ticker, report_date, None),
             ticker=ticker,
             report_date=report_date,
             session_mapping=mapping,
@@ -155,6 +156,7 @@ def build_earnings_event_reaction(
     )
     if event_index is None:
         return EarningsEventReaction(
+            reaction_id=_reaction_id(ticker, report_date, mapping.event_session),
             ticker=ticker,
             report_date=report_date,
             event_session=mapping.event_session,
@@ -194,6 +196,7 @@ def build_earnings_event_reaction(
         abnormal_volume=abnormal_volume,
     )
     return EarningsEventReaction(
+        reaction_id=_reaction_id(ticker, report_date, mapping.event_session),
         ticker=ticker,
         report_date=report_date,
         event_session=mapping.event_session,
@@ -381,6 +384,17 @@ def _as_date(value: Any) -> date | None:
         except ValueError:
             return None
     return None
+
+
+def _reaction_id(
+    ticker: str,
+    report_date: date,
+    event_session: date | None,
+) -> str:
+    return (
+        f"{ticker.upper()}:{report_date.isoformat()}:"
+        f"{event_session.isoformat() if event_session else 'unresolved'}"
+    )
 
 
 def _resolved_mapping(

@@ -198,10 +198,20 @@ tests, deployment, and production verification requirements are satisfied.
     Missing future sessions are insufficient evidence, never a zero return.
   - All 514 backend tests and Ruff passed locally. Deployment run `33756120577`
     passed the full CI/CD, CDK, API smoke, and artifact smoke path on 2026-09-03.
-- [ ] EARN-4.2 Compute raw, SPY-adjusted, and sector-adjusted multi-window returns
+- [x] EARN-4.2 Compute raw, SPY-adjusted, and sector-adjusted multi-window returns
   plus abnormal volume using split-adjusted prices.
-- [ ] EARN-4.3 Add deterministic fixtures for splits, missing sessions, unknown
+  - Commit `f84ad8d` computes the five required return windows from adjusted
+    close only, aligns SPY and named sector benchmarks on exact sessions, and
+    measures event volume against exactly 20 preceding exchange sessions.
+  - Missing benchmark data retains raw returns with reduced evidence quality;
+    missing stock boundaries never shift to a nearby date or become zero.
+- [x] EARN-4.3 Add deterministic fixtures for splits, missing sessions, unknown
   timing, benchmark gaps, and delisted symbols.
+  - Deterministic tests cover split-divergent raw prices, sparse calendars,
+    unresolved timing, independent benchmark gaps, and truncated histories.
+    All 523 backend tests and Ruff passed locally; deployment run `33790821852`
+    passed the complete CI/CD, CDK, API-smoke, and artifact-smoke path on
+    2026-09-03.
 - [ ] EARN-4.4 Publish per-event reaction artifacts and a per-ticker historical
   reaction summary suitable for UI and model features.
 - [ ] EARN-4.5 Deploy and reconcile sampled calculations against independently

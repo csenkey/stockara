@@ -105,6 +105,16 @@ missing inputs, and `complete`/`partial`/`missing` quality, while the event-leve
 quality also reflects timing ambiguity, truncated histories, and volume gaps.
 The broad-market and sector benchmark ticker identities travel with the result.
 
+Reaction publication creates a compact dated index, one traceable payload per
+event, and one per-ticker history containing canonical window statistics. Each
+window summary reports raw, SPY-adjusted, and sector-adjusted sample counts,
+mean return, and positive-event rate; abnormal-volume sample count and mean are
+also explicit. An operator workflow builds these outputs only from stored
+DynamoDB earnings and price rows. Targeted, capped, and offset runs publish to a
+dated `task_id` scope and are structurally forbidden from replacing the global
+`latest` and `current` paths. Only an uncapped all-active-ticker run may update
+those stable consumer paths, and dry runs never write artifacts.
+
 The earnings collector publishes history coverage to
 `earnings/history-coverage/as_of_date=YYYY-MM-DD/coverage.json` and, only for a
 full-watchlist run, `earnings/history-coverage/latest.json`. Manifest tasks use a
