@@ -136,11 +136,10 @@ Canonical feature docs:
 
 Next executable items:
 
-- Make the historical earnings backfill resumable and fair, then fill the 66
-  incomplete histories identified by the 2026-09-02 production audit.
-- Preserve revenue estimates/actuals, fiscal identity, revisions, guidance, and
-  observation provenance before treating eight-quarter event coverage as full
-  decision-grade evidence.
+- Continue filling the 63 histories still incomplete in the refreshed
+  full-universe audit, using bounded resumable batches within provider quotas.
+  `FCEL`, `MSFT`, and `SA` now have 20 stored quarters each.
+- Add alarms for history-coverage regression and provider quota exhaustion.
 - Implement leakage-safe event studies and shadow predictions before exposing
   any actionable earnings-event classification.
 
@@ -159,8 +158,12 @@ Completed reliability work:
   Alpha Vantage and Finnhub observations, reserve a seven-day Finnhub query,
   preserve conflicts, add bounded confirmation, and expose date confidence.
 - Done and production-verified: publish dated per-ticker history coverage and
-  measure the full 907-ticker universe. Current coverage is 841 complete, 2
-  partial, and 64 missing histories (92.72% at the eight-quarter threshold).
+  measure the full 907-ticker universe. The latest full audit is 844 complete,
+  2 partial, and 61 missing histories (93.05% at the eight-quarter threshold).
+- Done and production-verified: make history backfill persistent, resumable,
+  fair across chunks, and explicitly incomplete on provider skips; preserve the
+  complete typed historical evidence contract without inventing fields absent
+  from the configured providers.
 
 ### 5. Phase 1 UI and Static Artifact Refinement
 

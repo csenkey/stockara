@@ -477,6 +477,32 @@ class MonitoringStack(Stack):
                 "The daily earnings calendar returned no usable watchlist events",
             ),
             (
+                "EarningsHistoryCoverageRegressionAlarm",
+                "stockara-earnings-history-coverage-regression",
+                "earnings-history-coverage-regression",
+                "earnings_history_coverage_percent",
+                "StockMonitoring",
+                "Minimum",
+                Duration.hours(26),
+                90,
+                cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+                cloudwatch.TreatMissingData.NOT_BREACHING,
+                "Earnings history coverage dropped below 90% of the active watchlist",
+            ),
+            (
+                "EarningsHistoryProviderQuotaExhaustedAlarm",
+                "stockara-earnings-history-provider-quota-exhausted",
+                "earnings-history-provider-quota-exhausted",
+                "earnings_history_provider_quota_exhausted_tickers",
+                "StockMonitoring",
+                "Sum",
+                Duration.hours(26),
+                1,
+                cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                cloudwatch.TreatMissingData.NOT_BREACHING,
+                "An earnings history provider quota blocked one or more tickers",
+            ),
+            (
                 "ExcessiveTickerFailuresAlarm",
                 "stockara-excessive-ticker-failures",
                 "excessive-ticker-failures",
@@ -635,6 +661,15 @@ class MonitoringStack(Stack):
                 Duration.hours(2),
                 "No collection manifest health metric has arrived in the expected window",
             ),
+            (
+                "EarningsHistoryCoverageMissingMetricAlarm",
+                "stockara-earnings-history-coverage-missing-metric",
+                "earnings-history-coverage-missing-metric",
+                "earnings_history_coverage_percent",
+                "StockMonitoring",
+                Duration.hours(26),
+                "No full-watchlist earnings history coverage metric arrived in the expected window",
+            ),
         ]
 
         for (
@@ -733,6 +768,33 @@ class MonitoringStack(Stack):
                         namespace="StockMonitoring",
                         metric_name="earnings_provider_degraded_runs",
                         statistic="Sum",
+                        period=Duration.hours(26),
+                    ),
+                ],
+            ),
+            cloudwatch.GraphWidget(
+                title="Earnings history coverage",
+                left=[
+                    cloudwatch.Metric(
+                        namespace="StockMonitoring",
+                        metric_name="earnings_history_incomplete_tickers",
+                        statistic="Maximum",
+                        period=Duration.hours(26),
+                    ),
+                    cloudwatch.Metric(
+                        namespace="StockMonitoring",
+                        metric_name=(
+                            "earnings_history_provider_quota_exhausted_tickers"
+                        ),
+                        statistic="Sum",
+                        period=Duration.hours(26),
+                    ),
+                ],
+                right=[
+                    cloudwatch.Metric(
+                        namespace="StockMonitoring",
+                        metric_name="earnings_history_coverage_percent",
+                        statistic="Minimum",
                         period=Duration.hours(26),
                     ),
                 ],

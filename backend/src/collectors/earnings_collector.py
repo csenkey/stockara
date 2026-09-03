@@ -258,17 +258,10 @@ def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:
         _emit_metric("earnings_events_collected", stored_count)
         _emit_metric("earnings_collection_failed_tickers", len(failed_tickers))
         _emit_metric("earnings_zero_event_tickers", len(zero_event_tickers))
-        _emit_metric(
-            "earnings_history_complete_tickers",
-            history_coverage["summary"]["complete_ticker_count"],
-        )
-        _emit_metric(
-            "earnings_history_incomplete_tickers",
-            history_coverage["summary"]["incomplete_ticker_count"],
-        )
-        _emit_metric(
-            "earnings_history_collection_skips",
-            history_coverage["summary"]["incomplete_collection_ticker_count"],
+        _emit_history_health_metrics(
+            history_coverage,
+            ticker_collection_outcomes,
+            full_watchlist=full_watchlist_selection,
         )
         _emit_metric(
             "earnings_confirmed_events",
@@ -1888,7 +1881,39 @@ def _parse_date(value: Any) -> date | None:
         return None
 
 
-def _emit_metric(metric_name: str, value: float) -> None:
+def _emit_history_health_metrics(
+    history_coverage: dict[str, Any],
+    collection_outcomes: dict[str, str],
+    *,
+    full_watchlist: bool,
+) -> None:
+    summary = history_coverage["summary"]
+    _emit_metric(
+        "earnings_history_complete_tickers",
+        summary["complete_ticker_count"],
+    )
+    _emit_metric(
+        "earnings_history_incomplete_tickers",
+        summary["incomplete_ticker_count"],
+    )
+    _emit_metric(
+        "earnings_history_collection_skips",
+        summary["incomplete_collection_ticker_count"],
+    )
+    _emit_metric(
+        "earnings_history_provider_quota_exhausted_tickers",
+        sum(outcome == "rate_limited" for outcome in collection_outcomes.values()),
+    )
+    if full_watchlist:
+        # Targeted repair chunks must not make the universe-wide alarm oscillate.
+        _emit_metric(
+            "earnings_history_coverage_percent",
+            summary["coverage_percent"],
+            unit="Percent",
+        )
+
+
+def _emit_metric(metric_name: str, value: float, *, unit: str = "Count") -> None:
     try:
         boto3.client("cloudwatch").put_metric_data(
             Namespace=CLOUDWATCH_NAMESPACE,
@@ -1896,7 +1921,7 @@ def _emit_metric(metric_name: str, value: float) -> None:
                 {
                     "MetricName": metric_name,
                     "Value": value,
-                    "Unit": "Count",
+                    "Unit": unit,
                     "Timestamp": datetime.now(timezone.utc),
                 }
             ],

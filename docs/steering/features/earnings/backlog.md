@@ -124,12 +124,46 @@ tests, deployment, and production verification requirements are satisfied.
     has at least eight stored quarters. Field counters also make the current
     revenue-estimate gap explicit rather than treating those rows as complete
     evidence.
-- [ ] EARN-3.2 Make history backfill resumable and fair across the watchlist;
+- [x] EARN-3.2 Make history backfill resumable and fair across the watchlist;
   never report a quota-skipped chunk as fully successful.
-- [ ] EARN-3.3 Store fiscal period, EPS/revenue estimates and actuals, surprise,
+  - Commit `7ef0084` preserves provider-specific failure reasons on persistent
+    manifest tasks, applies the longer Alpha Vantage quota retry delay, and
+    proves that a delayed earnings chunk does not block later chunks. Commit
+    `7edf337` adds the operator backfill checkpoint and explicit exit semantics.
+  - The manual backfill publishes `offset`, `resume_offset`, `has_more`, provider
+    attempts, collection outcomes, and coverage to dated and latest checkpoint
+    artifacts. Writes remain idempotent, dry runs do not mutate storage, and a
+    provider-budget skip exits non-zero instead of printing false success.
+  - All 505 backend tests, frontend tests/lint/build, and Ruff passed locally;
+    deployment runs `33624390909` and `33679710003` passed the complete CI/CD,
+    CDK, API-smoke, and artifact-smoke path on 2026-09-02.
+  - Controlled production run `33680281525` used a zero-call Alpha Vantage
+    budget for `MSFT,SA,FCEL`, failed intentionally with all three tickers marked
+    `budget_exhausted`, and retained `resume_offset=0`. Recovery run
+    `33680392841` resumed the same scope with three calls, stored 61 events, and
+    completed with all three tickers collected and `resume_offset=3`.
+- [x] EARN-3.3 Store fiscal period, EPS/revenue estimates and actuals, surprise,
   guidance evidence, revisions, source URLs, and observation timestamps.
+  - Commit `7edf337` adds typed guidance and estimate-revision evidence and
+    preserves fiscal identity, EPS/revenue estimate and actual fields,
+    independent surprise percentages, provider observation IDs, source URL
+    sets, and observation/collection timestamps through collection, DynamoDB,
+    analysis serialization, artifacts, and the frontend contract.
+  - Empty provider fields remain empty: Alpha Vantage quarterly history supplies
+    EPS and fiscal identity but no revenue, guidance, or revision history, so the
+    system measures those gaps instead of inferring values.
+  - Production recovery run `33680392841` published 61 scoped events. The live
+    artifact was verified with fiscal period/quarter, EPS estimate and actual,
+    source URL, observation timestamp, and stable provider observation ID; its
+    scoped coverage artifact reports 20 distinct quarters each for FCEL, MSFT,
+    and SA and explicit zero counts for unavailable revenue/guidance/revisions.
 - [ ] EARN-3.4 Backfill at least eight quarters for supported active tickers and
   verify coverage thresholds in production.
+  - Production full-watchlist audit run `33680766137` completed successfully on
+    2026-09-02 after the first recovery batch. Coverage is now 844 complete, 2
+    partial, and 61 missing histories: 93.05% of 907 active tickers meet the
+    eight-quarter threshold. The remaining 63 are being processed in bounded,
+    resumable batches rather than exceeding provider quotas.
 - [ ] EARN-3.5 Add monitoring for history coverage regression and provider quota
   exhaustion.
 

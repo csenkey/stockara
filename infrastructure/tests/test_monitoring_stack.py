@@ -294,6 +294,22 @@ def test_product_quality_alarms_are_created():
             "notBreaching",
         ),
         (
+            "StockMonitoring",
+            "earnings_history_coverage_percent",
+            "Minimum",
+            "LessThanThreshold",
+            90,
+            "notBreaching",
+        ),
+        (
+            "StockMonitoring",
+            "earnings_history_provider_quota_exhausted_tickers",
+            "Sum",
+            "GreaterThanOrEqualToThreshold",
+            1,
+            "notBreaching",
+        ),
+        (
             "StockaraPhase1",
             "ai_review_invalid_response_exhausted",
             "Sum",
@@ -366,5 +382,24 @@ def test_product_quality_dashboard_widgets_are_created():
         "Fallback and review gate usage",
         "Review evidence recovery",
         "Backfill and gap health",
+        "Earnings history coverage",
     ]:
         assert widget_title in dashboard_body
+
+
+def test_earnings_history_coverage_missing_metric_alarm_breaches():
+    app = cdk.App()
+    stack = _monitoring_stack(app, "TestEarningsHistoryMetricMonitoring")
+    template = assertions.Template.from_stack(stack)
+
+    template.has_resource_properties(
+        "AWS::CloudWatch::Alarm",
+        {
+            "Namespace": "StockMonitoring",
+            "MetricName": "earnings_history_coverage_percent",
+            "Statistic": "SampleCount",
+            "ComparisonOperator": "LessThanThreshold",
+            "Threshold": 1,
+            "TreatMissingData": "breaching",
+        },
+    )

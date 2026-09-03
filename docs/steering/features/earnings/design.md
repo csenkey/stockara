@@ -108,6 +108,13 @@ receive the provider's longer retry delay instead of being flattened into a
 generic partial failure. Writes remain idempotent at ticker/report date, making
 replayed chunks safe.
 
+Only a full-watchlist audit emits the universe-wide history coverage percentage;
+targeted repair chunks cannot overwrite or distort that metric. CloudWatch
+alarms notify when full-watchlist coverage falls below 90%, when the daily
+coverage metric is absent, or when an actual provider rate/quota limit blocks a
+ticker. Operator-configured request-budget exhaustion remains visible in task
+and artifact outcomes but is not mislabeled as a provider quota incident.
+
 The normalized historical contract keeps EPS and revenue consensus separately
 from reported EPS and revenue, with independent surprise percentages. It also
 keeps fiscal-period identity, report timing, a primary source URL plus the full

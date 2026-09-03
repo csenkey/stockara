@@ -821,6 +821,63 @@ def test_enrich_price_reaction_uses_stored_prices_around_past_event():
 
 
 @patch("backend.src.collectors.earnings_collector._emit_metric")
+def test_history_health_metrics_separate_full_coverage_from_quota_skips(mock_metric):
+    from backend.src.collectors.earnings_collector import _emit_history_health_metrics
+
+    coverage = {
+        "summary": {
+            "complete_ticker_count": 90,
+            "incomplete_ticker_count": 10,
+            "incomplete_collection_ticker_count": 2,
+            "coverage_percent": 90.0,
+        }
+    }
+
+    _emit_history_health_metrics(
+        coverage,
+        {
+            "AAPL": "rate_limited",
+            "MSFT": "budget_exhausted",
+            "NVDA": "collected",
+        },
+        full_watchlist=True,
+    )
+
+    mock_metric.assert_any_call("earnings_history_complete_tickers", 90)
+    mock_metric.assert_any_call("earnings_history_incomplete_tickers", 10)
+    mock_metric.assert_any_call("earnings_history_collection_skips", 2)
+    mock_metric.assert_any_call(
+        "earnings_history_provider_quota_exhausted_tickers", 1
+    )
+    mock_metric.assert_any_call(
+        "earnings_history_coverage_percent", 90.0, unit="Percent"
+    )
+
+
+@patch("backend.src.collectors.earnings_collector._emit_metric")
+def test_targeted_history_metrics_do_not_emit_universe_coverage(mock_metric):
+    from backend.src.collectors.earnings_collector import _emit_history_health_metrics
+
+    _emit_history_health_metrics(
+        {
+            "summary": {
+                "complete_ticker_count": 0,
+                "incomplete_ticker_count": 1,
+                "incomplete_collection_ticker_count": 0,
+                "coverage_percent": 0.0,
+            }
+        },
+        {"AAPL": "empty"},
+        full_watchlist=False,
+    )
+
+    assert not any(
+        call.args[0] == "earnings_history_coverage_percent"
+        for call in mock_metric.call_args_list
+    )
+
+
+@patch("backend.src.collectors.earnings_collector._emit_metric")
 @patch("backend.src.collectors.earnings_collector.fetch_earnings_calendar_events")
 @patch("backend.src.collectors.earnings_collector.DatabasePool")
 @patch("backend.src.collectors.earnings_collector.store")
