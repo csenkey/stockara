@@ -235,6 +235,21 @@ tests, deployment, and production verification requirements are satisfied.
     publish guessed returns.
 - [ ] EARN-4.5 Deploy and reconcile sampled calculations against independently
   calculated values.
+  - Historical-price repair commit `60e72d6` makes missing or shallow
+    `stock_history_start_date` metadata trigger a five-year restore and lowers
+    that boundary when older rows arrive. Deployment run `33884401830` passed;
+    targeted production run `33884819594` restored three S3 archives and
+    inserted 2,163 AAPL/MSFT/NVDA rows with no failed ticker.
+  - Post-repair event-study run `33911089113` passed and republished all 59
+    scoped events. All remain explicitly insufficient because their stored
+    historical earnings timing is unknown; the repaired price rows did not
+    cause the engine to guess a session boundary.
+  - An independent operator verifier now compares stored-price session
+    boundaries, five raw return windows, and abnormal volume with the production
+    engine. It requires timezone-aware HTTPS timing evidence, fails closed on
+    mismatches or incomplete inputs, and can publish a traceable reconciliation
+    artifact. Production deployment and execution against the SEC-timestamped
+    AAPL 2024-08-01 sample are still required before this task is complete.
 
 ## 5. Predictive research and backtesting
 

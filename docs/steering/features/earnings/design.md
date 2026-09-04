@@ -122,6 +122,19 @@ dated `task_id` scope and are structurally forbidden from replacing the global
 `latest` and `current` paths. Only an uncapped all-active-ticker run may update
 those stable consumer paths, and dry runs never write artifacts.
 
+Production reconciliation is deliberately independent from the event-study
+implementation. An operator supplies one historical ticker/report date, a
+`before_market` or `after_market` classification, and a timezone-aware timestamp
+plus HTTPS primary-source URL supporting that classification. The verifier reads
+the stored split-adjusted prices, independently selects the event session and
+calculates every raw return window and the 20-session abnormal-volume baseline,
+then compares those values and boundary dates with the production engine at a
+declared tolerance. It exits non-zero on any mismatch and can publish the full
+inputs, reference values, engine output, and per-field checks under
+`earnings/reactions/reconciliations/{ticker}/{report_date}.json`. This provides
+an audit check rather than a self-confirming call to the engine's private
+calculation helpers.
+
 The earnings collector publishes history coverage to
 `earnings/history-coverage/as_of_date=YYYY-MM-DD/coverage.json` and, only for a
 full-watchlist run, `earnings/history-coverage/latest.json`. Manifest tasks use a

@@ -1,0 +1,104 @@
+name: Reconcile Earnings Event Reaction
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_stage:
+        description: "Deployment stage to verify"
+        required: true
+        default: "prod"
+        type: choice
+        options: [prod]
+      ticker:
+        description: "Ticker to reconcile"
+        required: true
+        default: "AAPL"
+      report_date:
+        description: "Historical earnings report date (YYYY-MM-DD)"
+        required: true
+        default: "2024-08-01"
+      timing:
+        description: "Authoritatively evidenced announcement timing"
+        required: true
+        default: "after_market"
+        type: choice
+        options: [before_market, after_market]
+      timing_evidence_url:
+        description: "HTTPS primary-source evidence URL"
+        required: true
+        default: "https://www.sec.gov/Archives/edgar/data/320193/000032019324000080/aapl-20240801.htm"
+      timing_evidence_timestamp:
+        description: "Timezone-aware primary-source timestamp"
+        required: true
+        default: "2024-08-01T20:30:26Z"
+      publish_artifact:
+        description: "Publish the reconciliation evidence artifact"
+        required: true
+        default: true
+        type: boolean
+
+concurrency:
+  group: reconcile-earnings-event-reaction-${{ inputs.deployment_stage }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate inputs
+        shell: bash
+        env:
+          REPORT_DATE: ${{ inputs.report_date }}
+          EVIDENCE_URL: ${{ inputs.timing_evidence_url }}
+          EVIDENCE_TIMESTAMP: ${{ inputs.timing_evidence_timestamp }}
+        run: |
+          [[ "$REPORT_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "Invalid report date."; exit 1; }
+          [[ "$EVIDENCE_URL" == https://* ]] || { echo "Evidence URL must use HTTPS."; exit 1; }
+          [[ -n "$EVIDENCE_TIMESTAMP" ]] || { echo "Evidence timestamp is required."; exit 1; }
+      - name: Check AWS OIDC role configuration
+        run: |
+          [[ -n "${{ secrets.AWS_ROLE_TO_ASSUME }}" ]] || { echo "Missing AWS_ROLE_TO_ASSUME."; exit 1; }
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: stockara-earnings-reconcile-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Resolve artifact bucket
+        shell: bash
+        env:
+          CONFIGURED_ARTIFACT_BUCKET: ${{ vars.STOCKARA_ARTIFACT_BUCKET || '' }}
+        run: |
+          bucket="$CONFIGURED_ARTIFACT_BUCKET"
+          if [[ -z "$bucket" ]]; then
+            bucket="$(aws cloudformation describe-stacks --stack-name StockMonitoringFrontend --query "Stacks[0].Outputs[?OutputKey=='BucketName'].OutputValue | [0]" --output text)"
+          fi
+          [[ -n "$bucket" && "$bucket" != "None" ]] || { echo "Unable to resolve artifact bucket."; exit 1; }
+          echo "STOCKARA_ARTIFACT_BUCKET=$bucket" >> "$GITHUB_ENV"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - name: Install backend dependencies
+        run: python -m pip install -r backend/requirements-dev.txt
+      - name: Reconcile stored production calculation
+        shell: bash
+        env:
+          SAMPLE_TICKER: ${{ inputs.ticker }}
+          SAMPLE_REPORT_DATE: ${{ inputs.report_date }}
+          SAMPLE_TIMING: ${{ inputs.timing }}
+          SAMPLE_EVIDENCE_URL: ${{ inputs.timing_evidence_url }}
+          SAMPLE_EVIDENCE_TIMESTAMP: ${{ inputs.timing_evidence_timestamp }}
+          PUBLISH_ARTIFACT: ${{ inputs.publish_artifact }}
+          STOCKARA_TABLE_NAME: stockara
+        run: |
+          args=(--ticker "$SAMPLE_TICKER" --report-date "$SAMPLE_REPORT_DATE" --timing "$SAMPLE_TIMING" --timing-evidence-url "$SAMPLE_EVIDENCE_URL" --timing-evidence-timestamp "$SAMPLE_EVIDENCE_TIMESTAMP")
+          [[ "$PUBLISH_ARTIFACT" != "true" ]] || args+=(--publish-artifact)
+          python -m scripts.reconcile_earnings_event_reaction "${args[@]}"
