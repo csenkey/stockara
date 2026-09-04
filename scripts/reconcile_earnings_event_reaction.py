@@ -29,6 +29,8 @@ def _parse_args() -> argparse.Namespace:
         required=True,
         type=_timestamp,
     )
+    parser.add_argument("--broad-market-ticker", default="SPY")
+    parser.add_argument("--sector-benchmark-ticker", required=True)
     parser.add_argument("--tolerance", type=Decimal, default=Decimal("0.0001"))
     parser.add_argument("--publish-artifact", action="store_true")
     return parser.parse_args()
@@ -50,10 +52,14 @@ def run_reconciliation(args: argparse.Namespace) -> dict:
         raise ValueError("ticker is required")
     DatabasePool.initialize()
     try:
-        rows = store.get_stock_data(
-            ticker,
-            args.report_date - timedelta(days=45),
-            args.report_date + timedelta(days=45),
+        start_date = args.report_date - timedelta(days=45)
+        end_date = args.report_date + timedelta(days=45)
+        rows = store.get_stock_data(ticker, start_date, end_date)
+        broad_market_rows = store.get_stock_data(
+            args.broad_market_ticker, start_date, end_date
+        )
+        sector_rows = store.get_stock_data(
+            args.sector_benchmark_ticker, start_date, end_date
         )
         result = reconcile_earnings_reaction(
             ticker=ticker,
@@ -62,6 +68,10 @@ def run_reconciliation(args: argparse.Namespace) -> dict:
             timing_evidence_url=args.timing_evidence_url,
             timing_evidence_timestamp=args.timing_evidence_timestamp,
             stock_rows=rows,
+            broad_market_rows=broad_market_rows,
+            sector_rows=sector_rows,
+            broad_market_ticker=args.broad_market_ticker,
+            sector_benchmark_ticker=args.sector_benchmark_ticker,
             tolerance=args.tolerance,
         )
         if args.publish_artifact:

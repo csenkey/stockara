@@ -12,12 +12,12 @@ from src.services.earnings_reaction_reconciliation import (
 )
 
 
-def _rows() -> list[dict]:
+def _rows(multiplier: Decimal = Decimal(1)) -> list[dict]:
     start = date(2024, 6, 24)
     return [
         {
             "trading_date": start + timedelta(days=index),
-            "adjusted_close_price": Decimal(200 - index),
+            "adjusted_close_price": Decimal(200 - index) * multiplier,
             "volume": Decimal(1000 + index * 10),
         }
         for index in range(70)
@@ -37,6 +37,9 @@ def _result() -> dict:
             2024, 8, 1, 20, 30, 26, tzinfo=timezone.utc
         ),
         stock_rows=_rows(),
+        broad_market_rows=_rows(Decimal("1.5")),
+        sector_rows=_rows(Decimal("0.75")),
+        sector_benchmark_ticker="XLK",
         verified_at=datetime(2026, 9, 4, tzinfo=timezone.utc),
     )
 
@@ -47,7 +50,7 @@ def test_reconciliation_independently_matches_sessions_returns_and_volume():
     assert result["status"] == "passed"
     assert result["reference"]["event_session"] == "2024-08-02"
     assert result["actual_reaction"]["event_session"] == "2024-08-02"
-    assert len(result["checks"]) == 12
+    assert len(result["checks"]) == 32
     assert all(check["passed"] for check in result["checks"])
     assert any(
         Decimal(check["expected"]) < 0
@@ -84,6 +87,9 @@ def test_reconciliation_rejects_untraceable_or_mismatched_timing_evidence():
                 2024, 8, 1, 20, 30, tzinfo=timezone.utc
             ),
             stock_rows=_rows(),
+            broad_market_rows=_rows(),
+            sector_rows=_rows(),
+            sector_benchmark_ticker="XLK",
         )
 
     with pytest.raises(ValueError, match="match the report date"):
@@ -96,4 +102,7 @@ def test_reconciliation_rejects_untraceable_or_mismatched_timing_evidence():
                 2024, 8, 2, 0, 30, tzinfo=timezone.utc
             ),
             stock_rows=_rows(),
+            broad_market_rows=_rows(),
+            sector_rows=_rows(),
+            sector_benchmark_ticker="XLK",
         )

@@ -98,6 +98,23 @@ COLLECTION_MANIFEST_BUCKET = os.environ.get(
     os.environ.get("STOCKARA_ARTIFACT_BUCKET", ""),
 )
 
+# Reference instruments are stored for market/sector-relative research but are
+# not active watchlist equities and must never enter the opportunity universe.
+EARNINGS_REFERENCE_INSTRUMENTS = {
+    "SPY": {"ticker": "SPY", "company_name": "SPDR S&P 500 ETF Trust", "currency": "USD"},
+    "XLK": {"ticker": "XLK", "company_name": "Technology Select Sector SPDR Fund", "currency": "USD"},
+    "XLV": {"ticker": "XLV", "company_name": "Health Care Select Sector SPDR Fund", "currency": "USD"},
+    "XLF": {"ticker": "XLF", "company_name": "Financial Select Sector SPDR Fund", "currency": "USD"},
+    "XLE": {"ticker": "XLE", "company_name": "Energy Select Sector SPDR Fund", "currency": "USD"},
+    "XLY": {"ticker": "XLY", "company_name": "Consumer Discretionary Select Sector SPDR Fund", "currency": "USD"},
+    "XLP": {"ticker": "XLP", "company_name": "Consumer Staples Select Sector SPDR Fund", "currency": "USD"},
+    "XLI": {"ticker": "XLI", "company_name": "Industrial Select Sector SPDR Fund", "currency": "USD"},
+    "XLB": {"ticker": "XLB", "company_name": "Materials Select Sector SPDR Fund", "currency": "USD"},
+    "XLU": {"ticker": "XLU", "company_name": "Utilities Select Sector SPDR Fund", "currency": "USD"},
+    "XLRE": {"ticker": "XLRE", "company_name": "Real Estate Select Sector SPDR Fund", "currency": "USD"},
+    "XLC": {"ticker": "XLC", "company_name": "Communication Services Select Sector SPDR Fund", "currency": "USD"},
+}
+
 
 @dataclass
 class ExtractResult:
@@ -1312,6 +1329,7 @@ def _select_historical_backfill_stocks(
     stocks: list[dict[str, Any]], event: dict[str, Any], max_tickers: int
 ) -> list[dict[str, Any]]:
     requested = {ticker.upper() for ticker in event.get("tickers", [])}
+    stocks = _with_requested_reference_instruments(stocks, requested)
     if requested:
         stocks = [stock for stock in stocks if stock["ticker"] in requested]
     processed = {
@@ -1344,6 +1362,8 @@ def _has_more_historical_backfill_work(
     event: dict[str, Any],
     selected: list[dict[str, Any]],
 ) -> bool:
+    requested = {ticker.upper() for ticker in event.get("tickers", [])}
+    stocks = _with_requested_reference_instruments(stocks, requested)
     processed_tickers = {
         str(ticker).upper()
         for ticker in event.get("processed_tickers", [])
@@ -1355,6 +1375,19 @@ def _has_more_historical_backfill_work(
         and (scan_all or _needs_historical_backfill(stock))
         for stock in stocks
     )
+
+
+def _with_requested_reference_instruments(
+    stocks: list[dict[str, Any]], requested: set[str]
+) -> list[dict[str, Any]]:
+    """Add allow-listed benchmarks only when an operator explicitly requests them."""
+    existing = {str(stock.get("ticker") or "").upper() for stock in stocks}
+    references = [
+        dict(EARNINGS_REFERENCE_INSTRUMENTS[ticker])
+        for ticker in sorted(requested & EARNINGS_REFERENCE_INSTRUMENTS.keys())
+        if ticker not in existing
+    ]
+    return [*stocks, *references]
 
 
 def _remaining_seconds(context: Any) -> float | None:

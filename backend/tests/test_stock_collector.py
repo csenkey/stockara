@@ -47,6 +47,7 @@ from backend.src.collectors.stock_collector import (
     _stooq_symbol,
     _store_stooq_backfill_records,
     _needs_historical_backfill,
+    _select_historical_backfill_stocks,
     _stock_metadata_needs_history_restore,
 )
 from src.collectors.collection_distributor import build_manifest
@@ -852,6 +853,25 @@ class TestDueStockSelection:
         assert _stock_metadata_needs_history_restore(missing_start) is True
         assert _needs_historical_backfill(shallow) is True
         assert _stock_metadata_needs_history_restore(complete) is False
+
+    def test_historical_backfill_allows_explicit_reference_instruments(self):
+        selected = _select_historical_backfill_stocks(
+            [{"ticker": "AAPL"}],
+            {"tickers": ["SPY", "XLK"], "scan_all": True},
+            max_tickers=2,
+        )
+
+        assert [stock["ticker"] for stock in selected] == ["SPY", "XLK"]
+        assert all(stock["currency"] == "USD" for stock in selected)
+
+    def test_historical_backfill_does_not_synthesize_unapproved_ticker(self):
+        selected = _select_historical_backfill_stocks(
+            [{"ticker": "AAPL"}],
+            {"tickers": ["NOTREAL"], "scan_all": True},
+            max_tickers=1,
+        )
+
+        assert selected == []
 
     def test_historical_backfill_can_queue_next_invocation(self):
         stocks = [{"ticker": "AAPL"}, {"ticker": "MSFT"}]

@@ -5,7 +5,7 @@ import importlib.util
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import pytest
 
@@ -32,6 +32,8 @@ def _args(**overrides) -> argparse.Namespace:
             2024, 8, 1, 20, 30, tzinfo=timezone.utc
         ),
         "tolerance": Decimal("0.0001"),
+        "broad_market_ticker": "SPY",
+        "sector_benchmark_ticker": "XLK",
         "publish_artifact": False,
     }
     values.update(overrides)
@@ -59,9 +61,11 @@ def test_script_reads_stored_prices_without_publishing(
 
     assert result["status"] == "passed"
     assert result["ticker"] == "AAPL"
-    mock_prices.assert_called_once_with(
-        "AAPL", date(2024, 6, 17), date(2024, 9, 15)
-    )
+    assert mock_prices.call_args_list == [
+        call("AAPL", date(2024, 6, 17), date(2024, 9, 15)),
+        call("SPY", date(2024, 6, 17), date(2024, 9, 15)),
+        call("XLK", date(2024, 6, 17), date(2024, 9, 15)),
+    ]
     mock_initialize.assert_called_once()
     mock_close.assert_called_once()
 

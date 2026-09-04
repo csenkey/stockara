@@ -33,6 +33,10 @@ def reconcile_earnings_reaction(
     timing_evidence_url: str,
     timing_evidence_timestamp: datetime,
     stock_rows: list[dict[str, Any]],
+    broad_market_rows: list[dict[str, Any]],
+    sector_rows: list[dict[str, Any]],
+    sector_benchmark_ticker: str,
+    broad_market_ticker: str = "SPY",
     tolerance: Decimal = DEFAULT_TOLERANCE,
     verified_at: datetime | None = None,
 ) -> dict[str, Any]:
@@ -44,17 +48,25 @@ def reconcile_earnings_reaction(
         tolerance=tolerance,
     )
     normalized_rows = _reference_rows(stock_rows)
+    normalized_market_rows = _reference_rows(broad_market_rows)
+    normalized_sector_rows = _reference_rows(sector_rows)
     sessions = [row["trading_date"] for row in normalized_rows]
     reference = _reference_calculation(
         report_date=report_date,
         time_of_day=time_of_day,
         rows=normalized_rows,
+        broad_market_rows=normalized_market_rows,
+        sector_rows=normalized_sector_rows,
     )
     actual = build_earnings_event_reaction(
         ticker=ticker,
         report_date=report_date,
         time_of_day=time_of_day,
         stock_rows=stock_rows,
+        broad_market_rows=broad_market_rows,
+        sector_rows=sector_rows,
+        broad_market_ticker=broad_market_ticker,
+        sector_benchmark_ticker=sector_benchmark_ticker,
         trading_sessions=sessions,
     )
     checks = _comparison_checks(
@@ -75,8 +87,12 @@ def reconcile_earnings_reaction(
             "source_timestamp": timing_evidence_timestamp.isoformat(),
         },
         "price_basis": "adjusted_close",
+        "broad_market_ticker": broad_market_ticker,
+        "sector_benchmark_ticker": sector_benchmark_ticker,
         "tolerance_percentage_points": str(tolerance),
         "stored_price_row_count": len(normalized_rows),
+        "stored_broad_market_row_count": len(normalized_market_rows),
+        "stored_sector_benchmark_row_count": len(normalized_sector_rows),
         "reference": _jsonable(reference),
         "actual_reaction": actual.model_dump(mode="json"),
         "checks": _jsonable(checks),
@@ -122,6 +138,8 @@ def _reference_calculation(
     report_date: date,
     time_of_day: Literal["before_market", "after_market"],
     rows: list[dict[str, Any]],
+    broad_market_rows: list[dict[str, Any]],
+    sector_rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
     sessions = [row["trading_date"] for row in rows]
     report_index = bisect_left(sessions, report_date)
@@ -140,6 +158,13 @@ def _reference_calculation(
     prices = {
         row["trading_date"]: row["adjusted_close_price"] for row in rows
     }
+    broad_market_prices = {
+        row["trading_date"]: row["adjusted_close_price"]
+        for row in broad_market_rows
+    }
+    sector_prices = {
+        row["trading_date"]: row["adjusted_close_price"] for row in sector_rows
+    }
     windows = []
     for name, start_offset, end_offset in REFERENCE_WINDOWS:
         start_index = event_index + start_offset
@@ -150,17 +175,33 @@ def _reference_calculation(
         end_session = sessions[end_index]
         start_price = prices[start_session]
         end_price = prices[end_session]
-        if start_price is None or end_price is None:
-            raise ValueError(f"adjusted close is missing for reconciliation window {name}")
-        return_percent = (
-            (end_price / start_price - Decimal(1)) * Decimal(100)
-        ).quantize(RETURN_QUANTUM)
+        raw_return = _reference_return(start_price, end_price, name, "stock")
+        broad_market_return = _reference_return(
+            broad_market_prices.get(start_session),
+            broad_market_prices.get(end_session),
+            name,
+            "broad market",
+        )
+        sector_return = _reference_return(
+            sector_prices.get(start_session),
+            sector_prices.get(end_session),
+            name,
+            "sector benchmark",
+        )
         windows.append(
             {
                 "window": name,
                 "start_session": start_session.isoformat(),
                 "end_session": end_session.isoformat(),
-                "raw_return_percent": return_percent,
+                "raw_return_percent": raw_return,
+                "broad_market_return_percent": broad_market_return,
+                "broad_market_adjusted_return_percent": (
+                    raw_return - broad_market_return
+                ).quantize(RETURN_QUANTUM),
+                "sector_return_percent": sector_return,
+                "sector_adjusted_return_percent": (
+                    raw_return - sector_return
+                ).quantize(RETURN_QUANTUM),
             }
         )
 
@@ -187,6 +228,19 @@ def _reference_calculation(
     }
 
 
+def _reference_return(
+    start: Decimal | None,
+    end: Decimal | None,
+    window: str,
+    series_name: str,
+) -> Decimal:
+    if start is None or end is None:
+        raise ValueError(
+            f"{series_name} adjusted close is missing for reconciliation window {window}"
+        )
+    return ((end / start - Decimal(1)) * Decimal(100)).quantize(RETURN_QUANTUM)
+
+
 def _comparison_checks(
     *,
     actual: dict[str, Any],
@@ -204,42 +258,47 @@ def _comparison_checks(
     actual_windows = {window["window"]: window for window in actual.get("windows", [])}
     for expected in reference["windows"]:
         observed = actual_windows.get(expected["window"], {})
-        expected_return = _decimal_value(expected["raw_return_percent"])
-        if expected_return is None:
-            raise ValueError(
-                f"reference return is invalid for window {expected['window']}"
+        checks.append(
+            {
+                "name": f"{expected['window']}:sessions",
+                "expected": [expected["start_session"], expected["end_session"]],
+                "actual": [
+                    observed.get("start_session"),
+                    observed.get("end_session"),
+                ],
+                "passed": (
+                    observed.get("start_session") == expected["start_session"]
+                    and observed.get("end_session") == expected["end_session"]
+                ),
+            }
+        )
+        for field in (
+            "raw_return_percent",
+            "broad_market_return_percent",
+            "broad_market_adjusted_return_percent",
+            "sector_return_percent",
+            "sector_adjusted_return_percent",
+        ):
+            expected_return = _decimal_value(expected[field])
+            if expected_return is None:
+                raise ValueError(
+                    f"reference {field} is invalid for window {expected['window']}"
+                )
+            actual_return = _decimal_value(observed.get(field))
+            difference = (
+                abs(actual_return - expected_return)
+                if actual_return is not None
+                else None
             )
-        actual_return = _decimal_value(observed.get("raw_return_percent"))
-        checks.extend(
-            [
+            checks.append(
                 {
-                    "name": f"{expected['window']}:sessions",
-                    "expected": [expected["start_session"], expected["end_session"]],
-                    "actual": [
-                        observed.get("start_session"),
-                        observed.get("end_session"),
-                    ],
-                    "passed": (
-                        observed.get("start_session") == expected["start_session"]
-                        and observed.get("end_session") == expected["end_session"]
-                    ),
-                },
-                {
-                    "name": f"{expected['window']}:raw_return_percent",
+                    "name": f"{expected['window']}:{field}",
                     "expected": expected_return,
                     "actual": actual_return,
-                    "difference": (
-                        abs(actual_return - expected_return)
-                        if actual_return is not None
-                        else None
-                    ),
-                    "passed": (
-                        actual_return is not None
-                        and abs(actual_return - expected_return) <= tolerance
-                    ),
-                },
-            ]
-        )
+                    "difference": difference,
+                    "passed": difference is not None and difference <= tolerance,
+                }
+            )
     expected_volume = _decimal_value(reference["abnormal_volume_percent"])
     if expected_volume is None:
         raise ValueError("reference abnormal volume is invalid")

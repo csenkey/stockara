@@ -31,6 +31,14 @@ on:
         description: "Timezone-aware primary-source timestamp"
         required: true
         default: "2024-08-01T20:30:26Z"
+      broad_market_ticker:
+        description: "Broad-market benchmark with stored adjusted prices"
+        required: true
+        default: "SPY"
+      sector_benchmark_ticker:
+        description: "Sector benchmark with stored adjusted prices"
+        required: true
+        default: "XLK"
       publish_artifact:
         description: "Publish the reconciliation evidence artifact"
         required: true
@@ -96,9 +104,11 @@ jobs:
           SAMPLE_TIMING: ${{ inputs.timing }}
           SAMPLE_EVIDENCE_URL: ${{ inputs.timing_evidence_url }}
           SAMPLE_EVIDENCE_TIMESTAMP: ${{ inputs.timing_evidence_timestamp }}
+          SAMPLE_BROAD_MARKET_TICKER: ${{ inputs.broad_market_ticker }}
+          SAMPLE_SECTOR_BENCHMARK_TICKER: ${{ inputs.sector_benchmark_ticker }}
           PUBLISH_ARTIFACT: ${{ inputs.publish_artifact }}
           STOCKARA_TABLE_NAME: stockara
         run: |
-          args=(--ticker "$SAMPLE_TICKER" --report-date "$SAMPLE_REPORT_DATE" --timing "$SAMPLE_TIMING" --timing-evidence-url "$SAMPLE_EVIDENCE_URL" --timing-evidence-timestamp "$SAMPLE_EVIDENCE_TIMESTAMP")
+          args=(--ticker "$SAMPLE_TICKER" --report-date "$SAMPLE_REPORT_DATE" --timing "$SAMPLE_TIMING" --timing-evidence-url "$SAMPLE_EVIDENCE_URL" --timing-evidence-timestamp "$SAMPLE_EVIDENCE_TIMESTAMP" --broad-market-ticker "$SAMPLE_BROAD_MARKET_TICKER" --sector-benchmark-ticker "$SAMPLE_SECTOR_BENCHMARK_TICKER")
           [[ "$PUBLISH_ARTIFACT" != "true" ]] || args+=(--publish-artifact)
           python -m scripts.reconcile_earnings_event_reaction "${args[@]}"
