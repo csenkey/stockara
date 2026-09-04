@@ -408,6 +408,16 @@ class DynamoStore:
                 ":trading_date": trading_date,
             },
         )
+        try:
+            self.table.update_item(
+                Key={"PK": f"STOCK#{ticker}", "SK": "META"},
+                UpdateExpression="SET stock_history_start_date = :trading_date",
+                ConditionExpression=Attr("stock_history_start_date").gt(trading_date),
+                ExpressionAttributeValues={":trading_date": trading_date},
+            )
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] != "ConditionalCheckFailedException":
+                raise
 
     def _mark_stock_data_collected(
         self,

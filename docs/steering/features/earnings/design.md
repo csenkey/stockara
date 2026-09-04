@@ -95,6 +95,13 @@ boundaries and selects neither; on a non-trading day both interpretations
 collapse to the next session. Missing future sessions are `insufficient`, never
 a fabricated zero-return observation.
 
+An inferred weekend/holiday boundary must be within seven calendar days of the
+reported date. This guard prevents a sparse historical price table from mapping
+an old report to the first much-later stored session. Unknown timing on a known
+trading day also requires both the same-session and next-session candidates; if
+the latter is absent, the mapping remains `missing_sessions` rather than
+silently choosing the before-open interpretation.
+
 The reaction engine calculates `[-5,-1]`, `[-1,+1]`, `[0,+1]`, `[+1,+5]`, and
 `[+1,+20]` session returns from positive `adjusted_close_price` values only.
 SPY and the named sector benchmark must have prices on the exact same boundary

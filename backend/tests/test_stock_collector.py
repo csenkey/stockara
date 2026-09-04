@@ -6,7 +6,7 @@ duplicate detection, and malformed data handling.
 Requirements: 1.3, 1.6, 1.7
 """
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
@@ -46,6 +46,8 @@ from backend.src.collectors.stock_collector import (
     _stooq_fallback_with_details,
     _stooq_symbol,
     _store_stooq_backfill_records,
+    _needs_historical_backfill,
+    _stock_metadata_needs_history_restore,
 )
 from src.collectors.collection_distributor import build_manifest
 from src.models.schemas import CollectionTaskType
@@ -621,6 +623,9 @@ class TestDueStockSelection:
             "ticker": "AAPL",
             "latest_stock_data_date": "2026-06-17",
             "stock_history_row_count": 250,
+            "stock_history_start_date": (
+                date.today() - timedelta(days=5 * 365)
+            ).isoformat(),
         }]
         archived_records = [
             {
@@ -769,6 +774,9 @@ class TestDueStockSelection:
             "ticker": "AAPL",
             "latest_stock_data_date": "2026-06-17",
             "stock_history_row_count": 250,
+            "stock_history_start_date": (
+                date.today() - timedelta(days=5 * 365)
+            ).isoformat(),
         }]
         archived_records = [
             {
@@ -822,6 +830,28 @@ class TestDueStockSelection:
         assert result["body"]["failed_tickers"] == []
         assert result["body"]["provider_fetches"] == 0
         store_records.assert_not_called()
+
+    def test_historical_backfill_detects_high_row_count_but_shallow_history(self):
+        shallow = {
+            "ticker": "MSFT",
+            "latest_stock_data_date": date.today().isoformat(),
+            "stock_history_row_count": 250,
+            "stock_history_start_date": (
+                date.today() - timedelta(days=180)
+            ).isoformat(),
+        }
+        missing_start = {key: value for key, value in shallow.items() if key != "stock_history_start_date"}
+        complete = {
+            **shallow,
+            "stock_history_start_date": (
+                date.today() - timedelta(days=5 * 365)
+            ).isoformat(),
+        }
+
+        assert _stock_metadata_needs_history_restore(shallow) is True
+        assert _stock_metadata_needs_history_restore(missing_start) is True
+        assert _needs_historical_backfill(shallow) is True
+        assert _stock_metadata_needs_history_restore(complete) is False
 
     def test_historical_backfill_can_queue_next_invocation(self):
         stocks = [{"ticker": "AAPL"}, {"ticker": "MSFT"}]

@@ -790,6 +790,22 @@ def test_put_stock_data_backfill_batch_skips_existing_dates_and_updates_summary_
     )
 
 
+def test_mark_stock_rows_lowers_existing_history_start_date():
+    table = MagicMock()
+    store = _TestableDynamoStore(table)
+
+    store._mark_stock_data_rows_inserted("AAPL", "2021-06-18", 100)
+
+    assert table.update_item.call_count == 2
+    initial = table.update_item.call_args_list[0].kwargs
+    lowering = table.update_item.call_args_list[1].kwargs
+    assert "ADD stock_history_row_count" in initial["UpdateExpression"]
+    assert lowering["UpdateExpression"] == (
+        "SET stock_history_start_date = :trading_date"
+    )
+    assert lowering["ExpressionAttributeValues"][":trading_date"] == "2021-06-18"
+
+
 def test_mark_stock_collection_failed_persists_retry_state():
     table = MagicMock()
     store = _TestableDynamoStore(table)

@@ -27,6 +27,10 @@ on:
         description: "Historical backfill tickers per invocation"
         required: true
         default: "1"
+      historical_backfill_tickers:
+        description: "Optional comma-separated ticker subset for historical repair"
+        required: false
+        default: ""
       historical_backfill_continue:
         description: "Let the stock collector asynchronously continue historical backfill"
         required: true
@@ -147,12 +151,40 @@ jobs:
       - name: Run historical stock backfill
         if: ${{ inputs.historical_backfill }}
         shell: bash
+        env:
+          HISTORICAL_MAX_TICKERS: ${{ inputs.historical_backfill_max_tickers }}
+          HISTORICAL_CONTINUE: ${{ inputs.historical_backfill_continue }}
+          HISTORICAL_TICKERS: ${{ inputs.historical_backfill_tickers }}
         run: |
           set -euo pipefail
-          payload="$(printf '{"mode":"repair_history","max_tickers":%s,"continue_backfill":%s,"scan_all":true,"provider_budget":{},"dry_run":false}' "${{ inputs.historical_backfill_max_tickers }}" "${{ inputs.historical_backfill_continue }}")"
+          python - <<'PY' > historical-backfill-payload.json
+          import json
+          import os
+          import re
+
+          tickers = [
+              ticker.strip().upper()
+              for ticker in os.environ["HISTORICAL_TICKERS"].split(",")
+              if ticker.strip()
+          ]
+          if any(not re.fullmatch(r"[A-Z0-9.-]{1,10}", ticker) for ticker in tickers):
+              raise SystemExit("historical_backfill_tickers contains an invalid ticker")
+          payload = {
+              "mode": "repair_history",
+              "max_tickers": int(os.environ["HISTORICAL_MAX_TICKERS"]),
+              "continue_backfill": os.environ["HISTORICAL_CONTINUE"] == "true",
+              "scan_all": True,
+              "provider_budget": {},
+              "dry_run": False,
+          }
+          if tickers:
+              payload["tickers"] = tickers
+          print(json.dumps(payload))
+          PY
+          cat historical-backfill-payload.json
           aws lambda invoke \
             --function-name "$STOCK_COLLECTOR_FN" \
-            --payload "$payload" \
+            --payload file://historical-backfill-payload.json \
             --log-type Tail \
             --cli-read-timeout 900 \
             --cli-binary-format raw-in-base64-out \

@@ -212,8 +212,27 @@ tests, deployment, and production verification requirements are satisfied.
     All 523 backend tests and Ruff passed locally; deployment run `33790821852`
     passed the complete CI/CD, CDK, API-smoke, and artifact-smoke path on
     2026-09-03.
-- [ ] EARN-4.4 Publish per-event reaction artifacts and a per-ticker historical
+- [x] EARN-4.4 Publish per-event reaction artifacts and a per-ticker historical
   reaction summary suitable for UI and model features.
+  - Commit `47297f8` adds stable reaction IDs, dated/scoped per-event payloads,
+    per-ticker histories, canonical-window summary statistics, and a manual
+    DynamoDB-to-S3 workflow. Targeted, capped, and offset runs cannot replace
+    the full-universe `latest`/`current` paths; dry runs cannot publish.
+  - All 532 backend tests and Ruff passed locally. Deployment run `33791490196`
+    passed the complete CI/CD and production smoke path on 2026-09-03.
+  - Scoped production run `33791977506` exposed a missing-calendar defect where
+    old reports could jump to the first stored session. Commit `be7aa01` limits
+    inferred closures to seven calendar days and requires both timing candidates
+    when an unknown-time report falls on a trading day. All 535 backend tests
+    passed locally, and deployment run `33883318538` passed every CI/CD and
+    smoke gate on 2026-09-04.
+  - Corrected scoped run `33883751614` published 59 traceable AAPL/MSFT/NVDA
+    events. All 59 are honestly `insufficient` because current production data
+    lacks the historical session/timing evidence needed for these samples; an
+    inspected 2021 MSFT payload has no event session, no calculated windows, and
+    explicit `no_trading_session_on_or_after_report_date` provenance. Restoring
+    those inputs is the production prerequisite for EARN-4.5, not a reason to
+    publish guessed returns.
 - [ ] EARN-4.5 Deploy and reconcile sampled calculations against independently
   calculated values.
 

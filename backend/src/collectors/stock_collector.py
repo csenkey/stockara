@@ -1336,10 +1336,7 @@ def _select_historical_backfill_stocks(
 
 
 def _needs_historical_backfill(stock: dict[str, Any]) -> bool:
-    if not stock.get("latest_stock_data_date"):
-        return True
-    row_count = stock.get("stock_history_row_count")
-    return row_count is not None and int(row_count or 0) < 20
+    return _stock_metadata_needs_history_restore(stock)
 
 
 def _has_more_historical_backfill_work(
@@ -1682,7 +1679,16 @@ def _stock_metadata_needs_history_restore(stock: dict[str, Any]) -> bool:
     if not stock.get("latest_stock_data_date"):
         return True
     row_count = stock.get("stock_history_row_count")
-    return row_count is not None and int(row_count or 0) < 20
+    if row_count is None or int(row_count or 0) < 20:
+        return True
+    history_start = stock.get("stock_history_start_date")
+    if not history_start:
+        return True
+    try:
+        start_date = _record_date(history_start)
+    except (TypeError, ValueError):
+        return True
+    return start_date > _history_backfill_start_date() + timedelta(days=7)
 
 
 def _merge_record_lists(
