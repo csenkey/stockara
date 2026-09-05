@@ -193,6 +193,24 @@ jobs:
           python -c "import json, sys; meta=json.load(open('historical-backfill-invoke.json')); sys.exit(1 if meta.get('FunctionError') else 0)"
           cat historical-backfill-response.json
           python -m json.tool historical-backfill-response.json
+          python - <<'PY'
+          import json
+          import os
+
+          with open("historical-backfill-response.json", encoding="utf-8") as stream:
+              payload = json.load(stream)
+          body = payload.get("body") or {}
+          failed = body.get("failed_tickers") or []
+          requested = [
+              ticker.strip().upper()
+              for ticker in os.environ["HISTORICAL_TICKERS"].split(",")
+              if ticker.strip()
+          ]
+          if failed:
+              raise SystemExit(f"Historical repair failed for: {', '.join(failed)}")
+          if requested and sorted(body.get("processed_tickers") or []) != sorted(requested):
+              raise SystemExit("Historical repair did not process every requested ticker")
+          PY
 
       - name: Invoke stock collector
         if: ${{ !inputs.historical_backfill }}

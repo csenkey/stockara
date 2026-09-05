@@ -1,0 +1,137 @@
+# Candidate earnings-event prediction strategy (EARN-5.1).
+#
+# This manifest freezes the research contract only. It is shadow-only: nothing
+# it produces may reach top picks, holding reviews, demo trading, or any other
+# automated consumer until a promotion decision is recorded (EARN-7.2).
+#
+# promotion_gates.status is `proposed`: the threshold values below are a
+# starting proposal for EARN-5.6 and have not been ratified.
+
+analysis_strategy:
+  id: analysis_strategy_2026_09_05_earnings_event_v1
+  status: candidate
+  parent: analysis_strategy_current
+  git_commit: d73c6d2
+  created_at: 2026-09-05
+  description: First candidate strategy for seven-day earnings-event prediction. Models result surprise separately from post-report abnormal return, consumes only cutoff-safe evidence, and runs in shadow mode with no production influence.
+  owner: istvan
+
+preselection:
+  flow_version: earnings_event_screen_v1
+  predicates:
+    - active_watchlist_only
+    - upcoming_earnings_within_horizon
+    - price_data_fresh
+    - min_30d_ohlcv
+    - earnings_history_available
+  filters:
+    - exclude_conflicting_event_dates
+    - exclude_stale_or_under_supported_tickers
+  scoring:
+    version: earnings_event_score_v1
+    weights: {}
+  limits:
+    max_candidates_per_day: 100
+    max_scored_events_per_day: 100
+
+evidence:
+  required:
+    - ohlcv_30d
+    - earnings_calendar_reconciled_date
+    - earnings_history_8q
+  optional:
+    - earnings_reaction_history
+    - estimate_revisions
+    - guidance_evidence
+    - news_7d
+    - implied_move
+  used_data_sources:
+    ohlcv:
+      - stooq
+      - yahoo
+    earnings_calendar:
+      - finnhub
+      - alpha_vantage
+      - yahoo
+    earnings_history:
+      - alpha_vantage
+      - finnhub
+    news:
+      - newsapi
+      - finnhub
+  excluded_data_sources:
+    - options_implied_move
+  missing_evidence_behavior: suppress_if_required_missing
+
+# No language model participates in this strategy. Both AI stages are disabled
+# rather than naming a placeholder model that would look configured.
+recommendation_ai:
+  enabled: false
+
+review_ai:
+  enabled: false
+
+publication:
+  suppress_stale_tickers: true
+  suppress_under_supported_tickers: true
+  research_view_only: true
+  publish_to_top_picks: false
+
+fallbacks:
+  missing_estimate_revisions: continue_with_missing_evidence_warning
+  missing_reaction_history: continue_with_reduced_confidence
+  missing_required_evidence: suppress_event
+  conflicting_event_date: suppress_event
+
+cost_limits:
+  max_total_run_cost_usd: 5
+  max_ai_recommendation_calls_per_day: 0
+  max_ai_review_calls_per_day: 0
+
+earnings_event_prediction:
+  feature_schema_version: "1.0"
+  shadow_mode: true
+  influences_production: false
+  scope:
+    universe: active_watchlist
+    horizon_days: 7
+    minimum_date_confidence: medium
+    exclude_conflicting_dates: true
+    min_average_dollar_volume: 1000000
+  targets:
+    surprise_targets:
+      - eps_surprise_direction
+      - eps_surprise_magnitude_percent
+    reaction_windows:
+      - "[-1,+1]"
+      - "[0,+1]"
+      - "[+1,+5]"
+    reaction_basis: broad_market_adjusted
+  evaluation:
+    protocol: walk_forward
+    min_training_events: 500
+    min_evaluation_events: 200
+    min_market_regimes: 2
+    required_metrics:
+      - calibration
+      - brier_score
+      - directional_precision
+      - directional_recall
+      - expected_return_after_costs
+      - max_drawdown
+      - turnover
+  # Round-trip cost assumptions. commission_percent mirrors Stockara's existing
+  # 1% per-transaction rule and is deliberately conservative for a short holding
+  # window; replace it if a different real-world figure is agreed.
+  costs:
+    commission_percent: 1.0
+    spread_percent: 0.05
+    slippage_percent: 0.05
+  promotion_gates:
+    status: proposed
+    min_scored_events: 200
+    min_market_regimes: 2
+    max_brier_score: 0.24
+    min_directional_precision: 0.55
+    min_net_expected_return_percent: 0.25
+    max_drawdown_percent: 15

@@ -1,8 +1,9 @@
 """AnalysisStrategy manifest models and loaders."""
 
+import math
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -42,12 +43,99 @@ class EvidenceConfig(BaseModel):
 
 class AIConfig(BaseModel):
     enabled: bool = True
-    model: str
-    prompt_template: str
+    model: str | None = None
+    prompt_template: str | None = None
     prompt_inputs: list[str] = Field(default_factory=list)
     output_schema: str | None = None
     review_gate: dict[str, Any] = Field(default_factory=dict)
     parameters: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _enabled_requires_model(self) -> "AIConfig":
+        """Keep an enabled AI stage from silently running without a real model.
+
+        A disabled stage may omit both fields; a statistical strategy should not
+        have to invent a model identifier that looks configured but is not.
+        """
+        if not self.enabled:
+            return self
+        if not self.model:
+            raise ValueError("an enabled AI stage requires a model identifier")
+        if not self.prompt_template:
+            raise ValueError("an enabled AI stage requires a prompt template")
+        return self
+
+
+class EarningsPredictionScope(BaseModel):
+    """Which upcoming earnings events a prediction strategy is allowed to score."""
+
+    universe: str
+    horizon_days: int = Field(..., gt=0, le=30)
+    minimum_date_confidence: Literal["high", "medium", "low"]
+    exclude_conflicting_dates: bool = True
+    min_average_dollar_volume: float | None = Field(default=None, ge=0)
+
+
+class EarningsPredictionTargets(BaseModel):
+    """The separately modelled result-surprise and price-reaction targets."""
+
+    surprise_targets: list[str] = Field(..., min_length=1)
+    reaction_windows: list[
+        Literal["[-5,-1]", "[-1,+1]", "[0,+1]", "[+1,+5]", "[+1,+20]"]
+    ] = Field(..., min_length=1)
+    reaction_basis: Literal["raw", "broad_market_adjusted", "sector_adjusted"]
+
+
+class EarningsPredictionEvaluation(BaseModel):
+    """Leakage-safe evaluation protocol this strategy must be scored under."""
+
+    protocol: Literal["walk_forward", "expanding_window"]
+    min_training_events: int = Field(..., ge=0)
+    min_evaluation_events: int = Field(..., ge=0)
+    min_market_regimes: int = Field(default=1, ge=1)
+    required_metrics: list[str] = Field(..., min_length=1)
+
+
+class EarningsPredictionCosts(BaseModel):
+    """Round-trip cost assumptions applied before any expected-value claim."""
+
+    commission_percent: float = Field(..., ge=0)
+    spread_percent: float = Field(..., ge=0)
+    slippage_percent: float = Field(..., ge=0)
+    borrow_cost_percent: float | None = Field(default=None, ge=0)
+
+
+class EarningsPromotionGates(BaseModel):
+    """Thresholds a shadow run must clear before promotion is even considered."""
+
+    status: Literal["proposed", "ratified"] = "proposed"
+    min_scored_events: int = Field(..., ge=0)
+    min_market_regimes: int = Field(default=1, ge=1)
+    max_brier_score: float | None = Field(default=None, ge=0, le=1)
+    min_directional_precision: float | None = Field(default=None, ge=0, le=1)
+    min_net_expected_return_percent: float | None = None
+    max_drawdown_percent: float | None = Field(default=None, ge=0)
+
+
+class EarningsEventPredictionConfig(BaseModel):
+    """Earnings-event prediction section of an analysis strategy manifest."""
+
+    feature_schema_version: str
+    shadow_mode: bool = True
+    influences_production: bool = False
+    scope: EarningsPredictionScope
+    targets: EarningsPredictionTargets
+    evaluation: EarningsPredictionEvaluation
+    costs: EarningsPredictionCosts
+    promotion_gates: EarningsPromotionGates
+
+    @model_validator(mode="after")
+    def _shadow_cannot_influence_production(self) -> "EarningsEventPredictionConfig":
+        if self.shadow_mode and self.influences_production:
+            raise ValueError(
+                "a shadow-mode earnings strategy must not influence production consumers"
+            )
+        return self
 
 
 class AnalysisStrategyManifest(BaseModel):
@@ -59,6 +147,7 @@ class AnalysisStrategyManifest(BaseModel):
     publication: dict[str, Any] = Field(default_factory=dict)
     fallbacks: dict[str, Any] = Field(default_factory=dict)
     cost_limits: dict[str, Any] = Field(default_factory=dict)
+    earnings_event_prediction: EarningsEventPredictionConfig | None = None
 
     @property
     def strategy_id(self) -> str:
@@ -68,6 +157,25 @@ class AnalysisStrategyManifest(BaseModel):
     def _requires_core_evidence(self) -> "AnalysisStrategyManifest":
         if "ohlcv_30d" not in self.evidence.required:
             raise ValueError("analysis strategies must require ohlcv_30d")
+        return self
+
+    @model_validator(mode="after")
+    def _unpromoted_strategies_stay_out_of_production(
+        self,
+    ) -> "AnalysisStrategyManifest":
+        """Only a promoted strategy may declare production influence.
+
+        Earnings-event predictions must stay research-only until a recorded
+        promotion decision, so they cannot reach top picks, holding reviews,
+        demo trading, or other automated consumers by manifest alone.
+        """
+        prediction = self.earnings_event_prediction
+        if prediction is None or not prediction.influences_production:
+            return self
+        if self.analysis_strategy.status != "promoted":
+            raise ValueError(
+                "only a promoted analysis strategy may influence production consumers"
+            )
         return self
 
 
@@ -94,9 +202,31 @@ def _parse_scalar(value: str) -> Any:
         return True
     if value == "false":
         return False
-    if value.isdigit():
-        return int(value)
+    number = _parse_number(value)
+    if number is not None:
+        return number
     return value.strip('"').strip("'")
+
+
+def _parse_number(value: str) -> int | float | None:
+    """Return the numeric value of an unquoted scalar, or None when it is text.
+
+    Quoted scalars stay text. Without this, thresholds such as `0.35` or `-2`
+    would load as strings and compare incorrectly against numeric results.
+    """
+    if not value or value[0] in {'"', "'"}:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        pass
+    try:
+        parsed = float(value)
+    except ValueError:
+        return None
+    # Keep nan/inf as text so a manifest cannot carry a threshold that silently
+    # compares false against every measured value.
+    return parsed if math.isfinite(parsed) else None
 
 
 def _parse_simple_yaml(text: str) -> dict[str, Any]:

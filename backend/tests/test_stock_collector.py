@@ -215,6 +215,15 @@ class TestFetchYfinanceWithRetry:
 
         result = _fetch_yfinance_with_retry(["AAPL"])
         assert result is not None
+        mock_download.assert_called_once_with(
+            "AAPL",
+            group_by="ticker",
+            auto_adjust=False,
+            threads=False,
+            progress=False,
+            timeout=30,
+            period="1d",
+        )
         mock_sleep.assert_not_called()
 
     @patch("backend.src.collectors.stock_collector.time.sleep")

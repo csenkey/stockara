@@ -255,6 +255,47 @@ tests, deployment, and production verification requirements are satisfied.
 
 - [ ] EARN-5.1 Register an immutable candidate `AnalysisStrategy` and feature
   schema for earnings-event prediction.
+  - 2026-09-05: Implemented locally, not yet verified in CI or deployed.
+    `configs/analysis-strategies/analysis_strategy_2026_09_05_earnings_event_v1.yaml`
+    registers the candidate strategy (parent `analysis_strategy_current`, frozen
+    against tree state `d73c6d2`) and is listed in
+    `docs/steering/analysis-strategies/strategy_registry.md`. It is shadow-only,
+    uses no language model, and both AI stages are disabled rather than naming a
+    placeholder model.
+  - The feature contract is `EarningsEventFeatureSnapshot` and its three feature
+    families in `backend/src/models/schemas.py`. The snapshot is frozen and
+    leakage-safe by construction: it rejects any contributing observation dated
+    after `prediction_cutoff`, rejects evidence timestamps without a timezone
+    because they cannot be proven to precede the cutoff, requires a cutoff
+    strictly before the report date for before-open and unknown-timing events,
+    and forbids claiming evidence quality above `insufficient` when every
+    feature family is missing. `EarningsReactionHistorySummary` mirrors the
+    field names and units of the published per-ticker reaction summary so
+    EARN-5.2 can map artifacts to features without converting units.
+  - `AnalysisStrategyManifest` gained an optional `earnings_event_prediction`
+    section (scope, targets, evaluation protocol, cost assumptions, promotion
+    gates). Two safety invariants are enforced there: a shadow-mode strategy
+    cannot declare production influence, and only a `promoted` strategy may
+    declare it at all, so EARN-6.5's isolation cannot be lost by editing a
+    manifest alone.
+  - Two supporting corrections: an AI stage may omit `model` and
+    `prompt_template` only while disabled, and an enabled stage without them now
+    fails validation instead of running unconfigured; and the manifest YAML
+    scalar parser now returns numbers for floats and negative integers, which it
+    previously returned as strings. Any manifest threshold such as `0.24` was
+    silently text before this fix. `nan` and `inf` stay text so a threshold
+    cannot silently compare false against every measured value.
+  - Open decisions for Istvan, both deliberately conservative: the
+    `promotion_gates` values carry `status: proposed` and need ratification in
+    EARN-5.6, and `costs.commission_percent` is set to 1.0 to mirror Stockara's
+    existing per-transaction commission rule, which is a high bar for a
+    multi-day earnings holding window.
+  - Remaining before this item can be checked: run `pytest` and the CI-pinned
+    Ruff gate (the authoring session could not install either, so the 26 new and
+    existing assertions in `backend/tests/test_earnings_prediction_features.py`
+    and `backend/tests/backtesting/test_analysis_strategy_manifest.py` were
+    executed through a standalone runner instead), then deploy through `main`.
+    Treat the manifest as immutable once a backtest or shadow run has used it.
 - [ ] EARN-5.2 Build cutoff-aware feature snapshots that exclude future results,
   revisions, filings, transcripts, news, and prices.
 - [ ] EARN-5.3 Establish simple baselines: no-trade, announcement premium,

@@ -5,7 +5,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class CompanySize(str, Enum):
@@ -525,6 +525,227 @@ class CanonicalEarningsEvent(BaseModel):
         if self.date_confidence == EarningsDateConfidence.CONFLICTING:
             raise ValueError("Resolved earnings events cannot have conflicting confidence")
         return self
+
+
+class EarningsFeatureProvenance(BaseModel):
+    """One source that contributed to a feature family, with its observation time."""
+
+    source: str = Field(..., min_length=1, max_length=100)
+    observed_at: datetime
+    source_url: Optional[str] = Field(default=None, max_length=2000)
+
+    @field_validator("observed_at")
+    @classmethod
+    def require_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("feature provenance observed_at must include a timezone")
+        return value
+
+
+class EarningsReactionHistorySummary(BaseModel):
+    """Historical reaction statistics for one window and one return basis.
+
+    Field names and units mirror the published per-ticker reaction summary so a
+    snapshot builder can map artifacts to features without converting units.
+    """
+
+    window: Literal["[-5,-1]", "[-1,+1]", "[0,+1]", "[+1,+5]", "[+1,+20]"]
+    basis: Literal["raw", "broad_market_adjusted", "sector_adjusted"]
+    sample_count: int = Field(..., ge=0)
+    mean_return_percent: Optional[Decimal] = None
+    positive_event_percent: Optional[Decimal] = Field(default=None, ge=0, le=100)
+
+    @model_validator(mode="after")
+    def validate_sample_consistency(self) -> "EarningsReactionHistorySummary":
+        if self.sample_count == 0 and (
+            self.mean_return_percent is not None
+            or self.positive_event_percent is not None
+        ):
+            raise ValueError(
+                "reaction history summaries without samples must not report statistics"
+            )
+        return self
+
+
+class EarningsConsensusFeatures(BaseModel):
+    """Consensus level, dispersion, and revision context known before the cutoff."""
+
+    availability: Literal["complete", "partial", "missing"]
+    eps_consensus: Optional[Decimal] = None
+    eps_estimate_count: Optional[int] = Field(default=None, ge=0)
+    eps_estimate_dispersion: Optional[Decimal] = Field(default=None, ge=0)
+    revenue_consensus: Optional[Decimal] = None
+    revenue_estimate_count: Optional[int] = Field(default=None, ge=0)
+    eps_revision_count: Optional[int] = Field(default=None, ge=0)
+    eps_revision_net_direction: Optional[Literal["up", "down", "flat"]] = None
+    revision_lookback_days: Optional[int] = Field(default=None, gt=0)
+    estimate_revisions: list[EarningsEstimateRevision] = Field(default_factory=list)
+    guidance_evidence: list[EarningsGuidanceEvidence] = Field(default_factory=list)
+    provenance: list[EarningsFeatureProvenance] = Field(default_factory=list)
+    missing_inputs: list[str] = Field(default_factory=list)
+
+
+class EarningsHistoryFeatures(BaseModel):
+    """Prior surprise and prior price-reaction behavior for the same ticker."""
+
+    availability: Literal["complete", "partial", "missing"]
+    quarters_available: int = Field(default=0, ge=0)
+    eps_beat_count: Optional[int] = Field(default=None, ge=0)
+    eps_surprise_sample_count: int = Field(default=0, ge=0)
+    mean_eps_surprise_percent: Optional[Decimal] = None
+    median_eps_surprise_percent: Optional[Decimal] = None
+    reaction_summaries: list[EarningsReactionHistorySummary] = Field(
+        default_factory=list
+    )
+    provenance: list[EarningsFeatureProvenance] = Field(default_factory=list)
+    missing_inputs: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_surprise_consistency(self) -> "EarningsHistoryFeatures":
+        if (
+            self.eps_beat_count is not None
+            and self.eps_beat_count > self.eps_surprise_sample_count
+        ):
+            raise ValueError("eps_beat_count cannot exceed eps_surprise_sample_count")
+        if self.eps_surprise_sample_count == 0 and (
+            self.mean_eps_surprise_percent is not None
+            or self.median_eps_surprise_percent is not None
+        ):
+            raise ValueError(
+                "surprise statistics require at least one historical surprise sample"
+            )
+        return self
+
+
+class EarningsMarketContextFeatures(BaseModel):
+    """Technical, liquidity, valuation, and implied-move context at the cutoff."""
+
+    availability: Literal["complete", "partial", "missing"]
+    price_as_of_session: Optional[date] = None
+    adjusted_close_price: Optional[Decimal] = Field(default=None, gt=0)
+    trailing_return_20d_percent: Optional[Decimal] = None
+    trailing_return_60d_percent: Optional[Decimal] = None
+    realized_volatility_20d_percent: Optional[Decimal] = Field(default=None, ge=0)
+    average_dollar_volume_20d: Optional[Decimal] = Field(default=None, ge=0)
+    market_cap: Optional[Decimal] = Field(default=None, ge=0)
+    implied_move_percent: Optional[Decimal] = Field(default=None, ge=0)
+    implied_move_source: Optional[str] = Field(default=None, max_length=100)
+    provenance: list[EarningsFeatureProvenance] = Field(default_factory=list)
+    missing_inputs: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_implied_move_source(self) -> "EarningsMarketContextFeatures":
+        if self.implied_move_percent is not None and not self.implied_move_source:
+            raise ValueError(
+                "implied move requires the licensed options data source that supplied it"
+            )
+        return self
+
+
+class EarningsEventFeatureSnapshot(BaseModel):
+    """Immutable, cutoff-keyed feature set for one upcoming earnings event.
+
+    Leakage safety is structural: the snapshot rejects any contributing
+    observation timestamped after `prediction_cutoff`, and it rejects a cutoff
+    that is not strictly before the first session the report can move.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    schema_version: Literal["1.0"] = "1.0"
+    snapshot_id: str = Field(..., min_length=1, max_length=200)
+    strategy_id: str = Field(..., min_length=1, max_length=200)
+    ticker: str
+    canonical_event_id: str = Field(..., min_length=1, max_length=200)
+    event_date: date
+    date_confidence: EarningsDateConfidence
+    reported_timing: Literal["before_market", "after_market", "unknown"]
+    prediction_cutoff: datetime
+    provider_snapshot_hash: str = Field(..., min_length=8, max_length=128)
+    consensus: EarningsConsensusFeatures
+    history: EarningsHistoryFeatures
+    market_context: EarningsMarketContextFeatures
+    evidence_quality: Literal["high", "medium", "low", "insufficient"]
+    missing_features: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    created_at: datetime
+
+    @field_validator("ticker")
+    @classmethod
+    def validate_ticker_field(cls, value: str) -> str:
+        return validate_ticker(value)
+
+    @field_validator("strategy_id")
+    @classmethod
+    def validate_strategy_id(cls, value: str) -> str:
+        if not value.startswith("analysis_strategy_"):
+            raise ValueError("snapshots must name an analysis_strategy_ identifier")
+        return value
+
+    @field_validator("prediction_cutoff", "created_at")
+    @classmethod
+    def require_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("snapshot timestamps must include a timezone")
+        return value
+
+    @model_validator(mode="after")
+    def validate_cutoff_precedes_event(self) -> "EarningsEventFeatureSnapshot":
+        cutoff_date = self.prediction_cutoff.date()
+        if self.reported_timing == "after_market":
+            if cutoff_date > self.event_date:
+                raise ValueError(
+                    "an after-close report cannot be predicted after its report date"
+                )
+        elif cutoff_date >= self.event_date:
+            raise ValueError(
+                "a before-open or unknown-timing report requires a cutoff before its report date"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_no_post_cutoff_evidence(self) -> "EarningsEventFeatureSnapshot":
+        for family, observations in self._observation_times().items():
+            for label, observed_at in observations:
+                if observed_at.tzinfo is None:
+                    raise ValueError(
+                        f"{family} evidence from {label} needs a timezone to prove "
+                        "it precedes the prediction cutoff"
+                    )
+                if observed_at > self.prediction_cutoff:
+                    raise ValueError(
+                        f"{family} evidence from {label} is dated after the prediction cutoff"
+                    )
+        return self
+
+    @model_validator(mode="after")
+    def validate_quality_reflects_coverage(self) -> "EarningsEventFeatureSnapshot":
+        families = (self.consensus, self.history, self.market_context)
+        if all(family.availability == "missing" for family in families):
+            if self.evidence_quality != "insufficient":
+                raise ValueError(
+                    "snapshots without any feature family must report insufficient evidence"
+                )
+        return self
+
+    def _observation_times(self) -> dict[str, list[tuple[str, datetime]]]:
+        observations: dict[str, list[tuple[str, datetime]]] = {
+            "consensus": [],
+            "history": [],
+            "market_context": [],
+        }
+        for family_name, family in (
+            ("consensus", self.consensus),
+            ("history", self.history),
+            ("market_context", self.market_context),
+        ):
+            for entry in family.provenance:
+                observations[family_name].append((entry.source, entry.observed_at))
+        for revision in self.consensus.estimate_revisions:
+            observations["consensus"].append(("estimate_revision", revision.observed_at))
+        for guidance in self.consensus.guidance_evidence:
+            observations["consensus"].append(("guidance", guidance.published_at))
+        return observations
 
 
 class DividendEvent(BaseModel):
